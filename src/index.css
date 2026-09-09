@@ -1,0 +1,146 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Inter', system-ui, sans-serif;
+  --font-display: 'Lexend', 'Inter', system-ui, sans-serif;
+
+  --color-brand-50: #f2f0fd;
+  --color-brand-100: #e4e0fb;
+  --color-brand-200: #cac2f7;
+  --color-brand-300: #ada1f0;
+  --color-brand-400: #8f7ded;
+  --color-brand-500: #7d6ce9;
+  --color-brand-600: #6c5ce7;
+  --color-brand-700: #5949c9;
+  --color-brand-800: #473aa3;
+  --color-brand-900: #392f80;
+  --color-brand-950: #211c4d;
+
+  --color-accent-teal: #17c3b2;
+  --color-accent-coral: #ff6b6b;
+  --color-accent-amber: #ffc93c;
+
+  --color-ink-50: #f4f7fa;
+  --color-ink-100: #e6ecf1;
+  --color-ink-200: #cdd9e3;
+  --color-ink-300: #a6bccc;
+  --color-ink-400: #7997ae;
+  --color-ink-500: #587a93;
+  --color-ink-600: #45627a;
+  --color-ink-700: #395064;
+  --color-ink-800: #324454;
+  --color-ink-900: #1c2733;
+  --color-ink-950: #11171f;
+}
+
+:root {
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  background: #f3f6f8;
+  font-family: var(--font-sans);
+  color: var(--color-ink-900);
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-ink-200);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-ink-300);
+}
+
+[contenteditable]:focus {
+  outline: none;
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+.animate-pulse-soft {
+  animation: pulse-soft 1.6s ease-in-out infinite;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translate(-50%, 12px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+.animate-toast-in {
+  animation: toast-in 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes modal-in {
+  from { opacity: 0; transform: scale(0.96) translateY(8px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+.animate-modal-in {
+  animation: modal-in 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+.animate-fade-in {
+  animation: fade-in 0.15s ease-out;
+}
+
+@keyframes slide-down {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-slide-down {
+  animation: slide-down 0.18s ease-out;
+}
+
+/* Page-level transition — keyed by route (key={pathname}) on a layout's
+   <main> so every navigation gets a soft rise-and-fade instead of a hard cut. */
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-page-in {
+  animation: page-in 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Staggered list/card reveal — pair with an inline `animation-delay` of
+   `${index * 40}ms` (capped) so rows/cards cascade in instead of popping at once. */
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.animate-rise-in {
+  animation: rise-in 0.4s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Shared hover lift for cards — subtle translate + deeper shadow reads as
+   "premium" without being distracting; pairs with the element's own shadow-sm. */
+.hover-lift {
+  transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.2s ease, border-color 0.2s ease;
+}
+.hover-lift:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 12px 24px -8px rgb(108 92 231 / 0.18);
+}
+
+/* Tactile press feedback for primary buttons. */
+.press-scale {
+  transition: transform 0.15s ease, background-color 0.2s ease, box-shadow 0.2s ease;
+}
+.press-scale:active {
+  transform: scale(0.97);
+}
