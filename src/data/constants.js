@@ -49,6 +49,26 @@ export const CURRENCIES = [
 
 export const CONTACT_TYPES = ['Phone', 'Email', 'Website'];
 
+// Order matters here — it's the display/sort order everywhere sponsors are
+// grouped or listed (highest tier first, "regular" last since it carries no
+// medal).
+export const SPONSOR_TIERS = {
+  gold: { label: 'Gold', dot: 'bg-amber-400', badge: 'bg-amber-50 text-amber-700 ring-amber-200', iconBg: 'bg-amber-50', iconText: 'text-amber-600' },
+  silver: { label: 'Silver', dot: 'bg-slate-400', badge: 'bg-slate-100 text-slate-600 ring-slate-200', iconBg: 'bg-slate-100', iconText: 'text-slate-500' },
+  bronze: { label: 'Bronze', dot: 'bg-orange-400', badge: 'bg-orange-50 text-orange-700 ring-orange-200', iconBg: 'bg-orange-50', iconText: 'text-orange-600' },
+  regular: { label: 'Regular', dot: 'bg-sky-400', badge: 'bg-sky-50 text-sky-700 ring-sky-200', iconBg: 'bg-sky-50', iconText: 'text-sky-600' },
+};
+
+export const EXPENSE_CATEGORIES = [
+  'Venue',
+  'Equipment',
+  'Prizes',
+  'Food & Refreshments',
+  'Staff & Officials',
+  'Marketing',
+  'Other',
+];
+
 export const REGISTRATION_FIELD_TYPES = [
   { value: 'text', label: 'Text box' },
   { value: 'url', label: 'Link / URL' },

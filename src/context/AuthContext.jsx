@@ -51,6 +51,14 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     if (!isSupabaseConfigured) return;
+    // Wait for the initial session check to resolve before concluding
+    // there's no user. Without this, on a fresh page load this effect's
+    // first pass sees userId still null (the session promise above hasn't
+    // resolved yet) and flips profileLoading to false — a one-tick window
+    // where a signed-in user's profile reads as null/not-loading, which is
+    // enough for a role or admin gate reading it that same tick to redirect
+    // somewhere wrong before the real profile ever arrives.
+    if (loading) return;
     if (!userId) {
       setProfile(null);
       setProfileLoading(false);
@@ -66,7 +74,7 @@ export function AuthProvider({ children }) {
         setProfile(data ?? null);
         setProfileLoading(false);
       });
-  }, [userId]);
+  }, [userId, loading]);
 
   // One-time correction for OAuth sign-ups: Supabase's OAuth flow can't carry
   // an intended role the way email/password signUp's `options.data` does, so
@@ -94,6 +102,12 @@ export function AuthProvider({ children }) {
 
   const needsMfaChallenge = Boolean(aal && aal.currentLevel !== aal.nextLevel);
 
+  // Trial accounts (issued via the admin panel) carry an expiry on their
+  // profile row. Once past it, ProtectedRoute hard-locks every route behind
+  // it regardless of role — this flag is the single source of truth for that.
+  const isExpired = Boolean(profile?.access_expires_at && new Date(profile.access_expires_at) < new Date());
+  const isAdmin = Boolean(profile?.is_admin);
+
   // Called right after a successful MFA verification, before navigating away
   // from the login page. The `aal` effect above would also pick this up on
   // its own, but only once the session-change event finishes propagating —
@@ -115,6 +129,27 @@ export function AuthProvider({ children }) {
       role: profile?.role ?? null,
       needsMfaChallenge,
       refreshAal,
+      isExpired,
+      isAdmin,
+      // Admin-only: invites a temporary customer by email (real auth user +
+      // profile row with access_expires_at/max_events set). Runs server-side
+      // in the create-trial-account Edge Function since only the service
+      // role can send invites — the function re-checks is_admin itself, so
+      // this call is safe to expose even though the client-side isAdmin
+      // flag above is only a UI convenience, not the real access control.
+      createTrialAccount: async ({ email, days, maxEvents, role: trialRole }) => {
+        const { data, error } = await supabase.functions.invoke('create-trial-account', {
+          body: { email, days, maxEvents, role: trialRole, origin: window.location.origin },
+        });
+        if (error) {
+          // Edge Function errors surface here without a parsed body by
+          // default; try to pull the real message out of the response.
+          const message = await error.context?.json?.().then((b) => b?.error).catch(() => null);
+          throw new Error(message || error.message);
+        }
+        if (data?.error) throw new Error(data.error);
+        return data;
+      },
       signUp: (email, password, displayName, role = 'organizer') =>
         supabase.auth.signUp({ email, password, options: { data: { display_name: displayName, role } } }),
       signIn: (email, password) => supabase.auth.signInWithPassword({ email, password }),

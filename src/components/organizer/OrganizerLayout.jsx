@@ -1,11 +1,11 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LogOut, ShieldCheck } from 'lucide-react';
+import { LogOut, ShieldCheck, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import Logo from '../ui/Logo';
 
 export default function OrganizerLayout({ children, backTo, backLabel }) {
-  const { user, signOut } = useAuth();
+  const { user, signOut, isAdmin } = useAuth();
   const { pushToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -33,6 +33,15 @@ export default function OrganizerLayout({ children, backTo, backLabel }) {
           </div>
           <div className="flex items-center gap-3">
             <span className="hidden text-xs text-ink-500 sm:inline">{user?.email}</span>
+            {isAdmin && (
+              <Link
+                to="/admin/customers"
+                title="Customer logins"
+                className="flex items-center gap-1.5 rounded-full border border-ink-200 px-3 py-1.5 text-xs font-semibold text-ink-600 transition hover:bg-ink-100"
+              >
+                <Users size={13} /> <span className="hidden sm:inline">Admin</span>
+              </Link>
+            )}
             <Link
               to="/account"
               title="Account & security"

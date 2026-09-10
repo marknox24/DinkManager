@@ -24,7 +24,7 @@ function QuickLink({ icon: Icon, title, description, onClick }) {
   return (
     <button
       onClick={onClick}
-      className="flex items-start gap-3 rounded-2xl border border-ink-100 bg-white p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
+      className="flex items-start gap-3 rounded-2xl border border-ink-100 bg-white p-5 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md"
     >
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
         <Icon size={16} strokeWidth={2.3} />

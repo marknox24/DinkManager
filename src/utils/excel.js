@@ -28,6 +28,63 @@ export function exportTournamentToExcel(categoriesData, tournamentName) {
   XLSX.writeFile(workbook, `${safeName}_History_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.xlsx`);
 }
 
+export function exportAccountingToExcel({ eventName, expenses, manualEarnings, registrationEarnings, sponsorEarnings = [], totals }) {
+  const workbook = XLSX.utils.book_new();
+
+  const summaryRows = [
+    { Metric: 'Total earnings', Amount: totals.earnings },
+    { Metric: 'Total expenses', Amount: totals.expenses },
+    { Metric: 'Net', Amount: totals.net },
+  ];
+  const summarySheet = XLSX.utils.json_to_sheet(summaryRows);
+  summarySheet['!cols'] = [{ wch: 20 }, { wch: 16 }];
+  XLSX.utils.book_append_sheet(workbook, summarySheet, 'Summary');
+
+  const earningsRows = [
+    ...registrationEarnings
+      .filter((r) => r.total > 0)
+      .map((r) => ({
+        Source: 'Registrations',
+        Description: `${r.category_name} (${r.approved_count} paid)`,
+        Date: '',
+        Amount: r.total,
+      })),
+    ...manualEarnings.map((e) => ({
+      Source: 'Manual',
+      Description: e.name,
+      Date: e.earning_date,
+      Amount: Number(e.amount),
+    })),
+    ...sponsorEarnings.map((s) => ({
+      Source: 'Sponsorship',
+      Description: `${s.name} (${s.tier})`,
+      Date: '',
+      Amount: Number(s.amount),
+    })),
+  ];
+  const earningsSheet = XLSX.utils.json_to_sheet(
+    earningsRows.length ? earningsRows : [{ Source: '', Description: 'No earnings recorded', Date: '', Amount: '' }]
+  );
+  earningsSheet['!cols'] = [{ wch: 14 }, { wch: 34 }, { wch: 14 }, { wch: 14 }];
+  XLSX.utils.book_append_sheet(workbook, earningsSheet, 'Earnings');
+
+  const expenseRows = expenses.map((e) => ({
+    Name: e.name,
+    Category: e.category || '',
+    Date: e.expense_date,
+    Amount: Number(e.amount),
+    Notes: e.notes || '',
+  }));
+  const expenseSheet = XLSX.utils.json_to_sheet(
+    expenseRows.length ? expenseRows : [{ Name: 'No expenses recorded', Category: '', Date: '', Amount: '', Notes: '' }]
+  );
+  expenseSheet['!cols'] = [{ wch: 26 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 30 }];
+  XLSX.utils.book_append_sheet(workbook, expenseSheet, 'Expenses');
+
+  const safeName = (eventName || 'Event').replace(/[^a-z0-9]+/gi, '_').slice(0, 40);
+  XLSX.writeFile(workbook, `${safeName}_Accounting_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.xlsx`);
+}
+
 export function downloadPlayersTemplate() {
   const rows = [{ 'Player 1 Name': 'Jane Doe', 'Player 2 Name': 'John Smith', 'Club Name': 'Riverside Club', Email: '', Phone: '' }];
   const sheet = XLSX.utils.json_to_sheet(rows);

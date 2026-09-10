@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ListOrdered, Pencil, Radio, Sparkles, Timer, Trash2 } from 'lucide-react';
+import { ChevronDown, ListOrdered, Pencil, Radio, Sparkles, Timer, Trash2, Trophy } from 'lucide-react';
 import { getEventById, listCategories, listUmpires } from '../../../data/eventsApi';
 import {
   cancelLiveMatch,
@@ -53,6 +53,10 @@ export default function MatchListPage() {
   const [generating, setGenerating] = useState(false);
   const [loggingMatch, setLoggingMatch] = useState(null);
   const [startingMatch, setStartingMatch] = useState(null);
+  // Rounds where every match is completed default to collapsed so the page
+  // stays scannable as a tournament progresses; { [roundNumber]: boolean }
+  // overrides that default once the organizer manually opens/closes one.
+  const [roundOverrides, setRoundOverrides] = useState({});
 
   useEffect(() => {
     Promise.all([getEventById(eventId), listCategories(eventId), listUmpires(eventId)])
@@ -97,6 +101,7 @@ export default function MatchListPage() {
 
   useEffect(() => {
     reloadCategoryData();
+    setRoundOverrides({});
   }, [reloadCategoryData]);
 
   const loadBracketProgress = useCallback(async () => {
@@ -300,7 +305,7 @@ export default function MatchListPage() {
           </div>
 
           {bracketProgress.length > 0 && (
-            <div className="rounded-2xl border border-ink-100 bg-white p-4 shadow-sm">
+            <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2 text-sm font-bold text-ink-800">
                   <Timer size={14} className="text-ink-400" /> Category progress
@@ -365,96 +370,125 @@ export default function MatchListPage() {
             </div>
           ) : (
             <div className="flex flex-col gap-4">
-              {rounds.map(([roundNumber, roundMatches]) => (
-                <div key={roundNumber} className="overflow-hidden rounded-2xl border border-ink-100 bg-white shadow-sm">
-                  <div className="border-b border-ink-100 bg-ink-50/70 px-4 py-2">
-                    <span className="text-xs font-bold uppercase tracking-wide text-ink-500">Round {roundNumber}</span>
+              {rounds.map(([roundNumber, roundMatches]) => {
+                const completedCount = roundMatches.filter((m) => m.status === 'completed').length;
+                const allCompleted = completedCount === roundMatches.length;
+                const isOpen = roundOverrides[roundNumber] ?? !allCompleted;
+                return (
+                  <div key={roundNumber} className="overflow-hidden rounded-2xl border border-ink-100 bg-white shadow-sm">
+                    <button
+                      type="button"
+                      onClick={() => setRoundOverrides((prev) => ({ ...prev, [roundNumber]: !isOpen }))}
+                      className="flex w-full items-center justify-between gap-3 border-b border-ink-100 bg-ink-50/70 px-5 py-3 text-left"
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-bold text-ink-800">Round {roundNumber}</span>
+                        <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-ink-500 ring-1 ring-ink-200">
+                          {completedCount}/{roundMatches.length} played
+                        </span>
+                      </div>
+                      <ChevronDown size={16} className={`shrink-0 text-ink-400 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {isOpen && (
+                      <div className="overflow-x-auto">
+                        <table className="w-full min-w-[580px] text-sm">
+                          <thead>
+                            <tr className="border-b border-ink-100 text-[11px] font-bold uppercase tracking-wide text-ink-400">
+                              <th className="px-4 py-2.5 text-left">Match</th>
+                              <th className="px-4 py-2.5 text-left">Teams</th>
+                              <th className="px-4 py-2.5 text-center">Result</th>
+                              <th className="px-4 py-2.5 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {roundMatches.map((m) => {
+                              const winnerIsA = m.status === 'completed' && m.winner_team_id === m.team_a_id;
+                              const winnerIsB = m.status === 'completed' && m.winner_team_id === m.team_b_id;
+                              return (
+                                <tr key={m.id} className="border-b border-ink-50">
+                                  <td className="px-4 py-2.5 align-middle font-mono text-xs font-bold text-ink-400">{m.match_code}</td>
+                                  <td className="px-4 py-2.5 align-middle">
+                                    <div className="flex flex-col gap-0.5">
+                                      <div className={`flex items-center gap-1 text-[13px] ${winnerIsA ? 'font-bold text-brand-700' : 'font-medium text-ink-700'}`}>
+                                        {winnerIsA && <Trophy size={11} className="shrink-0 text-brand-500" />}
+                                        <span className="truncate">{teamLabel(m.team_a)}</span>
+                                      </div>
+                                      <div className="text-[10px] font-semibold uppercase tracking-wide text-ink-300">vs</div>
+                                      <div className={`flex items-center gap-1 text-[13px] ${winnerIsB ? 'font-bold text-brand-700' : 'font-medium text-ink-700'}`}>
+                                        {winnerIsB && <Trophy size={11} className="shrink-0 text-brand-500" />}
+                                        <span className="truncate">{teamLabel(m.team_b)}</span>
+                                      </div>
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-2.5 text-center align-middle">
+                                    {m.status === 'completed' ? (
+                                      <div className="flex items-center justify-center gap-1.5">
+                                        <span className="font-mono text-sm font-bold text-ink-900">
+                                          {m.score_a}–{m.score_b}
+                                        </span>
+                                        <button
+                                          onClick={() => setLoggingMatch(m)}
+                                          title="Edit score"
+                                          className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-ink-400 transition hover:bg-ink-100 hover:text-ink-600"
+                                        >
+                                          <Pencil size={11} />
+                                        </button>
+                                      </div>
+                                    ) : m.status === 'in_progress' ? (
+                                      <span className="inline-flex items-center gap-1 rounded-full bg-brand-50 px-3 py-1 text-[11px] font-bold text-brand-600">
+                                        <Radio size={10} className="animate-pulse" /> LIVE
+                                      </span>
+                                    ) : (
+                                      <span className="inline-block rounded-full bg-ink-100 px-3 py-1 text-[11px] font-bold text-ink-500">
+                                        Scheduled
+                                      </span>
+                                    )}
+                                  </td>
+                                  <td className="px-4 py-2.5 align-middle">
+                                    {m.status === 'scheduled' && (
+                                      <div className="flex items-center justify-end gap-1.5">
+                                        <button
+                                          onClick={() => setStartingMatch(m)}
+                                          disabled={availableCourts.length === 0 || availableUmpires.length === 0}
+                                          title={
+                                            availableCourts.length === 0
+                                              ? 'All courts are in use'
+                                              : availableUmpires.length === 0
+                                                ? 'No umpires available'
+                                                : undefined
+                                          }
+                                          className="shrink-0 whitespace-nowrap rounded-full bg-brand-600 px-2.5 py-1.5 text-[11px] font-bold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-40"
+                                        >
+                                          Start
+                                        </button>
+                                        <button
+                                          onClick={() => setLoggingMatch(m)}
+                                          disabled={umpires.length === 0}
+                                          title={umpires.length === 0 ? 'Add an umpire first' : undefined}
+                                          className="shrink-0 whitespace-nowrap rounded-full border border-ink-200 px-2.5 py-1.5 text-[11px] font-bold text-ink-600 transition hover:bg-ink-100 disabled:cursor-not-allowed disabled:opacity-40"
+                                        >
+                                          Log score
+                                        </button>
+                                        <button
+                                          onClick={() => handleRemove(m)}
+                                          title="Remove match"
+                                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink-100 text-ink-500 transition hover:bg-ink-200"
+                                        >
+                                          <Trash2 size={13} />
+                                        </button>
+                                      </div>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
                   </div>
-                  <div className="overflow-x-auto">
-                    <table className="w-full min-w-[580px] text-sm">
-                      <thead>
-                        <tr className="text-[10px] font-bold uppercase tracking-wide text-ink-400">
-                          <th className="w-14 px-4 py-2 text-left">Match</th>
-                          <th className="px-2 py-2 text-left">Teams</th>
-                          <th className="w-24 px-2 py-2 text-center">Result</th>
-                          <th className="w-[205px] px-4 py-2 text-right">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-ink-50">
-                        {roundMatches.map((m) => (
-                          <tr key={m.id}>
-                            <td className="px-4 py-2.5 align-middle text-xs font-bold text-ink-400">{m.match_code}</td>
-                            <td className="px-2 py-2.5 align-middle">
-                              <span className="font-medium text-ink-800">{teamLabel(m.team_a)}</span>
-                              <span className="mx-1 text-xs text-ink-300">vs</span>
-                              <span className="font-medium text-ink-800">{teamLabel(m.team_b)}</span>
-                            </td>
-                            <td className="px-2 py-2.5 text-center align-middle">
-                              {m.status === 'completed' ? (
-                                <div className="flex items-center justify-center gap-1">
-                                  <span className="font-mono text-sm font-bold text-ink-700">
-                                    {m.score_a}–{m.score_b}
-                                  </span>
-                                  <button
-                                    onClick={() => setLoggingMatch(m)}
-                                    title="Edit score"
-                                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-ink-400 transition hover:bg-ink-100 hover:text-ink-600"
-                                  >
-                                    <Pencil size={11} />
-                                  </button>
-                                </div>
-                              ) : m.status === 'in_progress' ? (
-                                <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-600">
-                                  <Radio size={10} className="animate-pulse" /> LIVE
-                                </span>
-                              ) : (
-                                <span className="inline-block rounded-full bg-ink-100 px-3 py-1 text-[11px] font-bold text-ink-500">
-                                  Scheduled
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-4 py-2.5 align-middle">
-                              {m.status === 'scheduled' && (
-                                <div className="flex items-center justify-end gap-1.5">
-                                  <button
-                                    onClick={() => setStartingMatch(m)}
-                                    disabled={availableCourts.length === 0 || availableUmpires.length === 0}
-                                    title={
-                                      availableCourts.length === 0
-                                        ? 'All courts are in use'
-                                        : availableUmpires.length === 0
-                                          ? 'No umpires available'
-                                          : undefined
-                                    }
-                                    className="shrink-0 whitespace-nowrap rounded-full bg-brand-600 px-2.5 py-1.5 text-[11px] font-bold text-white transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-40"
-                                  >
-                                    Start
-                                  </button>
-                                  <button
-                                    onClick={() => setLoggingMatch(m)}
-                                    disabled={umpires.length === 0}
-                                    title={umpires.length === 0 ? 'Add an umpire first' : undefined}
-                                    className="shrink-0 whitespace-nowrap rounded-full border border-ink-200 px-2.5 py-1.5 text-[11px] font-bold text-ink-600 transition hover:bg-ink-100 disabled:cursor-not-allowed disabled:opacity-40"
-                                  >
-                                    Log score
-                                  </button>
-                                  <button
-                                    onClick={() => handleRemove(m)}
-                                    title="Remove match"
-                                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink-100 text-ink-500 transition hover:bg-ink-200"
-                                  >
-                                    <Trash2 size={13} />
-                                  </button>
-                                </div>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

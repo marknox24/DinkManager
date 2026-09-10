@@ -10,8 +10,10 @@ import {
   Copy,
   ExternalLink,
   FileText,
+  ImagePlus,
   Contact as ContactIcon,
   ListChecks,
+  Loader2,
   MapPin,
   Plus,
   QrCode,
@@ -70,6 +72,7 @@ export default function EventEditorPage() {
   const [fields, setFields] = useState([]);
   const [saveStatus, setSaveStatus] = useState('saved');
   const [step, setStep] = useState(0);
+  const [uploadingCover, setUploadingCover] = useState(false);
 
   useEffect(() => {
     Promise.all([getEventById(eventId), listCategories(eventId), listRegistrationFields(eventId)])
@@ -180,6 +183,19 @@ export default function EventEditorPage() {
       setFields((prev) => prev.filter((f) => f.id !== field.id));
     } catch (e) {
       pushToast(e.message, 'error');
+    }
+  };
+
+  const handleCoverUpload = async (file) => {
+    if (!file) return;
+    setUploadingCover(true);
+    try {
+      const { path } = await uploadEventMedia(eventId, file);
+      await saveField({ cover_photo_path: path });
+    } catch (e) {
+      pushToast(e.message, 'error');
+    } finally {
+      setUploadingCover(false);
     }
   };
 
@@ -332,6 +348,36 @@ export default function EventEditorPage() {
             <>
               <StepHeader title="Description & rules" />
               <div className="flex flex-col gap-4">
+                <FormField label="Cover photo" hint="Shown at the top of your public page and as a preview on your dashboard.">
+                  <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
+                    {event.cover_photo_path ? (
+                      <img
+                        src={getEventMediaUrl(event.cover_photo_path)}
+                        alt="Event cover"
+                        className="h-32 w-full rounded-xl border border-ink-200 object-cover sm:w-56"
+                      />
+                    ) : (
+                      <div className="flex h-32 w-full items-center justify-center rounded-xl border border-dashed border-ink-300 text-ink-300 sm:w-56">
+                        <ImagePlus size={24} />
+                      </div>
+                    )}
+                    <label className="w-fit cursor-pointer self-start rounded-full border border-ink-200 bg-white px-3.5 py-2 text-xs font-bold text-ink-600 transition hover:bg-ink-100">
+                      {uploadingCover ? (
+                        <Loader2 size={13} className="inline animate-spin" />
+                      ) : event.cover_photo_path ? (
+                        'Replace photo'
+                      ) : (
+                        'Upload photo'
+                      )}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={(e) => handleCoverUpload(e.target.files?.[0])}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                </FormField>
                 <FormField label="Tournament description">
                   <textarea
                     defaultValue={event.description || ''}

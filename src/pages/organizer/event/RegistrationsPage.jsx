@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Activity, CheckCircle2, FileSpreadsheet, ImageIcon, Pencil, Shuffle, Trash2, Trophy, UserPlus, XCircle } from 'lucide-react';
+import { Activity, CheckCircle2, FileSpreadsheet, ImageIcon, Pencil, QrCode, Shuffle, Trash2, Trophy, UserPlus, XCircle } from 'lucide-react';
 import {
   createRegistration,
   createRegistrationsBulk,
@@ -27,6 +27,20 @@ const STATUS_STYLES = {
   denied: 'bg-rose-100 text-rose-600',
   waitlisted: 'bg-violet-100 text-violet-700',
 };
+
+// Event-day check-in badge — only shown once at least one slot has checked
+// in, so a normal not-yet-checked-in row doesn't get an extra pill next to
+// the approval status.
+function checkinBadge(r) {
+  const p1 = Boolean(r.player1_checked_in_at);
+  const p2 = Boolean(r.player2_checked_in_at);
+  if (r.player2_name) {
+    if (p1 && p2) return { label: 'Both checked in', className: 'bg-brand-100 text-brand-700' };
+    if (p1 || p2) return { label: '1/2 checked in', className: 'bg-amber-100 text-amber-800' };
+    return null;
+  }
+  return p1 ? { label: 'Checked in', className: 'bg-brand-100 text-brand-700' } : null;
+}
 
 export default function RegistrationsPage() {
   const { eventId } = useParams();
@@ -219,6 +233,11 @@ export default function RegistrationsPage() {
                                       <Trophy size={10} /> Bracket {bracketAssignments[r.id]}
                                     </span>
                                   )}
+                                  {checkinBadge(r) && (
+                                    <span className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold ${checkinBadge(r).className}`}>
+                                      <QrCode size={10} /> {checkinBadge(r).label}
+                                    </span>
+                                  )}
                                 </div>
                               </td>
                               <td className="px-4 py-2.5">
@@ -262,7 +281,7 @@ export default function RegistrationsPage() {
             )}
           </div>
 
-          <div className="rounded-2xl border border-ink-100 bg-white p-4 shadow-sm lg:sticky lg:top-6 lg:h-fit">
+          <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm lg:sticky lg:top-6 lg:h-fit">
             <div className="mb-3 flex items-center gap-2">
               <Activity size={15} className="text-ink-400" />
               <h3 className="font-display text-sm font-bold text-ink-800">Activity feed</h3>

@@ -11,20 +11,56 @@ create extension if not exists "pgcrypto";
 -- ----------------------------------------------------------------------------
 create table if not exists profiles (
   id uuid primary key references auth.users(id) on delete cascade,
+  email text,
   display_name text,
   club_name text,
   role text not null default 'organizer' check (role in ('organizer', 'player')),
+  is_admin boolean not null default false,
+  -- Trial/temporary-access accounts issued via the admin panel. Both null
+  -- (the default) means unrestricted, permanent access — every self-serve
+  -- signup is untouched by these.
+  access_expires_at timestamptz,
+  max_events integer,
   created_at timestamptz not null default now()
 );
 
 -- Backfills existing rows with 'organizer' via the column default — no
 -- behavior change for current organizer accounts.
 alter table profiles add column if not exists role text not null default 'organizer' check (role in ('organizer', 'player'));
+alter table profiles add column if not exists email text;
+alter table profiles add column if not exists is_admin boolean not null default false;
+alter table profiles add column if not exists access_expires_at timestamptz;
+alter table profiles add column if not exists max_events integer;
 
 alter table profiles enable row level security;
 
 drop policy if exists "profiles_select_own" on profiles;
 create policy "profiles_select_own" on profiles for select using (auth.uid() = id);
+
+-- Lets an admin account (is_admin = true) list every profile, so the admin
+-- panel can show issued trial accounts. Ordinary users still only see their
+-- own row via profiles_select_own above (select policies are OR'd together).
+--
+-- The is_admin check has to go through a security-definer function rather
+-- than a plain "exists (select ... from profiles)" subquery — a subquery
+-- against profiles inside a profiles policy re-triggers every select policy
+-- on profiles (including this one) for that inner query, causing Postgres
+-- to report "infinite recursion detected in policy for relation profiles".
+-- A security-definer function's body runs with RLS bypassed, so the inner
+-- lookup never re-enters policy evaluation.
+create or replace function is_admin_user()
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select coalesce((select is_admin from profiles where id = auth.uid()), false);
+$$;
+
+drop policy if exists "profiles_select_admin" on profiles;
+create policy "profiles_select_admin" on profiles for select
+  using (is_admin_user());
 
 drop policy if exists "profiles_upsert_own" on profiles;
 create policy "profiles_upsert_own" on profiles for insert with check (auth.uid() = id);
@@ -41,9 +77,10 @@ language plpgsql
 security definer set search_path = public
 as $$
 begin
-  insert into public.profiles (id, display_name, role)
+  insert into public.profiles (id, email, display_name, role)
   values (
     new.id,
+    new.email,
     new.raw_user_meta_data ->> 'display_name',
     coalesce(new.raw_user_meta_data ->> 'role', 'organizer')
   )
@@ -81,11 +118,22 @@ create table if not exists events (
   match_duration_minutes integer not null default 18,
   payment_qr_path text,
   club_name text,
+  cover_photo_path text,
+  -- Display currency for Accounting/Sponsors money amounts (Intl.NumberFormat
+  -- ISO code). Independent of categories.fee_currency, which is set per
+  -- category on the registration form — this is a single event-wide default.
+  currency text not null default 'USD',
+  -- When true, the Accounting page's Total earnings figure folds in
+  -- sponsors.amount alongside registration and manual earnings.
+  include_sponsors_in_earnings boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
 
 alter table events add column if not exists match_duration_minutes integer not null default 18;
+alter table events add column if not exists cover_photo_path text;
+alter table events add column if not exists currency text not null default 'USD';
+alter table events add column if not exists include_sponsors_in_earnings boolean not null default false;
 
 alter table events enable row level security;
 
@@ -93,9 +141,25 @@ drop policy if exists "events_select_public_or_owner" on events;
 create policy "events_select_public_or_owner" on events for select
   using (is_published = true or auth.uid() = organizer_id);
 
+-- Trial accounts (profiles.access_expires_at / max_events set by the admin
+-- panel) are blocked from creating events past their expiry, or beyond
+-- their event limit, at the database level — not just in the UI. Regular
+-- accounts have both fields null, so the exists() below always matches for
+-- them (no behavior change).
 drop policy if exists "events_insert_owner" on events;
 create policy "events_insert_owner" on events for insert
-  with check (auth.uid() = organizer_id);
+  with check (
+    auth.uid() = organizer_id
+    and exists (
+      select 1 from profiles p
+      where p.id = auth.uid()
+        and (p.access_expires_at is null or p.access_expires_at > now())
+        and (
+          p.max_events is null
+          or (select count(*) from events ev where ev.organizer_id = auth.uid()) < p.max_events
+        )
+    )
+  );
 
 drop policy if exists "events_update_owner" on events;
 create policy "events_update_owner" on events for update
@@ -275,6 +339,18 @@ create policy "matches_owner_all" on matches for all
   using (exists (select 1 from brackets b join categories c on c.id = b.category_id join events e on e.id = c.event_id where b.id = matches.bracket_id and e.organizer_id = auth.uid()))
   with check (exists (select 1 from brackets b join categories c on c.id = b.category_id join events e on e.id = c.event_id where b.id = matches.bracket_id and e.organizer_id = auth.uid()));
 
+-- Anyone can read matches for a published event (Preview Screen is a public
+-- spectator display, viewable without signing in) — mirrors
+-- teams_select_public_or_owner / brackets_select_public_or_owner.
+drop policy if exists "matches_select_public_or_owner" on matches;
+create policy "matches_select_public_or_owner" on matches for select
+  using (
+    exists (
+      select 1 from brackets b join categories c on c.id = b.category_id join events e on e.id = c.event_id
+      where b.id = matches.bracket_id and (e.is_published = true or e.organizer_id = auth.uid())
+    )
+  );
+
 -- Keep team win/loss/points in sync exactly once, the moment a match
 -- transitions into 'completed' (whether inserted that way directly, or
 -- updated from 'in_progress' after a live match is finished).
@@ -365,6 +441,12 @@ alter table registrations add column if not exists photo_path text;
 -- for players who choose to sign in.
 alter table registrations add column if not exists player_id uuid references auth.users(id) on delete set null;
 
+-- Event-day check-in (QR scan -> pick category -> pick name), set by an
+-- anonymous player, not the organizer. Both null until scanned; a doubles
+-- team needs both before it counts as "checked in".
+alter table registrations add column if not exists player1_checked_in_at timestamptz;
+alter table registrations add column if not exists player2_checked_in_at timestamptz;
+
 -- Manual/bulk-imported registrations (organizer-entered) skip email for speed.
 alter table registrations alter column player_email drop not null;
 
@@ -404,6 +486,46 @@ drop policy if exists "registrations_delete_owner" on registrations;
 create policy "registrations_delete_owner" on registrations for delete
   using (exists (select 1 from events e where e.id = registrations.event_id and e.organizer_id = auth.uid()));
 
+-- Public (anonymous) event-day check-in. RLS is row-level only — without
+-- narrowing anon's UPDATE grant down to just these two columns first, this
+-- policy would let a crafted request rewrite player_name/status/etc. on any
+-- matching row. anon's default table-wide UPDATE grant (from Supabase's
+-- schema-level defaults) is revoked and re-granted for only the two
+-- checked_in_at columns; this doesn't touch the `authenticated` role, so the
+-- organizer's own registrations_update_owner policy is unaffected.
+revoke update on registrations from anon;
+grant update (player1_checked_in_at, player2_checked_in_at) on registrations to anon;
+
+-- Postgres RLS requires a row to also satisfy an applicable SELECT policy
+-- before an UPDATE can find/target it — an UPDATE policy's own USING clause
+-- isn't sufficient on its own (confirmed via EXPLAIN against the live DB:
+-- without this, the check-in UPDATE silently matched zero rows). anon's
+-- default table-wide SELECT grant (also from Supabase's schema-level
+-- defaults) is narrowed to only the columns public_checkin_roster already
+-- exposes — email/phone/address/photo_path/etc. stay completely
+-- inaccessible to anon at the column-privilege level, so this new policy
+-- can't be turned into a PII leak via a raw REST request.
+revoke select on registrations from anon;
+grant select (id, event_id, category_id, player_name, player2_name, status, player1_checked_in_at, player2_checked_in_at) on registrations to anon;
+
+drop policy if exists "registrations_public_checkin_select" on registrations;
+create policy "registrations_public_checkin_select" on registrations for select
+  using (
+    status = 'approved'
+    and exists (select 1 from events e where e.id = registrations.event_id and e.is_published = true)
+  );
+
+drop policy if exists "registrations_public_checkin_update" on registrations;
+create policy "registrations_public_checkin_update" on registrations for update
+  using (
+    status = 'approved'
+    and exists (select 1 from events e where e.id = registrations.event_id and e.is_published = true)
+  )
+  with check (
+    status = 'approved'
+    and exists (select 1 from events e where e.id = registrations.event_id and e.is_published = true)
+  );
+
 -- Public, PII-free slot counts per category (used on the public event page).
 create or replace view public_category_counts as
 select
@@ -416,6 +538,24 @@ left join registrations r on r.category_id = c.id
 group by c.id, c.event_id;
 
 grant select on public_category_counts to anon, authenticated;
+
+-- Public, PII-free roster for the check-in page's name search — deliberately
+-- excludes email/phone/address/photo/custom fields; only what's needed to
+-- find yourself in a list and see check-in status.
+create or replace view public_checkin_roster as
+select
+  r.id,
+  r.event_id,
+  r.category_id,
+  r.player_name,
+  r.player2_name,
+  r.player1_checked_in_at,
+  r.player2_checked_in_at
+from registrations r
+join events e on e.id = r.event_id
+where e.is_published = true and r.status = 'approved';
+
+grant select on public_checkin_roster to anon, authenticated;
 
 -- ----------------------------------------------------------------------------
 -- ACTIVITY LOG  (organizer-facing feed; written by triggers, read by owner)
@@ -479,7 +619,77 @@ create trigger on_registration_status_change
   for each row execute function log_registration_status_change();
 
 -- ----------------------------------------------------------------------------
--- STORAGE  (payment QR images + registration file uploads)
+-- SPONSORS  (shown on the Preview Screen; organizer-managed, never public)
+-- ----------------------------------------------------------------------------
+create table if not exists sponsors (
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references events(id) on delete cascade,
+  name text not null,
+  tier text not null default 'bronze' check (tier in ('bronze', 'silver', 'gold', 'regular')),
+  amount numeric(10, 2) not null default 0,
+  logo_path text,
+  order_index integer not null default 0,
+  created_at timestamptz not null default now()
+);
+
+-- Widen the tier check for installs that created this table before "regular"
+-- (a no-medal tier) was added, mirroring the matches_status_check pattern.
+alter table sponsors drop constraint if exists sponsors_tier_check;
+alter table sponsors add constraint sponsors_tier_check check (tier in ('bronze', 'silver', 'gold', 'regular'));
+
+alter table sponsors enable row level security;
+
+-- The Preview Screen itself is an organizer-only route (see PreviewDisplayPage,
+-- gated behind ProtectedRoute), so sponsors don't need a public select policy
+-- the way categories/registrations do — owner-only is sufficient everywhere.
+drop policy if exists "sponsors_owner_all" on sponsors;
+create policy "sponsors_owner_all" on sponsors for all
+  using (exists (select 1 from events e where e.id = sponsors.event_id and e.organizer_id = auth.uid()))
+  with check (exists (select 1 from events e where e.id = sponsors.event_id and e.organizer_id = auth.uid()));
+
+-- ----------------------------------------------------------------------------
+-- ACCOUNTING  (expenses + manual earnings; registration-fee earnings are
+-- computed on the fly from categories.fee_amount x approved registrations,
+-- not stored here)
+-- ----------------------------------------------------------------------------
+create table if not exists expenses (
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references events(id) on delete cascade,
+  name text not null,
+  category text,
+  amount numeric(10, 2) not null default 0,
+  expense_date date not null default current_date,
+  receipt_path text,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+alter table expenses enable row level security;
+
+drop policy if exists "expenses_owner_all" on expenses;
+create policy "expenses_owner_all" on expenses for all
+  using (exists (select 1 from events e where e.id = expenses.event_id and e.organizer_id = auth.uid()))
+  with check (exists (select 1 from events e where e.id = expenses.event_id and e.organizer_id = auth.uid()));
+
+create table if not exists earnings (
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references events(id) on delete cascade,
+  name text not null,
+  amount numeric(10, 2) not null default 0,
+  earning_date date not null default current_date,
+  notes text,
+  created_at timestamptz not null default now()
+);
+
+alter table earnings enable row level security;
+
+drop policy if exists "earnings_owner_all" on earnings;
+create policy "earnings_owner_all" on earnings for all
+  using (exists (select 1 from events e where e.id = earnings.event_id and e.organizer_id = auth.uid()))
+  with check (exists (select 1 from events e where e.id = earnings.event_id and e.organizer_id = auth.uid()));
+
+-- ----------------------------------------------------------------------------
+-- STORAGE  (payment QR images + registration file uploads + receipts)
 -- ----------------------------------------------------------------------------
 insert into storage.buckets (id, name, public)
 values ('event-media', 'event-media', true)
@@ -488,6 +698,31 @@ on conflict (id) do nothing;
 insert into storage.buckets (id, name, public)
 values ('registration-uploads', 'registration-uploads', false)
 on conflict (id) do nothing;
+
+-- Expense receipts: financial documents, kept private (unlike event-media)
+-- since there's no reason for anyone but the organizer to ever see them.
+insert into storage.buckets (id, name, public)
+values ('event-receipts', 'event-receipts', false)
+on conflict (id) do nothing;
+
+drop policy if exists "event_receipts_owner_all" on storage.objects;
+create policy "event_receipts_owner_all" on storage.objects for all
+  using (
+    bucket_id = 'event-receipts'
+    and exists (
+      select 1 from events e
+      where e.id::text = (storage.foldername(storage.objects.name))[1]
+        and e.organizer_id = auth.uid()
+    )
+  )
+  with check (
+    bucket_id = 'event-receipts'
+    and exists (
+      select 1 from events e
+      where e.id::text = (storage.foldername(storage.objects.name))[1]
+        and e.organizer_id = auth.uid()
+    )
+  );
 
 -- event-media: public read; only the owning organizer can write, keyed by
 -- objects stored under `${event_id}/...`.
@@ -501,7 +736,7 @@ create policy "event_media_owner_write" on storage.objects for insert
     bucket_id = 'event-media'
     and exists (
       select 1 from events e
-      where e.id::text = (storage.foldername(name))[1]
+      where e.id::text = (storage.foldername(storage.objects.name))[1]
         and e.organizer_id = auth.uid()
     )
   );
@@ -512,7 +747,7 @@ create policy "event_media_owner_delete" on storage.objects for delete
     bucket_id = 'event-media'
     and exists (
       select 1 from events e
-      where e.id::text = (storage.foldername(name))[1]
+      where e.id::text = (storage.foldername(storage.objects.name))[1]
         and e.organizer_id = auth.uid()
     )
   );
@@ -525,7 +760,7 @@ create policy "reg_uploads_public_insert" on storage.objects for insert
     bucket_id = 'registration-uploads'
     and exists (
       select 1 from events e
-      where e.id::text = (storage.foldername(name))[1]
+      where e.id::text = (storage.foldername(storage.objects.name))[1]
         and e.is_published = true
     )
   );
@@ -536,7 +771,7 @@ create policy "reg_uploads_owner_read" on storage.objects for select
     bucket_id = 'registration-uploads'
     and exists (
       select 1 from events e
-      where e.id::text = (storage.foldername(name))[1]
+      where e.id::text = (storage.foldername(storage.objects.name))[1]
         and e.organizer_id = auth.uid()
     )
   );
@@ -547,7 +782,7 @@ create policy "reg_uploads_owner_delete" on storage.objects for delete
     bucket_id = 'registration-uploads'
     and exists (
       select 1 from events e
-      where e.id::text = (storage.foldername(name))[1]
+      where e.id::text = (storage.foldername(storage.objects.name))[1]
         and e.organizer_id = auth.uid()
     )
   );

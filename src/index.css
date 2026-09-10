@@ -2,7 +2,7 @@
 
 @theme {
   --font-sans: 'Inter', system-ui, sans-serif;
-  --font-display: 'Lexend', 'Inter', system-ui, sans-serif;
+  --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
 
   --color-brand-50: #f2f0fd;
   --color-brand-100: #e4e0fb;
@@ -46,6 +46,14 @@ body {
   font-family: var(--font-sans);
   color: var(--color-ink-900);
   -webkit-font-smoothing: antialiased;
+}
+
+/* Space Grotesk tops out at 700 (no 800/900 face), so font-extrabold /
+   font-black headings fall back to it automatically — already slimmer than
+   Lexend at the same declared weight. The tightened tracking on top is what
+   reads as "technical" rather than just "bold". */
+.font-display {
+  letter-spacing: -0.015em;
 }
 
 ::-webkit-scrollbar {
@@ -143,4 +151,19 @@ body {
 }
 .press-scale:active {
   transform: scale(0.97);
+}
+
+/* Continuous sponsor-logo ticker on the Preview Screen — the track holds two
+   back-to-back copies of the logo list and scrolls exactly one copy-width
+   (-50%) so the loop point is invisible. Pause on hover for the rare case
+   someone's actually looking at it up close on a laptop, not a venue TV. */
+@keyframes marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+.animate-marquee {
+  animation: marquee linear infinite;
+}
+.animate-marquee:hover {
+  animation-play-state: paused;
 }

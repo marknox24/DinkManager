@@ -118,7 +118,7 @@ export default function PublicEventPage() {
         </div>
 
         <div className="order-1 lg:order-2 lg:sticky lg:top-6">
-          <div className="max-h-[calc(100vh-3rem)] overflow-y-auto rounded-2xl border border-ink-100 bg-white p-4 shadow-sm sm:p-5">
+          <div className="max-h-[calc(100vh-3rem)] overflow-y-auto rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
             <h2 className="mb-3 font-display text-base font-bold text-ink-900">Categories</h2>
             <div className="flex flex-col gap-3">
               {categories.length === 0 && <p className="text-sm text-ink-400">Categories will be posted soon.</p>}

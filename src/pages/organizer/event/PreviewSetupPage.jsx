@@ -37,7 +37,7 @@ export default function PreviewSetupPage() {
         </div>
       ) : (
         <div className="mx-auto flex max-w-xl flex-col gap-5">
-          <div className="rounded-2xl border border-ink-100 bg-white p-6 shadow-sm">
+          <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
             <label className="mb-2 block text-xs font-bold uppercase tracking-wide text-ink-500">Category</label>
             <div className="flex flex-wrap gap-2">
               {categories.map((cat) => (

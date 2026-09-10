@@ -51,23 +51,19 @@ export default function LiveMatchCard({ match, now, categoryName, bracketLetter,
   return (
     <div
       className={`relative overflow-hidden rounded-xl border bg-white p-2.5 shadow-sm transition ${
-        isPaused ? 'border-amber-300' : 'border-emerald-300'
+        isPaused ? 'border-ink-200' : 'border-brand-300'
       }`}
     >
-      <div
-        className={`absolute inset-x-0 top-0 h-1 ${
-          isPaused ? 'bg-gradient-to-r from-amber-400 to-orange-400' : 'bg-gradient-to-r from-emerald-400 via-teal-400 to-brand-500'
-        }`}
-      />
+      <div className={`absolute inset-x-0 top-0 h-1 ${isPaused ? 'bg-ink-300' : 'bg-brand-600'}`} />
 
       <div className="mt-1 flex items-center justify-between gap-1.5">
-        <span className="truncate text-[10px] font-bold text-violet-700">
+        <span className="truncate text-[10px] font-bold text-brand-700">
           {categoryName}
           {bracketLetter ? ` · ${bracketLetter}` : ''}
         </span>
         <span
           className={`flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-extrabold tracking-wide ${
-            isPaused ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700'
+            isPaused ? 'bg-ink-100 text-ink-500' : 'bg-brand-100 text-brand-700'
           }`}
         >
           <Radio size={8} className={isPaused ? '' : 'animate-pulse'} /> {isPaused ? 'PAUSED' : 'LIVE'}
@@ -75,7 +71,7 @@ export default function LiveMatchCard({ match, now, categoryName, bracketLetter,
       </div>
 
       <div className="mt-1.5 text-center text-[11px] font-bold leading-snug text-ink-900">
-        {teamLabel(match.team_a)} <span className="font-medium text-brand-400">vs</span> {teamLabel(match.team_b)}
+        {teamLabel(match.team_a)} <span className="font-medium text-ink-400">vs</span> {teamLabel(match.team_b)}
       </div>
       <div className="mt-0.5 truncate text-center text-[10px] text-ink-400">
         {match.court ? `Court ${match.court}` : 'Court —'}
@@ -84,7 +80,7 @@ export default function LiveMatchCard({ match, now, categoryName, bracketLetter,
 
       <div
         className={`mt-1.5 rounded-lg py-1 text-center font-mono text-lg font-black tabular-nums ${
-          isPaused ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'
+          isPaused ? 'bg-ink-50 text-ink-500' : 'bg-brand-50 text-brand-700'
         }`}
       >
         {formatElapsed(elapsed)}
@@ -121,7 +117,7 @@ export default function LiveMatchCard({ match, now, categoryName, bracketLetter,
               onClick={() => onTogglePause(match)}
               title={isPaused ? 'Resume' : 'Pause'}
               className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition ${
-                isPaused ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200' : 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                isPaused ? 'bg-brand-100 text-brand-700 hover:bg-brand-200' : 'bg-ink-100 text-ink-600 hover:bg-ink-200'
               }`}
             >
               {isPaused ? <Play size={12} /> : <Pause size={12} />}
@@ -135,7 +131,7 @@ export default function LiveMatchCard({ match, now, categoryName, bracketLetter,
             </button>
             <button
               onClick={openFinish}
-              className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-gradient-to-r from-brand-600 to-teal-600 px-2 py-1.5 text-[11px] font-bold text-white shadow-sm transition hover:from-brand-700 hover:to-teal-700"
+              className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-brand-600 px-2 py-1.5 text-[11px] font-bold text-white shadow-sm transition hover:bg-brand-700"
             >
               <Square size={10} /> Finish
             </button>

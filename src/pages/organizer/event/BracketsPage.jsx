@@ -430,7 +430,7 @@ export default function BracketsPage() {
               </div>
 
               {bracketProgress.length > 0 && (
-                <div className="rounded-2xl border border-ink-100 bg-white p-4 shadow-sm">
+                <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2 text-sm font-bold text-ink-800">
                       <Timer size={14} className="text-ink-400" /> Category progress
@@ -656,7 +656,7 @@ export default function BracketsPage() {
               </div>
 
               {matches.length > 0 && (
-                <div className="rounded-2xl border border-ink-100 bg-white p-4 shadow-sm">
+                <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
                   <div className="mb-3 flex items-center gap-2 text-sm font-bold text-ink-800">
                     <Radio size={14} className="text-ink-400" /> Recent matches
                   </div>

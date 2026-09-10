@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Clock, Crown, Radio, Timer, Trophy } from 'lucide-react';
-import { getEventById, listCategories } from '../../../data/eventsApi';
+import { getEventById, listCategories, listSponsors } from '../../../data/eventsApi';
 import {
   getBracketProgressForCategory,
   listBracketsForCategory,
@@ -10,11 +10,20 @@ import {
   listTeamsForCategory,
 } from '../../../data/bracketsApi';
 import AutoCarousel from '../../../components/organizer/AutoCarousel';
+import SponsorMarquee from '../../../components/organizer/SponsorMarquee';
+import EventCheckinQr from '../../../components/organizer/EventCheckinQr';
+import { usePagedItems } from '../../../hooks/usePagedItems';
 import { formatDuration } from '../../../utils/format';
 import { teamLabel } from '../../../utils/match';
 
 const REFRESH_MS = 6000;
 const SLIDE_MS = 7000;
+// Both the bracket grid (2x2) and the court row (4 across) are sized so 4
+// per page is exactly what fits a screen without wrapping into extra rows —
+// beyond that, auto-advance every 10s rather than force a scroll nobody at
+// the venue can actually perform.
+const PAGE_SIZE = 4;
+const PAGE_MS = 10000;
 
 function rankTeams(teams) {
   const enriched = teams.map((t) => ({ ...t, diff: t.points_for - t.points_against }));
@@ -35,22 +44,25 @@ export default function PreviewDisplayPage() {
   const [matches, setMatches] = useState([]);
   const [liveMatches, setLiveMatches] = useState([]);
   const [bracketProgress, setBracketProgress] = useState([]);
+  const [sponsors, setSponsors] = useState([]);
   const [loaded, setLoaded] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [ev, cats, bkts, live, bp] = await Promise.all([
+      const [ev, cats, bkts, live, bp, sponsorsData] = await Promise.all([
         getEventById(eventId),
         listCategories(eventId),
         listBracketsForCategory(categoryId),
         listLiveMatchesForEvent(eventId),
         getBracketProgressForCategory(categoryId),
+        listSponsors(eventId),
       ]);
       setEvent(ev);
       setCategory(cats.find((c) => c.id === categoryId) || null);
       setBrackets(bkts);
       setLiveMatches(live);
       setBracketProgress(bp);
+      setSponsors(sponsorsData);
       const [tms, mts] = await Promise.all([listTeamsForCategory(categoryId, bkts), listMatchesForCategory(categoryId)]);
       setTeams(tms);
       setMatches(mts);
@@ -76,6 +88,12 @@ export default function PreviewDisplayPage() {
       .sort((a, b) => a.bracket.letter.localeCompare(b.bracket.letter));
   }, [brackets, teams]);
 
+  const {
+    page: bracketsPage,
+    pageIndex: bracketPageIndex,
+    totalPages: bracketTotalPages,
+  } = usePagedItems(standingsByBracket, PAGE_SIZE, PAGE_MS);
+
   const nextMatches = useMemo(() => matches.filter((m) => m.status === 'scheduled').slice(0, 3), [matches]);
 
   const recentWinners = useMemo(
@@ -89,6 +107,8 @@ export default function PreviewDisplayPage() {
 
   const numCourts = event?.num_courts ?? 4;
   const courtsInPlay = liveMatches.length;
+  const courtNumbers = useMemo(() => Array.from({ length: numCourts }, (_, i) => i + 1), [numCourts]);
+  const { page: courtsPage, pageIndex: courtPageIndex, totalPages: courtTotalPages } = usePagedItems(courtNumbers, PAGE_SIZE, PAGE_MS);
 
   // Matches run courts-at-a-time, not one after another, so the ETA divides
   // the category's remaining matches across all courts before multiplying
@@ -103,17 +123,23 @@ export default function PreviewDisplayPage() {
   }, [bracketProgress, category, event, numCourts]);
 
   if (!loaded) {
-    return <div className="flex min-h-screen items-center justify-center bg-[#f0f1f4] text-sm font-medium text-ink-400">Loading preview…</div>;
+    return <div className="flex h-dvh items-center justify-center bg-[#f0f1f4] text-sm font-medium text-ink-400">Loading preview…</div>;
   }
 
+  const checkinUrl = event?.slug ? `${window.location.origin}/e/${event.slug}/checkin` : null;
+
   return (
-    <div className="min-h-screen w-full bg-gradient-to-br from-[#f5f5f7] to-[#e7e8ec] p-4 sm:p-6 lg:p-8">
-      <div className="sticky top-4 z-10 mb-6 rounded-3xl border border-white/60 bg-white/70 shadow-[0_8px_30px_rgb(0,0,0,0.06)] backdrop-blur-xl">
+    <div className="flex h-dvh w-screen flex-col overflow-hidden bg-gradient-to-br from-[#f5f5f7] to-[#e7e8ec] p-3 sm:p-5 lg:p-6 print:hidden">
+      {/* Pinned frame top: never scrolls, whatever the screen size — the
+          standings/sidebar area below is the only part that can, and only
+          if a bracket genuinely has more teams than the screen can show. */}
+      <div className="shrink-0 rounded-3xl border border-white/60 bg-white/70 shadow-[0_8px_30px_rgb(0,0,0,0.06)] backdrop-blur-xl">
         <div className="flex flex-wrap items-center justify-between gap-4 px-6 py-4">
           <div>
             <div className="font-display text-lg font-extrabold tracking-tight text-ink-900 sm:text-xl">{event?.name}</div>
             <div className="text-xs font-semibold text-ink-500 sm:text-sm">{category?.name}</div>
           </div>
+          {checkinUrl && <EventCheckinQr eventName={event.name} categoryName={category?.name} checkinUrl={checkinUrl} />}
           {progress.totalMatches > 0 && (
             <div className="text-right leading-tight">
               <div className="flex items-center justify-end gap-1.5 text-base font-extrabold text-ink-900 sm:text-lg">
@@ -135,7 +161,7 @@ export default function PreviewDisplayPage() {
             </span>
           </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {Array.from({ length: numCourts }, (_, i) => i + 1).map((c) => {
+            {courtsPage.map((c) => {
               const m = liveMatches.find((lm) => lm.court === c);
               return (
                 <div
@@ -163,24 +189,31 @@ export default function PreviewDisplayPage() {
               );
             })}
           </div>
+          {courtTotalPages > 1 && (
+            <div className="mt-2 flex justify-center gap-1.5">
+              {Array.from({ length: courtTotalPages }, (_, i) => (
+                <span key={i} className={`h-1.5 rounded-full transition-all duration-500 ${i === courtPageIndex ? 'w-4 bg-brand-500' : 'w-1.5 bg-ink-200'}`} />
+              ))}
+            </div>
+          )}
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
-        <div className="lg:col-span-3">
+      <div className="mt-3 grid min-h-0 flex-1 grid-cols-1 gap-4 sm:mt-4 lg:grid-cols-4">
+        <div className="flex min-h-0 flex-col lg:col-span-3">
           {standingsByBracket.length === 0 ? (
             <div className="rounded-3xl border border-white/60 bg-white/70 p-10 text-center text-sm text-ink-400 shadow-sm backdrop-blur-xl">
               No brackets drawn yet for this category.
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-5 xl:grid-cols-2">
-              {standingsByBracket.map(({ bracket, ranked }) => (
-                <div key={bracket.id} className="overflow-hidden rounded-3xl border border-white/60 bg-white/80 shadow-[0_8px_30px_rgb(0,0,0,0.05)] backdrop-blur-xl">
-                  <div className="flex items-center justify-between border-b border-ink-100/70 px-5 py-3.5">
+            <div className="grid min-h-0 flex-1 auto-rows-min grid-cols-1 gap-4 overflow-y-auto xl:grid-cols-2">
+              {bracketsPage.map(({ bracket, ranked }) => (
+                <div key={bracket.id} className="flex min-h-0 flex-col overflow-hidden rounded-3xl border border-white/60 bg-white/80 shadow-[0_8px_30px_rgb(0,0,0,0.05)] backdrop-blur-xl">
+                  <div className="flex shrink-0 items-center justify-between border-b border-ink-100/70 px-5 py-3.5">
                     <span className="font-display text-base font-extrabold text-ink-900">Bracket {bracket.letter}</span>
                     <span className="text-[11px] font-semibold text-ink-400">{ranked.length} teams</span>
                   </div>
-                  <div className="overflow-x-auto">
+                  <div className="overflow-x-auto overflow-y-auto">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="text-[10px] font-bold uppercase tracking-wide text-ink-400">
@@ -219,10 +252,17 @@ export default function PreviewDisplayPage() {
               ))}
             </div>
           )}
+          {bracketTotalPages > 1 && (
+            <div className="mt-3 flex shrink-0 justify-center gap-1.5">
+              {Array.from({ length: bracketTotalPages }, (_, i) => (
+                <span key={i} className={`h-1.5 rounded-full transition-all duration-500 ${i === bracketPageIndex ? 'w-4 bg-brand-500' : 'w-1.5 bg-ink-200'}`} />
+              ))}
+            </div>
+          )}
         </div>
 
-        <div className="flex flex-col gap-5">
-          <div className="rounded-3xl border border-white/60 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.05)] backdrop-blur-xl">
+        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
+          <div className="shrink-0 rounded-3xl border border-white/60 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.05)] backdrop-blur-xl">
             <div className="mb-3 flex items-center gap-2 text-sm font-extrabold text-ink-800">
               <Clock size={15} className="text-brand-500" /> Next Matches
             </div>
@@ -243,7 +283,7 @@ export default function PreviewDisplayPage() {
             />
           </div>
 
-          <div className="rounded-3xl border border-white/60 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.05)] backdrop-blur-xl">
+          <div className="shrink-0 rounded-3xl border border-white/60 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.05)] backdrop-blur-xl">
             <div className="mb-3 flex items-center gap-2 text-sm font-extrabold text-ink-800">
               <Trophy size={15} className="text-amber-500" /> Recent Winners
             </div>
@@ -269,6 +309,10 @@ export default function PreviewDisplayPage() {
             />
           </div>
         </div>
+      </div>
+
+      <div className="mt-3 shrink-0 sm:mt-4">
+        <SponsorMarquee sponsors={sponsors} />
       </div>
     </div>
   );

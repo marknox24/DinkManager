@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { AlertTriangle, LayoutGrid, Trash2 } from 'lucide-react';
+import { AlertTriangle, Coins, LayoutGrid, Trash2 } from 'lucide-react';
 import { deleteEvent, getEventById, updateEvent } from '../../../data/eventsApi';
+import { CURRENCIES } from '../../../data/constants';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
@@ -34,6 +35,16 @@ export default function SettingsPage() {
       const updated = await updateEvent(eventId, { num_courts: n, match_duration_minutes: d });
       setEvent(updated);
       pushToast('Court settings updated', 'success');
+    } catch (e) {
+      pushToast(e.message, 'error');
+    }
+  };
+
+  const saveCurrency = async (currency) => {
+    try {
+      const updated = await updateEvent(eventId, { currency });
+      setEvent(updated);
+      pushToast('Currency updated', 'success');
     } catch (e) {
       pushToast(e.message, 'error');
     }
@@ -103,6 +114,29 @@ export default function SettingsPage() {
                 Save settings
               </button>
             </div>
+          </div>
+
+          <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex items-center gap-2.5">
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                <Coins size={17} strokeWidth={2.3} />
+              </span>
+              <div>
+                <h2 className="font-display text-base font-bold text-ink-900">Currency</h2>
+                <p className="text-xs text-ink-500">Used to display amounts on the Accounting and Sponsors pages for this event.</p>
+              </div>
+            </div>
+            <select
+              value={event.currency || 'USD'}
+              onChange={(e) => saveCurrency(e.target.value)}
+              className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 sm:max-w-xs"
+            >
+              {CURRENCIES.map((c) => (
+                <option key={c.code} value={c.code}>
+                  {c.code} — {c.name}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-5">

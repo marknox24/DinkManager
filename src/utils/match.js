@@ -1,6 +1,15 @@
+// Names get entered every which way (ALL CAPS bulk imports, all-lowercase
+// quick adds) — normalize to Title Case wherever a player/team name is
+// displayed, regardless of how it was stored.
+export function toTitleCase(str) {
+  if (!str) return str;
+  return str.toLowerCase().replace(/(^|[\s'-])\S/g, (c) => c.toUpperCase());
+}
+
 export function teamLabel(team) {
   if (!team) return '—';
-  return team.player2_name ? `${team.player1_name} & ${team.player2_name}` : team.player1_name;
+  const label = team.player2_name ? `${team.player1_name} & ${team.player2_name}` : team.player1_name;
+  return toTitleCase(label);
 }
 
 export function liveElapsedSeconds(match, nowMs) {

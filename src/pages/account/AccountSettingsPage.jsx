@@ -265,7 +265,7 @@ export default function AccountSettingsPage() {
   return (
     <div className="min-h-screen bg-[#f3f6f8]">
       <AccountHeader />
-      <main className="mx-auto max-w-2xl px-4 py-8 sm:px-6">
+      <main className="mx-auto max-w-2xl px-4 py-6 sm:px-6">
         <div className="mb-6">
           <h1 className="font-display text-2xl font-bold text-ink-900">Account & security</h1>
           <p className="text-sm text-ink-500">Manage your password and two-factor authentication.</p>

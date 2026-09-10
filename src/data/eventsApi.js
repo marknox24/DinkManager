@@ -54,14 +54,34 @@ export async function deleteEvent(eventId) {
   if (error) throw error;
 }
 
+// Includes a `player_count` per event (pending + approved registrations —
+// same "active" definition as the public_category_counts view) so the
+// dashboard cards can show current registration numbers at a glance.
 export async function listMyEvents(organizerId) {
-  const { data, error } = await supabase
+  const { data: events, error } = await supabase
     .from('events')
     .select('*')
     .eq('organizer_id', organizerId)
     .order('created_at', { ascending: false });
   if (error) throw error;
-  return data;
+  if (events.length === 0) return events;
+
+  const { data: regs, error: regErr } = await supabase
+    .from('registrations')
+    .select('event_id, status')
+    .in(
+      'event_id',
+      events.map((e) => e.id)
+    );
+  if (regErr) throw regErr;
+
+  const counts = {};
+  regs.forEach((r) => {
+    if (r.status === 'pending' || r.status === 'approved') {
+      counts[r.event_id] = (counts[r.event_id] || 0) + 1;
+    }
+  });
+  return events.map((e) => ({ ...e, player_count: counts[e.id] || 0 }));
 }
 
 export async function getEventById(eventId) {
@@ -210,6 +230,162 @@ export async function deleteRegistration(registrationId) {
 }
 
 // ---------------------------------------------------------------------------
+// CHECK-IN  (public, anonymous — QR scan -> pick category -> pick name)
+// Reads go through the public_checkin_roster view (PII-free by design); the
+// UPDATE below is only ever allowed to touch the two checked_in_at columns —
+// see the RLS/column-grant comments in schema.sql. Because anon has no
+// SELECT policy on the registrations base table, chaining .select() onto
+// the update would come back empty (RETURNING is itself SELECT-gated) —
+// re-fetching through the view afterward is what actually works.
+// ---------------------------------------------------------------------------
+export async function listCheckinRoster(eventId, categoryId) {
+  const { data, error } = await supabase
+    .from('public_checkin_roster')
+    .select('*')
+    .eq('event_id', eventId)
+    .eq('category_id', categoryId);
+  if (error) throw error;
+  return data;
+}
+
+export async function getCheckinRegistration(registrationId) {
+  const { data, error } = await supabase.from('public_checkin_roster').select('*').eq('id', registrationId).maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
+export async function checkInPlayer(registrationId, slot) {
+  const patch = slot === 'player2' ? { player2_checked_in_at: new Date().toISOString() } : { player1_checked_in_at: new Date().toISOString() };
+  const { error } = await supabase.from('registrations').update(patch).eq('id', registrationId);
+  if (error) throw error;
+  return getCheckinRegistration(registrationId);
+}
+
+// ---------------------------------------------------------------------------
+// SPONSORS
+// ---------------------------------------------------------------------------
+export async function listSponsors(eventId) {
+  const { data, error } = await supabase.from('sponsors').select('*').eq('event_id', eventId).order('order_index');
+  if (error) throw error;
+  return data;
+}
+
+export async function createSponsor(eventId, payload, orderIndex) {
+  const { data, error } = await supabase
+    .from('sponsors')
+    .insert({ ...payload, event_id: eventId, order_index: orderIndex })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateSponsor(sponsorId, payload) {
+  const { data, error } = await supabase.from('sponsors').update(payload).eq('id', sponsorId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteSponsor(sponsorId) {
+  const { error } = await supabase.from('sponsors').delete().eq('id', sponsorId);
+  if (error) throw error;
+}
+
+// ---------------------------------------------------------------------------
+// ACCOUNTING — expenses, manual earnings, and registration-fee earnings
+// (the latter computed on the fly, never stored, so it can't drift from the
+// registrations it's derived from)
+// ---------------------------------------------------------------------------
+export async function listExpenses(eventId) {
+  const { data, error } = await supabase
+    .from('expenses')
+    .select('*')
+    .eq('event_id', eventId)
+    .order('expense_date', { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+export async function createExpense(eventId, payload) {
+  const { data, error } = await supabase
+    .from('expenses')
+    .insert({ ...payload, event_id: eventId })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateExpense(expenseId, payload) {
+  const { data, error } = await supabase.from('expenses').update(payload).eq('id', expenseId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteExpense(expenseId) {
+  const { error } = await supabase.from('expenses').delete().eq('id', expenseId);
+  if (error) throw error;
+}
+
+export async function listEarnings(eventId) {
+  const { data, error } = await supabase
+    .from('earnings')
+    .select('*')
+    .eq('event_id', eventId)
+    .order('earning_date', { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+export async function createEarning(eventId, payload) {
+  const { data, error } = await supabase
+    .from('earnings')
+    .insert({ ...payload, event_id: eventId })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateEarning(earningId, payload) {
+  const { data, error } = await supabase.from('earnings').update(payload).eq('id', earningId).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteEarning(earningId) {
+  const { error } = await supabase.from('earnings').delete().eq('id', earningId);
+  if (error) throw error;
+}
+
+// Registration-fee revenue per category: approved registrations x that
+// category's fee_amount. "Approved" (not pending/waitlisted/denied) is the
+// conservative read of "earned" — a slot that was never confirmed shouldn't
+// count as collected revenue.
+export async function getRegistrationEarnings(eventId) {
+  const [{ data: cats, error: catErr }, { data: regs, error: regErr }] = await Promise.all([
+    supabase.from('categories').select('id, name, fee_amount, fee_currency').eq('event_id', eventId),
+    supabase.from('registrations').select('category_id, status').eq('event_id', eventId),
+  ]);
+  if (catErr) throw catErr;
+  if (regErr) throw regErr;
+
+  const approvedCounts = {};
+  regs.forEach((r) => {
+    if (r.status === 'approved') approvedCounts[r.category_id] = (approvedCounts[r.category_id] || 0) + 1;
+  });
+
+  return cats.map((c) => ({
+    category_id: c.id,
+    category_name: c.name,
+    fee_amount: Number(c.fee_amount) || 0,
+    fee_currency: c.fee_currency,
+    approved_count: approvedCounts[c.id] || 0,
+    total: (approvedCounts[c.id] || 0) * (Number(c.fee_amount) || 0),
+  }));
+}
+
+// ---------------------------------------------------------------------------
 // UMPIRES
 // ---------------------------------------------------------------------------
 export async function listUmpires(eventId) {
@@ -259,6 +435,19 @@ export async function uploadRegistrationFile(eventId, file) {
   const { error } = await supabase.storage.from('registration-uploads').upload(path, file);
   if (error) throw error;
   return { path };
+}
+
+export async function uploadExpenseReceipt(eventId, file) {
+  const path = `${eventId}/${Date.now()}-${slugify(file.name)}`;
+  const { error } = await supabase.storage.from('event-receipts').upload(path, file);
+  if (error) throw error;
+  return { path };
+}
+
+export async function getExpenseReceiptUrl(path) {
+  const { data, error } = await supabase.storage.from('event-receipts').createSignedUrl(path, 60 * 10);
+  if (error) throw error;
+  return data.signedUrl;
 }
 
 export async function getRegistrationFileUrl(path) {

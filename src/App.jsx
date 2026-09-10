@@ -15,6 +15,7 @@ import PlayerLoginPage from './pages/player/PlayerLoginPage';
 import PlayerSignupPage from './pages/player/PlayerSignupPage';
 import PlayerDashboardPage from './pages/player/PlayerDashboardPage';
 import AccountSettingsPage from './pages/account/AccountSettingsPage';
+import AdminCustomersPage from './pages/admin/AdminCustomersPage';
 import DashboardPage from './pages/organizer/DashboardPage';
 import EventEditorPage from './pages/organizer/EventEditorPage';
 import OverviewPage from './pages/organizer/event/OverviewPage';
@@ -25,18 +26,23 @@ import PreviewSetupPage from './pages/organizer/event/PreviewSetupPage';
 import PreviewDisplayPage from './pages/organizer/event/PreviewDisplayPage';
 import UmpiresPage from './pages/organizer/event/UmpiresPage';
 import SettingsPage from './pages/organizer/event/SettingsPage';
+import SponsorsPage from './pages/organizer/event/SponsorsPage';
+import AccountingPage from './pages/organizer/event/AccountingPage';
 import PublicEventPage from './pages/public/PublicEventPage';
 import RegisterPage from './pages/public/RegisterPage';
+import CheckInPage from './pages/public/CheckInPage';
 import DinkManagerDemoPage from './pages/legacy/DinkManagerDemoPage';
 
 function RequireSupabase({ children }) {
   return isSupabaseConfigured ? children : <SetupRequiredPage />;
 }
 
-function Protected({ children, role }) {
+function Protected({ children, role, requireAdmin }) {
   return (
     <RequireSupabase>
-      <ProtectedRoute role={role}>{children}</ProtectedRoute>
+      <ProtectedRoute role={role} requireAdmin={requireAdmin}>
+        {children}
+      </ProtectedRoute>
     </RequireSupabase>
   );
 }
@@ -54,6 +60,14 @@ function AppRoutes() {
       <Route path="/player/dashboard" element={<Protected role="player"><PlayerDashboardPage /></Protected>} />
 
       <Route path="/account" element={<Protected role="any"><AccountSettingsPage /></Protected>} />
+      <Route
+        path="/admin/customers"
+        element={
+          <Protected requireAdmin>
+            <AdminCustomersPage />
+          </Protected>
+        }
+      />
 
       <Route path="/dashboard" element={<Protected><DashboardPage /></Protected>} />
       <Route path="/events/:eventId/edit" element={<Protected><EventEditorPage /></Protected>} />
@@ -62,12 +76,18 @@ function AppRoutes() {
       <Route path="/events/:eventId/brackets" element={<Protected><BracketsPage /></Protected>} />
       <Route path="/events/:eventId/matchlist" element={<Protected><MatchListPage /></Protected>} />
       <Route path="/events/:eventId/preview" element={<Protected><PreviewSetupPage /></Protected>} />
-      <Route path="/events/:eventId/preview/:categoryId" element={<Protected><PreviewDisplayPage /></Protected>} />
+      {/* Public on purpose: players land here straight from the check-in
+          flow with no session at all, and it's spectator-facing anyway (no
+          PII — same data already shown on a venue TV). */}
+      <Route path="/events/:eventId/preview/:categoryId" element={<RequireSupabase><PreviewDisplayPage /></RequireSupabase>} />
       <Route path="/events/:eventId/umpires" element={<Protected><UmpiresPage /></Protected>} />
+      <Route path="/events/:eventId/sponsors" element={<Protected><SponsorsPage /></Protected>} />
+      <Route path="/events/:eventId/accounting" element={<Protected><AccountingPage /></Protected>} />
       <Route path="/events/:eventId/settings" element={<Protected><SettingsPage /></Protected>} />
 
       <Route path="/e/:slug" element={<RequireSupabase><PublicEventPage /></RequireSupabase>} />
       <Route path="/e/:slug/register" element={<RequireSupabase><RegisterPage /></RequireSupabase>} />
+      <Route path="/e/:slug/checkin" element={<RequireSupabase><CheckInPage /></RequireSupabase>} />
 
       <Route path="/demo/dinkmanager" element={<DinkManagerDemoPage />} />
 

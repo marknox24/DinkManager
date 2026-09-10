@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { Gavel, LayoutGrid, ListOrdered, LogOut, Menu, MonitorPlay, Settings, Shuffle, Trophy, UserCog, X } from 'lucide-react';
+import { Award, Gavel, LayoutGrid, ListOrdered, LogOut, Menu, MonitorPlay, Settings, Shuffle, Trophy, UserCog, Wallet, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import Logo from '../ui/Logo';
@@ -11,6 +11,8 @@ const NAV_ITEMS = [
   { id: 'brackets', label: 'Brackets', icon: Shuffle },
   { id: 'matchlist', label: 'Match List', icon: ListOrdered },
   { id: 'preview', label: 'Preview Screen', icon: MonitorPlay },
+  { id: 'sponsors', label: 'Sponsors', icon: Award },
+  { id: 'accounting', label: 'Accounting', icon: Wallet },
   { id: 'umpires', label: 'Umpires', icon: Gavel },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
