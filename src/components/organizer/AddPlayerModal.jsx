@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { UserPlus } from 'lucide-react';
 import Modal from '../ui/Modal';
 import FormField, { inputClass } from '../ui/FormField';
+import Select from '../ui/Select';
 
 function isDoublesFormat(matchType) {
   return /doubles/i.test(matchType || '');
@@ -32,6 +33,7 @@ export default function AddPlayerModal({ categories, defaultCategoryId, onAdd, o
       setAddedCount((c) => c + 1);
       setPlayer1('');
       setPlayer2('');
+      setClubName('');
     } finally {
       setSaving(false);
     }
@@ -41,13 +43,13 @@ export default function AddPlayerModal({ categories, defaultCategoryId, onAdd, o
     <Modal open onClose={onClose} title="Add player" icon={UserPlus} maxWidth="max-w-md">
       <div className="flex flex-col gap-4">
         <FormField label="Category">
-          <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className={inputClass}>
+          <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className={inputClass}>
             {categories.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name} ({c.match_type})
               </option>
             ))}
-          </select>
+          </Select>
         </FormField>
 
         <FormField label={isDoubles ? 'Player 1 name' : 'Player name'}>

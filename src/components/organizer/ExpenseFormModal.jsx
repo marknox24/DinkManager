@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Loader2, Receipt as ReceiptIcon, UploadCloud } from 'lucide-react';
 import Modal from '../ui/Modal';
 import FormField, { inputClass, textareaClass } from '../ui/FormField';
+import Select from '../ui/Select';
 import { EXPENSE_CATEGORIES } from '../../data/constants';
 import { uploadExpenseReceipt } from '../../data/eventsApi';
 import { useToast } from '../../context/ToastContext';
@@ -63,13 +64,13 @@ export default function ExpenseFormModal({ eventId, expense, onSave, onClose }) 
 
         <div className="grid grid-cols-2 gap-3">
           <FormField label="Category">
-            <select value={category} onChange={(e) => setCategory(e.target.value)} className={inputClass}>
+            <Select value={category} onChange={(e) => setCategory(e.target.value)} className={inputClass}>
               {EXPENSE_CATEGORIES.map((c) => (
                 <option key={c} value={c}>
                   {c}
                 </option>
               ))}
-            </select>
+            </Select>
           </FormField>
           <FormField label="Amount">
             <input type="number" min={0} step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} className={inputClass} />

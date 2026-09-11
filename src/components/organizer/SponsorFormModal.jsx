@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Award, ImagePlus, Loader2 } from 'lucide-react';
 import Modal from '../ui/Modal';
 import FormField, { inputClass } from '../ui/FormField';
+import Select from '../ui/Select';
 import { SPONSOR_TIERS } from '../../data/constants';
 import { getEventMediaUrl, uploadEventMedia } from '../../data/eventsApi';
 import { useToast } from '../../context/ToastContext';
@@ -63,13 +64,13 @@ export default function SponsorFormModal({ eventId, sponsor, onSave, onClose }) 
 
         <div className="grid grid-cols-2 gap-3">
           <FormField label="Tier">
-            <select value={tier} onChange={(e) => setTier(e.target.value)} className={inputClass}>
+            <Select value={tier} onChange={(e) => setTier(e.target.value)} className={inputClass}>
               {Object.entries(SPONSOR_TIERS).map(([value, { label }]) => (
                 <option key={value} value={value}>
                   {label}
                 </option>
               ))}
-            </select>
+            </Select>
           </FormField>
           <FormField label="Amount">
             <input type="number" min={0} step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)} className={inputClass} />

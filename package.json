@@ -13,6 +13,8 @@
     "@supabase/supabase-js": "^2.116.0",
     "@tailwindcss/vite": "^4.3.3",
     "clsx": "^2.1.1",
+    "html-to-image": "^1.11.13",
+    "jspdf": "^4.2.1",
     "lucide-react": "^1.42.0",
     "qrcode": "^1.5.4",
     "react": "^19.2.8",

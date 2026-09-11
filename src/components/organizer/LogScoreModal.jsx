@@ -2,10 +2,12 @@ import { useState } from 'react';
 import { Trophy } from 'lucide-react';
 import Modal from '../ui/Modal';
 import FormField, { inputClass } from '../ui/FormField';
+import Select from '../ui/Select';
 import { useToast } from '../../context/ToastContext';
 import { teamLabel } from '../../utils/match';
+import { matchLevelLabel } from '../../data/playoffApi';
 
-export default function LogScoreModal({ match, umpires, onSave, onClose }) {
+export default function LogScoreModal({ match, categoryName, umpires, onSave, onClose }) {
   const { pushToast } = useToast();
   const isEditing = match.status === 'completed';
   const [scoreA, setScoreA] = useState(isEditing ? String(match.score_a) : '11');
@@ -47,11 +49,16 @@ export default function LogScoreModal({ match, umpires, onSave, onClose }) {
       maxWidth="max-w-sm"
     >
       <div className="flex flex-col gap-4">
-        <p className="text-sm text-ink-600">
-          <span className="font-semibold text-ink-800">{teamLabel(match.team_a)}</span>
-          <span className="mx-1.5 text-ink-300">vs</span>
-          <span className="font-semibold text-ink-800">{teamLabel(match.team_b)}</span>
-        </p>
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide text-brand-600">
+            {categoryName}: {matchLevelLabel(match)}
+          </p>
+          <p className="text-sm text-ink-600">
+            <span className="font-semibold text-ink-800">{teamLabel(match.team_a)}</span>
+            <span className="mx-1.5 text-ink-300">vs</span>
+            <span className="font-semibold text-ink-800">{teamLabel(match.team_b)}</span>
+          </p>
+        </div>
 
         <div className="grid grid-cols-2 gap-3">
           <FormField label="Score A">
@@ -68,7 +75,7 @@ export default function LogScoreModal({ match, umpires, onSave, onClose }) {
               No umpires added yet. Add one from the Umpires page first.
             </p>
           ) : (
-            <select value={umpireName} onChange={(e) => setUmpireName(e.target.value)} className={inputClass}>
+            <Select value={umpireName} onChange={(e) => setUmpireName(e.target.value)} className={inputClass}>
               <option value="" disabled>
                 Select umpire
               </option>
@@ -77,7 +84,7 @@ export default function LogScoreModal({ match, umpires, onSave, onClose }) {
                   {u.name}
                 </option>
               ))}
-            </select>
+            </Select>
           )}
         </FormField>
 

@@ -5,6 +5,7 @@ import { useConfirm } from '../../context/ConfirmContext';
 import { useNow } from '../../hooks/useNow';
 import { formatElapsed } from '../../utils/format';
 import { isUmpireBusy } from '../../utils/stats';
+import Select from '../ui/Select';
 
 export default function CourtCard({ courtNumber, liveMatch }) {
   if (!liveMatch) return <IdleCourtCard courtNumber={courtNumber} />;
@@ -93,10 +94,12 @@ function BusyCourtCard({ courtNumber, liveMatch }) {
 
       {editingUmpire ? (
         <div className="mt-2 flex items-center gap-1.5">
-          <select
+          <Select
             value={umpireChoice ?? ''}
             onChange={(e) => setUmpireChoice(parseInt(e.target.value, 10))}
-            className="flex-1 rounded-xl border border-ink-200 px-2 py-1.5 text-xs"
+            className="w-full rounded-xl border border-ink-200 pl-2 py-1.5 text-xs"
+            wrapperClassName="flex-1"
+            dense
           >
             {reassignOptions.length === 0 && <option value="">No other umpires free</option>}
             {reassignOptions.map((u) => (
@@ -104,7 +107,7 @@ function BusyCourtCard({ courtNumber, liveMatch }) {
                 {u.name}
               </option>
             ))}
-          </select>
+          </Select>
           <button onClick={confirmReassign} className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-brand-600 text-white">
             <CheckCircle2 size={14} />
           </button>

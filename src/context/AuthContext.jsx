@@ -7,6 +7,21 @@ const AuthContext = createContext(null);
 // below knows whether the Organizer or Player tab initiated it.
 const OAUTH_ROLE_KEY = 'dm_oauth_role';
 
+// Shared by every service-role-only Edge Function call below (admin
+// account management, and the organizer-facing staff invite) — Edge
+// Function errors surface here without a parsed body by default, so this
+// pulls the real message out of the response instead of a generic
+// "non-2xx" string.
+async function invokeAdminFunction(name, body) {
+  const { data, error } = await supabase.functions.invoke(name, { body });
+  if (error) {
+    const message = await error.context?.json?.().then((b) => b?.error).catch(() => null);
+    throw new Error(message || error.message);
+  }
+  if (data?.error) throw new Error(data.error);
+  return data;
+}
+
 export function useAuth() {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error('useAuth must be used within AuthProvider');
@@ -137,19 +152,21 @@ export function AuthProvider({ children }) {
       // role can send invites — the function re-checks is_admin itself, so
       // this call is safe to expose even though the client-side isAdmin
       // flag above is only a UI convenience, not the real access control.
-      createTrialAccount: async ({ email, days, maxEvents, role: trialRole }) => {
-        const { data, error } = await supabase.functions.invoke('create-trial-account', {
-          body: { email, days, maxEvents, role: trialRole, origin: window.location.origin },
-        });
-        if (error) {
-          // Edge Function errors surface here without a parsed body by
-          // default; try to pull the real message out of the response.
-          const message = await error.context?.json?.().then((b) => b?.error).catch(() => null);
-          throw new Error(message || error.message);
-        }
-        if (data?.error) throw new Error(data.error);
-        return data;
-      },
+      createTrialAccount: ({ email, days, maxEvents, role: trialRole }) =>
+        invokeAdminFunction('create-trial-account', { email, days, maxEvents, role: trialRole, origin: window.location.origin }),
+      // Admin-only: edit a customer's trial terms, set a password by hand so
+      // it can be handed to them directly, or remove the account outright.
+      // All three run server-side in admin-manage-customer for the same
+      // reason as createTrialAccount above (service-role only operations).
+      updateCustomer: ({ userId, days, maxEvents }) => invokeAdminFunction('admin-manage-customer', { action: 'update', userId, days, maxEvents }),
+      setCustomerPassword: ({ userId, password }) => invokeAdminFunction('admin-manage-customer', { action: 'set_password', userId, password }),
+      deleteCustomer: (userId) => invokeAdminFunction('admin-manage-customer', { action: 'delete', userId }),
+      // Organizer-facing: invites a "table committee" helper onto one event
+      // with a per-feature permission set. Runs server-side in
+      // invite-event-staff since inviting by email needs the service role;
+      // the function re-checks the caller owns the event itself.
+      inviteEventStaff: ({ eventId, email, permissions }) =>
+        invokeAdminFunction('invite-event-staff', { eventId, email, permissions, origin: window.location.origin }),
       signUp: (email, password, displayName, role = 'organizer') =>
         supabase.auth.signUp({ email, password, options: { data: { display_name: displayName, role } } }),
       signIn: (email, password) => supabase.auth.signInWithPassword({ email, password }),

@@ -1,9 +1,12 @@
 import { useState } from 'react';
-import { ImagePlus, Loader2, Trash2 } from 'lucide-react';
+import { ImagePlus, Loader2, Trash2, Trophy } from 'lucide-react';
 import { CURRENCIES, MATCH_FORMATS, MATCH_TYPES } from '../../data/constants';
 import { getEventMediaUrl, uploadEventMedia } from '../../data/eventsApi';
+import { PLAYOFF_STAGES, deriveLadder } from '../../data/playoffApi';
 import { useToast } from '../../context/ToastContext';
 import FormField, { inputClass, textareaClass } from '../ui/FormField';
+import Select from '../ui/Select';
+import PlayoffStagesEditor from './PlayoffStagesEditor';
 
 export default function CategoryEditor({ eventId, category, onSave, onDelete }) {
   const { pushToast } = useToast();
@@ -11,6 +14,7 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete }) 
   const [customMatchType, setCustomMatchType] = useState(!MATCH_TYPES.includes(category.match_type));
   const [customFormat, setCustomFormat] = useState(!MATCH_FORMATS.includes(category.format));
   const [uploadingImage, setUploadingImage] = useState(false);
+  const [playoffOpen, setPlayoffOpen] = useState(false);
 
   const set = (field, value) => setLocal((prev) => ({ ...prev, [field]: value }));
 
@@ -19,6 +23,17 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete }) 
     setLocal(next);
     onSave(next);
   };
+
+  const ladderSummary = (() => {
+    if (!local.playoff_enabled) return '';
+    const ladder = deriveLadder({
+      poolPairs: local.playoff_pool_pairs || [],
+      advancePerPool: local.playoff_advance_per_pool,
+      thirdPlace: local.playoff_third_place,
+    });
+    if (!ladder.valid) return 'Invalid setup';
+    return ladder.levels.map((l) => PLAYOFF_STAGES[l.kind].short).join(' → ');
+  })();
 
   const handleImageUpload = async (file) => {
     if (!file) return;
@@ -94,7 +109,7 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete }) 
               className={inputClass}
             />
           ) : (
-            <select
+            <Select
               value={local.match_type}
               onChange={(e) => {
                 if (e.target.value === 'Custom') {
@@ -111,7 +126,7 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete }) 
                   {t}
                 </option>
               ))}
-            </select>
+            </Select>
           )}
         </FormField>
 
@@ -124,7 +139,7 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete }) 
               className={inputClass}
             />
           ) : (
-            <select
+            <Select
               value={local.format}
               onChange={(e) => {
                 if (e.target.value === 'Custom') {
@@ -141,9 +156,22 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete }) 
                   {f}
                 </option>
               ))}
-            </select>
+            </Select>
           )}
         </FormField>
+
+        {/round robin/i.test(local.format || '') && (
+          <FormField label="Playoffs after pool play">
+            <button
+              type="button"
+              onClick={() => setPlayoffOpen(true)}
+              className="flex items-center gap-1.5 rounded-xl border border-ink-200 bg-white px-3.5 py-2 text-sm font-semibold text-ink-700 transition hover:bg-ink-50"
+            >
+              <Trophy size={14} className="text-brand-500" />
+              {local.playoff_enabled ? `${ladderSummary} — edit levels` : 'Set up levels'}
+            </button>
+          </FormField>
+        )}
 
         <FormField label="Max slots">
           <input
@@ -167,19 +195,20 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete }) 
           />
         </FormField>
 
-        <FormField label="Registration fee">
+        <FormField label="Registration fee per team">
           <div className="flex gap-1.5">
-            <select
+            <Select
               value={local.fee_currency}
               onChange={(e) => commit({ fee_currency: e.target.value })}
-              className={`${inputClass} w-[4.75rem] shrink-0 px-2`}
+              className={`${inputClass} w-[4.75rem] shrink-0 pl-2`}
+              dense
             >
               {CURRENCIES.map((c) => (
                 <option key={c.code} value={c.code} title={c.name}>
                   {c.code}
                 </option>
               ))}
-            </select>
+            </Select>
             <input
               type="number"
               min={0}
@@ -219,6 +248,17 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete }) 
           />
         </FormField>
       </div>
+
+      {playoffOpen && (
+        <PlayoffStagesEditor
+          category={local}
+          onSave={(patch) => {
+            commit(patch);
+            setPlayoffOpen(false);
+          }}
+          onClose={() => setPlayoffOpen(false)}
+        />
+      )}
     </div>
   );
 }

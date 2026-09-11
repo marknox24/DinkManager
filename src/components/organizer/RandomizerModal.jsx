@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Crown, PartyPopper, Radio, Shuffle, Sparkles, Trophy, Users, Zap } from 'lucide-react';
+import { toPng } from 'html-to-image';
+import { Crown, Download, Loader2, PartyPopper, Radio, Shuffle, Sparkles, Trophy, Users, Zap } from 'lucide-react';
 import Modal from '../ui/Modal';
 import { inputClass } from '../ui/FormField';
+import { useToast } from '../../context/ToastContext';
 import { drawBrackets, drawTimings, flattenDrawOrder, suggestBracketCount } from '../../utils/randomizer';
 
 function wait(ms) {
@@ -30,6 +32,7 @@ const BRACKET_COLORS = [
 ];
 
 export default function RandomizerModal({ category, registrations, hasExistingBrackets, onConfirm, onClose }) {
+  const { pushToast } = useToast();
   const [numBrackets, setNumBrackets] = useState(suggestBracketCount(registrations.length));
   const [phase, setPhase] = useState('config'); // config | shuffling | drawing | complete | result
   const [pool, setPool] = useState(registrations);
@@ -39,6 +42,8 @@ export default function RandomizerModal({ category, registrations, hasExistingBr
   const [jitterTick, setJitterTick] = useState(0);
   const [grouping, setGrouping] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const resultRef = useRef(null);
 
   const estimatedSeconds = useMemo(() => {
     const { perPickMs } = drawTimings(registrations.length);
@@ -117,6 +122,28 @@ export default function RandomizerModal({ category, registrations, hasExistingBr
       await onConfirm(grouping);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const downloadPng = async () => {
+    if (!resultRef.current) return;
+    setDownloading(true);
+    try {
+      // skipFonts avoids html-to-image trying to read cssRules off the
+      // Google Fonts <link> stylesheet, which throws a CORS SecurityError
+      // in every browser since that stylesheet isn't same-origin — the
+      // capture still succeeds either way, this just keeps it silent and
+      // falls back to a system font instead of Space Grotesk in the PNG.
+      const dataUrl = await toPng(resultRef.current, { backgroundColor: '#ffffff', pixelRatio: 2, skipFonts: true });
+      const link = document.createElement('a');
+      const slug = category.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '') || 'brackets';
+      link.download = `${slug}-brackets.png`;
+      link.href = dataUrl;
+      link.click();
+    } catch {
+      pushToast('Could not generate the image — try again', 'error');
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -253,30 +280,60 @@ export default function RandomizerModal({ category, registrations, hasExistingBr
 
       {phase === 'result' && grouping && (
         <div className="flex flex-col gap-5">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            {letters.map((letter, li) => (
-              <div
-                key={letter}
-                className="animate-modal-in rounded-2xl border border-ink-100 bg-ink-50/60 p-3"
-                style={{ animationDelay: `${li * 80}ms`, animationFillMode: 'backwards' }}
-              >
-                <div className="mb-2 flex items-center gap-1.5 text-xs font-bold text-ink-700">
-                  <Crown size={13} className="text-amber-500" /> Bracket {letter} · {grouping[letter].length}
-                </div>
-                <div className="flex flex-col gap-1">
-                  {grouping[letter].map((reg) => (
-                    <div key={reg.id} className="rounded-lg bg-white px-2.5 py-1.5 text-xs text-ink-700 shadow-sm">
-                      {teamLabel(reg)}
-                      {reg.club_name && <span className="text-ink-400"> · {reg.club_name}</span>}
-                    </div>
-                  ))}
+          <div ref={resultRef} className="rounded-2xl bg-white p-4">
+            <div className="mb-4 flex items-center justify-between gap-3 border-b border-ink-100 pb-3">
+              <div>
+                <div className="font-display text-base font-bold text-ink-900">{category.name}</div>
+                <div className="text-xs text-ink-500">
+                  {registrations.length} team{registrations.length === 1 ? '' : 's'} · {letters.length} bracket{letters.length === 1 ? '' : 's'} ·{' '}
+                  {new Date().toLocaleDateString()}
                 </div>
               </div>
-            ))}
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                <Trophy size={18} />
+              </span>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              {letters.map((letter, li) => (
+                <div
+                  key={letter}
+                  className={`animate-modal-in rounded-2xl border-2 p-3 ${BRACKET_COLORS[li % BRACKET_COLORS.length]}`}
+                  style={{ animationDelay: `${li * 80}ms`, animationFillMode: 'backwards' }}
+                >
+                  <div className="mb-2 flex items-center justify-between text-xs font-bold">
+                    <span className="flex items-center gap-1.5">
+                      <Crown size={13} /> Bracket {letter}
+                    </span>
+                    <span className="rounded-full bg-white/70 px-2 py-0.5">{grouping[letter].length} teams</span>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    {grouping[letter].map((reg, i) => (
+                      <div key={reg.id} className="flex items-center gap-2 rounded-lg bg-white px-2.5 py-1.5 text-xs text-ink-700 shadow-sm">
+                        <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-ink-100 text-[9px] font-bold text-ink-500">
+                          {i + 1}
+                        </span>
+                        <span className="truncate">
+                          {teamLabel(reg)}
+                          {reg.club_name && <span className="text-ink-400"> · {reg.club_name}</span>}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="flex justify-end gap-2.5">
+          <div className="flex flex-wrap justify-end gap-2.5">
             <button onClick={redraw} className="flex items-center gap-1.5 rounded-full px-4 py-2 text-sm font-semibold text-ink-600 transition hover:bg-ink-100">
               <Shuffle size={14} /> Redraw live
+            </button>
+            <button
+              onClick={downloadPng}
+              disabled={downloading}
+              className="flex items-center gap-1.5 rounded-full border border-ink-200 px-4 py-2 text-sm font-semibold text-ink-600 transition hover:bg-ink-100 disabled:opacity-60"
+            >
+              {downloading ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
+              {downloading ? 'Preparing…' : 'Download PNG'}
             </button>
             <button
               onClick={confirm}

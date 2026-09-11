@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { UserCog } from 'lucide-react';
 import Modal from '../ui/Modal';
 import FormField, { inputClass } from '../ui/FormField';
+import Select from '../ui/Select';
 
 function isDoublesFormat(matchType) {
   return /doubles/i.test(matchType || '');
@@ -55,13 +56,13 @@ export default function EditRegistrationModal({ registration, categories, onSave
     <Modal open onClose={onClose} title="Edit registration" icon={UserCog} maxWidth="max-w-lg">
       <div className="flex flex-col gap-4">
         <FormField label="Category">
-          <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className={inputClass}>
+          <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className={inputClass}>
             {categories.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name} ({c.match_type})
               </option>
             ))}
-          </select>
+          </Select>
           {selectedCategory?.id !== registration.category_id && (
             <p className="mt-1 text-[11px] font-semibold text-amber-700">Moving this pair to a different category.</p>
           )}

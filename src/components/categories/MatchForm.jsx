@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { ClipboardEdit, Play } from 'lucide-react';
 import { useTournamentDispatch, useTournamentState } from '../../context/TournamentContext';
 import { getAvailableCourtNumbers, getAvailableUmpires, getLiveTeamIds, hasMatchBetween } from '../../utils/stats';
+import Select from '../ui/Select';
 
 function Field({ label, children }) {
   return (
@@ -14,7 +15,7 @@ function Field({ label, children }) {
 
 function TeamSelect({ value, onChange, teams, history, excludeId, liveIds, placeholder }) {
   return (
-    <select
+    <Select
       value={value ?? ''}
       onChange={(e) => onChange(e.target.value === '' ? null : parseInt(e.target.value, 10))}
       className="w-full rounded-xl border border-ink-200 bg-white px-2.5 py-2 text-xs font-medium text-ink-700 shadow-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
@@ -34,7 +35,7 @@ function TeamSelect({ value, onChange, teams, history, excludeId, liveIds, place
           </option>
         );
       })}
-    </select>
+    </Select>
   );
 }
 
@@ -117,7 +118,7 @@ export default function MatchForm({ bracket, catIdx, bracketIdx }) {
         {mode === 'start' ? (
           <>
             <Field label="Court">
-              <select
+              <Select
                 value={court}
                 onChange={(e) => setCourt(e.target.value)}
                 disabled={availableCourts.length === 0}
@@ -131,10 +132,10 @@ export default function MatchForm({ bracket, catIdx, bracketIdx }) {
                     Court {c}
                   </option>
                 ))}
-              </select>
+              </Select>
             </Field>
             <Field label="Umpire">
-              <select
+              <Select
                 value={umpireId}
                 onChange={(e) => setUmpireId(e.target.value)}
                 disabled={availableUmpires.length === 0}
@@ -148,7 +149,7 @@ export default function MatchForm({ bracket, catIdx, bracketIdx }) {
                     {u.name}
                   </option>
                 ))}
-              </select>
+              </Select>
             </Field>
           </>
         ) : (

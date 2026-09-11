@@ -2,14 +2,16 @@ import { useState } from 'react';
 import { Play } from 'lucide-react';
 import Modal from '../ui/Modal';
 import FormField, { inputClass } from '../ui/FormField';
+import Select from '../ui/Select';
 import { useToast } from '../../context/ToastContext';
 import { teamLabel } from '../../utils/match';
+import { matchLevelLabel } from '../../data/playoffApi';
 
 // Court and umpire are required before a match can go live — keeps every
 // live match tied to a real court/official and never over the venue's
 // configured court count. Both lists already exclude anything in use by
 // another live match (courts already occupied, umpires already officiating).
-export default function StartMatchModal({ match, availableCourts, availableUmpires, onStart, onClose }) {
+export default function StartMatchModal({ match, categoryName, availableCourts, availableUmpires, onStart, onClose }) {
   const { pushToast } = useToast();
   const [court, setCourt] = useState('');
   const [umpireName, setUmpireName] = useState('');
@@ -39,11 +41,16 @@ export default function StartMatchModal({ match, availableCourts, availableUmpir
   return (
     <Modal open onClose={onClose} title={`Start match${match.match_code ? ` — ${match.match_code}` : ''}`} icon={Play} maxWidth="max-w-sm">
       <div className="flex flex-col gap-4">
-        <p className="text-sm text-ink-600">
-          <span className="font-semibold text-ink-800">{teamLabel(match.team_a)}</span>
-          <span className="mx-1.5 text-ink-300">vs</span>
-          <span className="font-semibold text-ink-800">{teamLabel(match.team_b)}</span>
-        </p>
+        <div>
+          <p className="text-xs font-bold uppercase tracking-wide text-brand-600">
+            {categoryName}: {matchLevelLabel(match)}
+          </p>
+          <p className="text-sm text-ink-600">
+            <span className="font-semibold text-ink-800">{teamLabel(match.team_a)}</span>
+            <span className="mx-1.5 text-ink-300">vs</span>
+            <span className="font-semibold text-ink-800">{teamLabel(match.team_b)}</span>
+          </p>
+        </div>
 
         {availableCourts.length === 0 ? (
           <p className="rounded-xl bg-rose-50 px-3 py-2.5 text-xs font-semibold text-rose-600">
@@ -56,7 +63,7 @@ export default function StartMatchModal({ match, availableCourts, availableUmpir
         ) : (
           <div className="grid grid-cols-2 gap-3">
             <FormField label="Court">
-              <select value={court} onChange={(e) => setCourt(e.target.value)} className={inputClass} autoFocus>
+              <Select value={court} onChange={(e) => setCourt(e.target.value)} className={inputClass} autoFocus>
                 <option value="" disabled>
                   Select court
                 </option>
@@ -65,10 +72,10 @@ export default function StartMatchModal({ match, availableCourts, availableUmpir
                     Court {c}
                   </option>
                 ))}
-              </select>
+              </Select>
             </FormField>
             <FormField label="Umpire">
-              <select value={umpireName} onChange={(e) => setUmpireName(e.target.value)} className={inputClass}>
+              <Select value={umpireName} onChange={(e) => setUmpireName(e.target.value)} className={inputClass}>
                 <option value="" disabled>
                   Select umpire
                 </option>
@@ -77,7 +84,7 @@ export default function StartMatchModal({ match, availableCourts, availableUmpir
                     {u.name}
                   </option>
                 ))}
-              </select>
+              </Select>
             </FormField>
           </div>
         )}

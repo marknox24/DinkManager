@@ -1,19 +1,23 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { Award, Gavel, LayoutGrid, ListOrdered, LogOut, Menu, MonitorPlay, Settings, Shuffle, Trophy, UserCog, Wallet, X } from 'lucide-react';
+import { Award, Gavel, LayoutGrid, ListOrdered, LogOut, Menu, MonitorPlay, QrCode, Settings, Shuffle, Trophy, UserCog, Users, Wallet, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
+import { useEventAccess } from '../../context/EventAccessContext';
+import { permissionForNavId } from '../../data/permissions';
 import Logo from '../ui/Logo';
 
 const NAV_ITEMS = [
   { id: 'overview', label: 'Overview', icon: LayoutGrid },
   { id: 'manage', label: 'Registrations', icon: UserCog },
+  { id: 'checkin', label: 'Check-in', icon: QrCode },
   { id: 'brackets', label: 'Brackets', icon: Shuffle },
   { id: 'matchlist', label: 'Match List', icon: ListOrdered },
   { id: 'preview', label: 'Preview Screen', icon: MonitorPlay },
   { id: 'sponsors', label: 'Sponsors', icon: Award },
   { id: 'accounting', label: 'Accounting', icon: Wallet },
   { id: 'umpires', label: 'Umpires', icon: Gavel },
+  { id: 'team', label: 'Team', icon: Users, ownerOnly: true },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 
@@ -38,9 +42,11 @@ export default function EventWorkspaceLayout({ eventName, children }) {
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
   const { pushToast } = useToast();
+  const { isOwner, can, firstAllowedNavId } = useEventAccess();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const activeId = NAV_ITEMS.find((item) => location.pathname.endsWith(`/${item.id}`))?.id || 'manage';
+  const visibleItems = NAV_ITEMS.filter((item) => (item.ownerOnly ? isOwner : can(permissionForNavId(item.id))));
+  const activeId = NAV_ITEMS.find((item) => location.pathname.endsWith(`/${item.id}`))?.id || firstAllowedNavId || 'manage';
 
   const goTo = (id) => {
     navigate(`/events/${eventId}/${id}`);
@@ -70,14 +76,16 @@ export default function EventWorkspaceLayout({ eventName, children }) {
 
       <div className="mb-5 rounded-xl bg-white/5 px-3 py-2.5">
         <div className="truncate text-xs font-semibold text-white">{eventName || 'Loading…'}</div>
-        <Link to={`/events/${eventId}/edit`} className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-semibold text-brand-400 hover:text-brand-300">
-          <Trophy size={10} /> Edit event details
-        </Link>
+        {can('edit_event') && (
+          <Link to={`/events/${eventId}/edit`} className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-semibold text-brand-400 hover:text-brand-300">
+            <Trophy size={10} /> Edit event details
+          </Link>
+        )}
       </div>
 
       <nav className="flex flex-col gap-1">
         <div className="mb-1 px-3 text-[10px] font-bold uppercase tracking-wide text-ink-500">Manage</div>
-        {NAV_ITEMS.map((item) => (
+        {visibleItems.map((item) => (
           <NavButton key={item.id} item={item} active={activeId === item.id} onClick={() => goTo(item.id)} />
         ))}
       </nav>

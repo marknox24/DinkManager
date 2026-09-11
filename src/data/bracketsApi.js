@@ -39,27 +39,30 @@ export async function getBracketAssignmentsForEvent(categoryIds) {
 }
 
 // Per-bracket team/match counts for a category, so the Brackets page can
-// show "how many matches remain" and estimate time-to-finish. Total matches
-// per bracket assumes round-robin (n*(n-1)/2) — the only scheduling model
-// this app actually implements (hasPlayed prevents any pair from replaying).
+// show "how many matches remain" and estimate time-to-finish. Pool brackets'
+// total assumes round-robin (n*(n-1)/2) — the only scheduling model this app
+// implements for pools (hasPlayed prevents any pair from replaying). A
+// knockout bracket's total isn't combinatorial — it's just however many
+// matches have actually been generated for it so far.
 export async function getBracketProgressForCategory(categoryId) {
-  const { data: brackets, error: bracketErr } = await supabase.from('brackets').select('id, letter').eq('category_id', categoryId);
+  const { data: brackets, error: bracketErr } = await supabase.from('brackets').select('id, letter, kind').eq('category_id', categoryId);
   if (bracketErr) throw bracketErr;
   if (brackets.length === 0) return [];
   const bracketIds = brackets.map((b) => b.id);
 
   const [{ data: teams, error: teamErr }, { data: matches, error: matchErr }] = await Promise.all([
     supabase.from('teams').select('id, bracket_id').in('bracket_id', bracketIds),
-    supabase.from('matches').select('id, bracket_id').eq('status', 'completed').in('bracket_id', bracketIds),
+    supabase.from('matches').select('id, bracket_id, status').in('bracket_id', bracketIds),
   ]);
   if (teamErr) throw teamErr;
   if (matchErr) throw matchErr;
 
   return brackets.map((b) => {
     const teamCount = teams.filter((t) => t.bracket_id === b.id).length;
-    const completedCount = matches.filter((m) => m.bracket_id === b.id).length;
-    const totalMatches = (teamCount * (teamCount - 1)) / 2;
-    return { bracket_id: b.id, letter: b.letter, teamCount, totalMatches, completedCount, remaining: totalMatches - completedCount };
+    const bracketMatches = matches.filter((m) => m.bracket_id === b.id);
+    const completedCount = bracketMatches.filter((m) => m.status === 'completed').length;
+    const totalMatches = b.kind === 'playoff' ? bracketMatches.length : (teamCount * (teamCount - 1)) / 2;
+    return { bracket_id: b.id, letter: b.letter, kind: b.kind, teamCount, totalMatches, completedCount, remaining: totalMatches - completedCount };
   });
 }
 
@@ -298,7 +301,10 @@ export async function generateRoundRobinMatchList(categoryId) {
   if (catErr) throw catErr;
   const isDouble = /double round robin/i.test(category.format || '');
 
-  const { data: brackets, error: bracketErr } = await supabase.from('brackets').select('id, letter').eq('category_id', categoryId).order('letter');
+  // Excludes the knockout bracket (if playoffs have already been generated
+  // for this category) — a round-robin regenerate must never sweep it into
+  // a pool schedule.
+  const { data: brackets, error: bracketErr } = await supabase.from('brackets').select('id, letter').eq('category_id', categoryId).eq('kind', 'pool').order('letter');
   if (bracketErr) throw bracketErr;
   if (brackets.length === 0) throw new Error('No brackets to generate a match list for.');
 

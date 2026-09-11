@@ -3,6 +3,7 @@ import { Pause, Play, Radio, Square, X } from 'lucide-react';
 import { useToast } from '../../context/ToastContext';
 import { liveElapsedSeconds, teamLabel } from '../../utils/match';
 import { formatElapsed } from '../../utils/format';
+import { matchLevelLabel } from '../../data/playoffApi';
 
 const scoreInputClass =
   'w-11 rounded-lg border border-ink-200 py-1 text-center text-xs font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100';
@@ -10,7 +11,7 @@ const scoreInputClass =
 // Shared live-match card — used on both the Brackets page and the Match List
 // page so pause/resume/cancel/finish behavior only lives in one place. Kept
 // compact so 3-4 fit per row without pushing the schedule far down the page.
-export default function LiveMatchCard({ match, now, categoryName, bracketLetter, onTogglePause, onCancel, onFinish }) {
+export default function LiveMatchCard({ match, now, categoryName, onTogglePause, onCancel, onFinish }) {
   const { pushToast } = useToast();
   const [isFinishing, setIsFinishing] = useState(false);
   const [scoreA, setScoreA] = useState('11');
@@ -58,8 +59,7 @@ export default function LiveMatchCard({ match, now, categoryName, bracketLetter,
 
       <div className="mt-1 flex items-center justify-between gap-1.5">
         <span className="truncate text-[10px] font-bold text-brand-700">
-          {categoryName}
-          {bracketLetter ? ` · ${bracketLetter}` : ''}
+          {categoryName}: {matchLevelLabel(match)}
         </span>
         <span
           className={`flex shrink-0 items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-extrabold tracking-wide ${

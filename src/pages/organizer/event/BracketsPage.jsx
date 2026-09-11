@@ -20,23 +20,16 @@ import {
 } from '../../../data/bracketsApi';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
+import { useEventAccess } from '../../../context/EventAccessContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import RandomizerModal from '../../../components/organizer/RandomizerModal';
 import LiveMatchCard from '../../../components/organizer/LiveMatchCard';
 import { inputClass } from '../../../components/ui/FormField';
+import Select from '../../../components/ui/Select';
 import { useNow } from '../../../hooks/useNow';
 import { formatDuration } from '../../../utils/format';
 import { liveElapsedSeconds, teamLabel } from '../../../utils/match';
-
-function rankTeams(teams) {
-  const enriched = teams.map((t) => ({ ...t, diff: t.points_for - t.points_against }));
-  enriched.sort((a, b) => {
-    if (a.wins !== b.wins) return b.wins - a.wins;
-    if (a.diff !== b.diff) return b.diff - a.diff;
-    return b.points_for - a.points_for;
-  });
-  return enriched.map((t, i) => ({ ...t, rank: i + 1 }));
-}
+import { rankTeams } from '../../../utils/standings';
 
 function hasPlayed(matches, teamAId, teamBId) {
   return matches.some((m) => (m.team_a_id === teamAId && m.team_b_id === teamBId) || (m.team_a_id === teamBId && m.team_b_id === teamAId));
@@ -50,6 +43,8 @@ export default function BracketsPage() {
   const { eventId } = useParams();
   const { pushToast } = useToast();
   const confirm = useConfirm();
+  const { can } = useEventAccess();
+  const canRedraw = can('redraw_brackets');
 
   const [event, setEvent] = useState(null);
   const [categories, setCategories] = useState([]);
@@ -105,7 +100,10 @@ export default function BracketsPage() {
     setLoadingBrackets(true);
     try {
       const [bkts, regs] = await Promise.all([listBracketsForCategory(activeCategory.id), listRegistrations(eventId)]);
-      setBrackets(bkts);
+      // The knockout ladder (if any) lives in its own 'playoff' bracket and
+      // is played out from Match List instead — see PlayoffStagesEditor /
+      // MatchListPage's Playoffs panel. Only pool brackets get a tab here.
+      setBrackets(bkts.filter((b) => b.kind !== 'playoff'));
       setRegistrations(regs.filter((r) => r.category_id === activeCategory.id && r.status === 'approved'));
       setActiveBracketIdx(0);
     } catch (e) {
@@ -126,7 +124,11 @@ export default function BracketsPage() {
     }
     try {
       const progress = await getBracketProgressForCategory(activeCategory.id);
-      setBracketProgress(progress);
+      // This page only ever shows pool-bracket tabs (see loadBrackets above)
+      // — exclude the playoff bracket here too, or its match counts silently
+      // bleed into this page's "Category progress" ETA with no tab to
+      // explain the stray "Bracket PO" chip that appears alongside it.
+      setBracketProgress(progress.filter((b) => b.kind !== 'playoff'));
     } catch (e) {
       pushToast(e.message, 'error');
     }
@@ -296,7 +298,7 @@ export default function BracketsPage() {
   const handleRedrawClick = async () => {
     const ok = await confirm({
       title: `Redraw ${activeCategory?.name}?`,
-      message: 'This category has already been drawn. Redrawing will erase the current brackets, teams and any recorded match results, then draw fresh brackets.',
+      message: 'This category has already been drawn. Redrawing will erase the current brackets, teams and any recorded match results — including any Quarterfinals/Semifinals/Championship matches already generated — then draw fresh brackets.',
       confirmLabel: 'Redraw',
     });
     if (!ok) return;
@@ -381,7 +383,6 @@ export default function BracketsPage() {
                   match={m}
                   now={now}
                   categoryName={m.category_name}
-                  bracketLetter={m.bracket_letter}
                   onTogglePause={handleTogglePause}
                   onCancel={handleCancelMatch}
                   onFinish={handleFinishMatch}
@@ -397,13 +398,15 @@ export default function BracketsPage() {
               <Shuffle size={22} className="mx-auto mb-2 text-ink-300" />
               <p className="text-sm font-semibold text-ink-700">No brackets drawn yet for {activeCategory?.name}</p>
               <p className="mt-1 text-xs text-ink-400">{registrations.length} approved {registrations.length === 1 ? 'team' : 'teams'} ready.</p>
-              <button
-                onClick={() => setRandomizerOpen(true)}
-                disabled={registrations.length === 0}
-                className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-brand-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-50"
-              >
-                <Shuffle size={14} /> Run the randomizer
-              </button>
+              {canRedraw && (
+                <button
+                  onClick={() => setRandomizerOpen(true)}
+                  disabled={registrations.length === 0}
+                  className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-brand-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-50"
+                >
+                  <Shuffle size={14} /> Run the randomizer
+                </button>
+              )}
             </div>
           ) : (
             <>
@@ -421,12 +424,14 @@ export default function BracketsPage() {
                     </button>
                   ))}
                 </div>
-                <button
-                  onClick={handleRedrawClick}
-                  className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-100"
-                >
-                  <Shuffle size={12} /> Redraw
-                </button>
+                {canRedraw && (
+                  <button
+                    onClick={handleRedrawClick}
+                    className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-100"
+                  >
+                    <Shuffle size={12} /> Redraw
+                  </button>
+                )}
               </div>
 
               {bracketProgress.length > 0 && (
@@ -515,7 +520,7 @@ export default function BracketsPage() {
                       <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
                         <div className="col-span-2">
                           <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Team A</label>
-                          <select value={teamAId} onChange={(e) => setTeamAId(e.target.value)} className={inputClass}>
+                          <Select value={teamAId} onChange={(e) => setTeamAId(e.target.value)} className={inputClass}>
                             <option value="" disabled>
                               Select team
                             </option>
@@ -529,11 +534,11 @@ export default function BracketsPage() {
                                 {isTeamLive(liveMatches, t.id) ? ' (playing)' : ''}
                               </option>
                             ))}
-                          </select>
+                          </Select>
                         </div>
                         <div className="col-span-2">
                           <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Team B</label>
-                          <select value={teamBId} onChange={(e) => setTeamBId(e.target.value)} className={inputClass}>
+                          <Select value={teamBId} onChange={(e) => setTeamBId(e.target.value)} className={inputClass}>
                             <option value="" disabled>
                               Select team
                             </option>
@@ -547,11 +552,11 @@ export default function BracketsPage() {
                                 {isTeamLive(liveMatches, t.id) ? ' (playing)' : ''}
                               </option>
                             ))}
-                          </select>
+                          </Select>
                         </div>
                         <div>
                           <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Court</label>
-                          <select value={court} onChange={(e) => setCourt(e.target.value)} className={inputClass}>
+                          <Select value={court} onChange={(e) => setCourt(e.target.value)} className={inputClass}>
                             <option value="" disabled>
                               {availableCourts.length === 0 ? 'No courts free' : 'Select court'}
                             </option>
@@ -560,11 +565,11 @@ export default function BracketsPage() {
                                 Court {c}
                               </option>
                             ))}
-                          </select>
+                          </Select>
                         </div>
                         <div>
                           <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Umpire</label>
-                          <select value={umpireName} onChange={(e) => setUmpireName(e.target.value)} className={inputClass}>
+                          <Select value={umpireName} onChange={(e) => setUmpireName(e.target.value)} className={inputClass}>
                             <option value="" disabled>
                               {availableUmpires.length === 0 ? 'No umpires available' : 'Select umpire'}
                             </option>
@@ -573,7 +578,7 @@ export default function BracketsPage() {
                                 {u.name}
                               </option>
                             ))}
-                          </select>
+                          </Select>
                         </div>
                       </div>
                       <button
@@ -596,7 +601,7 @@ export default function BracketsPage() {
                       <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
                         <div className="col-span-2">
                           <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Team A</label>
-                          <select value={teamAId} onChange={(e) => setTeamAId(e.target.value)} className={inputClass}>
+                          <Select value={teamAId} onChange={(e) => setTeamAId(e.target.value)} className={inputClass}>
                             <option value="" disabled>
                               Select team
                             </option>
@@ -605,11 +610,11 @@ export default function BracketsPage() {
                                 {teamLabel(t)}
                               </option>
                             ))}
-                          </select>
+                          </Select>
                         </div>
                         <div className="col-span-2">
                           <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Team B</label>
-                          <select value={teamBId} onChange={(e) => setTeamBId(e.target.value)} className={inputClass}>
+                          <Select value={teamBId} onChange={(e) => setTeamBId(e.target.value)} className={inputClass}>
                             <option value="" disabled>
                               Select team
                             </option>
@@ -618,7 +623,7 @@ export default function BracketsPage() {
                                 {teamLabel(t)}
                               </option>
                             ))}
-                          </select>
+                          </Select>
                         </div>
                         <div>
                           <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Score A</label>
@@ -634,14 +639,14 @@ export default function BracketsPage() {
                         </div>
                         <div>
                           <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Umpire</label>
-                          <select value={umpireName} onChange={(e) => setUmpireName(e.target.value)} className={inputClass}>
+                          <Select value={umpireName} onChange={(e) => setUmpireName(e.target.value)} className={inputClass}>
                             <option value="">None</option>
                             {umpires.map((u) => (
                               <option key={u.id} value={u.name}>
                                 {u.name}
                               </option>
                             ))}
-                          </select>
+                          </Select>
                         </div>
                       </div>
                       <button

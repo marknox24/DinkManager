@@ -30,7 +30,7 @@ const STATUS_STYLES = {
 
 // Event-day check-in badge — only shown once at least one slot has checked
 // in, so a normal not-yet-checked-in row doesn't get an extra pill next to
-// the approval status.
+// the approval status. Manual check-in itself now lives on its own tab.
 function checkinBadge(r) {
   const p1 = Boolean(r.player1_checked_in_at);
   const p2 = Boolean(r.player2_checked_in_at);
@@ -248,7 +248,12 @@ export default function RegistrationsPage() {
                                     </button>
                                   )}
                                   {r.status !== 'denied' && (
-                                    <button onClick={() => setStatus(r, 'denied')} title="Deny" className="flex h-7 w-7 items-center justify-center rounded-full bg-rose-50 text-rose-600 hover:bg-rose-100">
+                                    <button
+                                      onClick={() => setStatus(r, 'denied')}
+                                      disabled={Boolean(bracketAssignments[r.id])}
+                                      title={bracketAssignments[r.id] ? 'Already placed in a bracket — remove them from the bracket first' : 'Deny'}
+                                      className="flex h-7 w-7 items-center justify-center rounded-full bg-rose-50 text-rose-600 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-rose-50"
+                                    >
                                       <XCircle size={14} />
                                     </button>
                                   )}
@@ -260,7 +265,12 @@ export default function RegistrationsPage() {
                                   <button onClick={() => setEditingReg(r)} title="Edit" className="flex h-7 w-7 items-center justify-center rounded-full bg-sky-50 text-sky-600 hover:bg-sky-100">
                                     <Pencil size={13} />
                                   </button>
-                                  <button onClick={() => removeRegistration(r)} title="Remove" className="flex h-7 w-7 items-center justify-center rounded-full bg-ink-100 text-ink-500 hover:bg-ink-200">
+                                  <button
+                                    onClick={() => removeRegistration(r)}
+                                    disabled={Boolean(bracketAssignments[r.id])}
+                                    title={bracketAssignments[r.id] ? 'Already placed in a bracket — remove them from the bracket first' : 'Remove'}
+                                    className="flex h-7 w-7 items-center justify-center rounded-full bg-ink-100 text-ink-500 hover:bg-ink-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-ink-100"
+                                  >
                                     <Trash2 size={13} />
                                   </button>
                                 </div>

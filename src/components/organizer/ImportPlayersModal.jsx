@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Download, FileSpreadsheet } from 'lucide-react';
 import Modal from '../ui/Modal';
 import FormField, { inputClass } from '../ui/FormField';
+import Select from '../ui/Select';
 import { downloadPlayersTemplate, parsePlayersWorkbook } from '../../utils/excel';
 import { useToast } from '../../context/ToastContext';
 
@@ -47,13 +48,13 @@ export default function ImportPlayersModal({ categories, defaultCategoryId, onIm
         </button>
 
         <FormField label="Import into category">
-          <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className={inputClass}>
+          <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className={inputClass}>
             {categories.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name} ({c.match_type})
               </option>
             ))}
-          </select>
+          </Select>
         </FormField>
 
         <FormField label="Filled template" hint="Player 1 Name is required; Player 2, Club, Email and Phone are optional">

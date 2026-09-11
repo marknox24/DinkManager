@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Trash2 } from 'lucide-react';
 import { REGISTRATION_FIELD_TYPES } from '../../data/constants';
 import { inputClass } from '../ui/FormField';
+import Select from '../ui/Select';
 
 export default function RegistrationFieldEditor({ field, onSave, onDelete }) {
   const [local, setLocal] = useState(field);
@@ -21,13 +22,13 @@ export default function RegistrationFieldEditor({ field, onSave, onDelete }) {
         placeholder="Field label, e.g. Team Name"
         className={`${inputClass} flex-1 min-w-[160px]`}
       />
-      <select value={local.field_type} onChange={(e) => commit({ field_type: e.target.value })} className={`${inputClass} w-40`}>
+      <Select value={local.field_type} onChange={(e) => commit({ field_type: e.target.value })} className={`${inputClass} w-40`}>
         {REGISTRATION_FIELD_TYPES.map((t) => (
           <option key={t.value} value={t.value}>
             {t.label}
           </option>
         ))}
-      </select>
+      </Select>
       <label className="flex items-center gap-1.5 text-xs font-semibold text-ink-600">
         <input type="checkbox" checked={local.required} onChange={(e) => commit({ required: e.target.checked })} className="h-4 w-4 rounded border-ink-300" />
         Required

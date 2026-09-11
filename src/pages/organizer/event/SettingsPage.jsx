@@ -5,13 +5,16 @@ import { deleteEvent, getEventById, updateEvent } from '../../../data/eventsApi'
 import { CURRENCIES } from '../../../data/constants';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
+import { useEventAccess } from '../../../context/EventAccessContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
+import Select from '../../../components/ui/Select';
 
 export default function SettingsPage() {
   const { eventId } = useParams();
   const navigate = useNavigate();
   const { pushToast } = useToast();
   const confirm = useConfirm();
+  const { isOwner } = useEventAccess();
   const [event, setEvent] = useState(null);
   const [numCourts, setNumCourts] = useState('');
   const [duration, setDuration] = useState('');
@@ -126,42 +129,45 @@ export default function SettingsPage() {
                 <p className="text-xs text-ink-500">Used to display amounts on the Accounting and Sponsors pages for this event.</p>
               </div>
             </div>
-            <select
+            <Select
               value={event.currency || 'USD'}
               onChange={(e) => saveCurrency(e.target.value)}
               className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 sm:max-w-xs"
+              wrapperClassName="sm:max-w-xs"
             >
               {CURRENCIES.map((c) => (
                 <option key={c.code} value={c.code}>
                   {c.code} — {c.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
 
-          <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-5">
-            <div className="mb-3 flex items-center gap-2.5">
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-rose-100 text-rose-600">
-                <AlertTriangle size={17} strokeWidth={2.3} />
-              </span>
-              <div>
-                <h2 className="font-display text-base font-bold text-rose-900">Danger zone</h2>
-                <p className="text-xs text-rose-700/80">Irreversible actions — use with care.</p>
+          {isOwner && (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-5">
+              <div className="mb-3 flex items-center gap-2.5">
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-rose-100 text-rose-600">
+                  <AlertTriangle size={17} strokeWidth={2.3} />
+                </span>
+                <div>
+                  <h2 className="font-display text-base font-bold text-rose-900">Danger zone</h2>
+                  <p className="text-xs text-rose-700/80">Irreversible actions — use with care.</p>
+                </div>
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white px-4 py-3">
+                <div>
+                  <div className="text-sm font-semibold text-ink-800">Delete this event</div>
+                  <div className="text-xs text-ink-500">Removes the event, its categories, and every registration permanently.</div>
+                </div>
+                <button
+                  onClick={removeEvent}
+                  className="flex items-center gap-1.5 rounded-full bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-rose-700"
+                >
+                  <Trash2 size={13} /> Delete event
+                </button>
               </div>
             </div>
-            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white px-4 py-3">
-              <div>
-                <div className="text-sm font-semibold text-ink-800">Delete this event</div>
-                <div className="text-xs text-ink-500">Removes the event, its categories, and every registration permanently.</div>
-              </div>
-              <button
-                onClick={removeEvent}
-                className="flex items-center gap-1.5 rounded-full bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-rose-700"
-              >
-                <Trash2 size={13} /> Delete event
-              </button>
-            </div>
-          </div>
+          )}
         </div>
       )}
     </EventWorkspaceLayout>

@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { Activity, CheckCircle2, Gavel, LayoutGrid, Shuffle, Trophy, UserCog, Users } from 'lucide-react';
 import { getEventById, listCategories, listRegistrations } from '../../../data/eventsApi';
 import { useToast } from '../../../context/ToastContext';
+import { useEventAccess } from '../../../context/EventAccessContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import StatusBadge from '../../../components/organizer/StatusBadge';
 
@@ -41,19 +42,24 @@ export default function OverviewPage() {
   const { eventId } = useParams();
   const navigate = useNavigate();
   const { pushToast } = useToast();
+  const { can } = useEventAccess();
+  const canSeeRegistrations = can('registrations');
   const [event, setEvent] = useState(null);
   const [categories, setCategories] = useState([]);
   const [registrations, setRegistrations] = useState([]);
 
   useEffect(() => {
-    Promise.all([getEventById(eventId), listCategories(eventId), listRegistrations(eventId)])
+    // RLS would silently return 0 rows for a staffer without the
+    // Registrations toggle — skip the call entirely rather than rendering
+    // that as a misleading "0 players".
+    Promise.all([getEventById(eventId), listCategories(eventId), canSeeRegistrations ? listRegistrations(eventId) : Promise.resolve([])])
       .then(([ev, cats, regs]) => {
         setEvent(ev);
         setCategories(cats);
         setRegistrations(regs);
       })
       .catch((e) => pushToast(e.message, 'error'));
-  }, [eventId, pushToast]);
+  }, [eventId, pushToast, canSeeRegistrations]);
 
   const pendingCount = registrations.filter((r) => r.status === 'pending').length;
   const approvedCount = registrations.filter((r) => r.status === 'approved').length;
@@ -74,9 +80,9 @@ export default function OverviewPage() {
         <div className="flex flex-col gap-6">
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <StatTile icon={LayoutGrid} label="Categories" value={categories.length} accent="bg-brand-50 text-brand-600" />
-            <StatTile icon={Users} label="Total registrations" value={registrations.length} accent="bg-sky-50 text-sky-600" />
-            <StatTile icon={Activity} label="Pending review" value={pendingCount} accent="bg-amber-50 text-amber-600" />
-            <StatTile icon={CheckCircle2} label="Approved" value={approvedCount} accent="bg-violet-50 text-violet-600" />
+            <StatTile icon={Users} label="Total registrations" value={canSeeRegistrations ? registrations.length : '—'} accent="bg-sky-50 text-sky-600" />
+            <StatTile icon={Activity} label="Pending review" value={canSeeRegistrations ? pendingCount : '—'} accent="bg-amber-50 text-amber-600" />
+            <StatTile icon={CheckCircle2} label="Approved" value={canSeeRegistrations ? approvedCount : '—'} accent="bg-violet-50 text-violet-600" />
           </div>
 
           <div>

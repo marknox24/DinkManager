@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Gavel, Plus, Trash2 } from 'lucide-react';
-import { createUmpire, deleteUmpire, getEventById, listUmpires } from '../../../data/eventsApi';
+import { Check, Gavel, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { createUmpire, deleteUmpire, getEventById, listUmpires, updateUmpire } from '../../../data/eventsApi';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
@@ -13,6 +13,8 @@ export default function UmpiresPage() {
   const [event, setEvent] = useState(null);
   const [umpires, setUmpires] = useState([]);
   const [name, setName] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editingName, setEditingName] = useState('');
 
   useEffect(() => {
     Promise.all([getEventById(eventId), listUmpires(eventId)])
@@ -38,6 +40,40 @@ export default function UmpiresPage() {
       setUmpires((prev) => [...prev, u]);
       setName('');
       pushToast(`${trimmed} added as umpire`, 'success');
+    } catch (e) {
+      pushToast(e.message, 'error');
+    }
+  };
+
+  const startEdit = (u) => {
+    setEditingId(u.id);
+    setEditingName(u.name);
+  };
+
+  const cancelEdit = () => {
+    setEditingId(null);
+    setEditingName('');
+  };
+
+  const saveEdit = async (u) => {
+    const trimmed = editingName.trim();
+    if (!trimmed) {
+      pushToast('Enter an umpire name', 'error');
+      return;
+    }
+    if (trimmed === u.name) {
+      cancelEdit();
+      return;
+    }
+    if (umpires.some((x) => x.id !== u.id && x.name.toLowerCase() === trimmed.toLowerCase())) {
+      pushToast('That umpire is already on the list', 'error');
+      return;
+    }
+    try {
+      const updated = await updateUmpire(u.id, trimmed);
+      setUmpires((prev) => prev.map((x) => (x.id === u.id ? updated : x)));
+      cancelEdit();
+      pushToast('Umpire renamed', 'success');
     } catch (e) {
       pushToast(e.message, 'error');
     }
@@ -92,17 +128,48 @@ export default function UmpiresPage() {
 
           <div className="flex flex-col gap-2">
             {umpires.length === 0 && <div className="rounded-2xl bg-ink-50 py-10 text-center text-sm text-ink-400">No umpires added yet.</div>}
-            {umpires.map((u) => (
-              <div key={u.id} className="flex items-center justify-between rounded-2xl bg-ink-50 px-4 py-2.5">
-                <div className="text-sm font-semibold text-ink-800">{u.name}</div>
-                <button
-                  onClick={() => removeUmpire(u)}
-                  className="flex items-center gap-1 rounded-full bg-white px-3 py-1.5 text-[11px] font-bold text-rose-600 shadow-sm ring-1 ring-rose-100 transition hover:bg-rose-50"
-                >
-                  <Trash2 size={11} /> Remove
-                </button>
-              </div>
-            ))}
+            {umpires.map((u) =>
+              editingId === u.id ? (
+                <div key={u.id} className="flex items-center gap-2 rounded-2xl bg-ink-50 px-4 py-2">
+                  <input
+                    autoFocus
+                    value={editingName}
+                    onChange={(e) => setEditingName(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') saveEdit(u);
+                      if (e.key === 'Escape') cancelEdit();
+                    }}
+                    className="flex-1 rounded-lg border border-ink-200 px-3 py-1.5 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+                  />
+                  <button onClick={() => saveEdit(u)} title="Save" className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-50 text-brand-600 hover:bg-brand-100">
+                    <Check size={13} />
+                  </button>
+                  <button onClick={cancelEdit} title="Cancel" className="flex h-7 w-7 items-center justify-center rounded-full bg-white text-ink-400 shadow-sm hover:bg-ink-100">
+                    <X size={13} />
+                  </button>
+                </div>
+              ) : (
+                <div key={u.id} className="flex items-center justify-between rounded-2xl bg-ink-50 px-4 py-2.5">
+                  <div className="text-sm font-semibold text-ink-800">{u.name}</div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => startEdit(u)}
+                      title="Edit name"
+                      className="flex items-center gap-1 rounded-full bg-white px-3 py-1.5 text-[11px] font-bold text-ink-600 shadow-sm ring-1 ring-ink-200 transition hover:bg-ink-100"
+                    >
+                      <Pencil size={11} /> Edit
+                    </button>
+                    <button
+                      onClick={() => removeUmpire(u)}
+                      title="Remove"
+                      className="flex items-center gap-1 rounded-full bg-white px-3 py-1.5 text-[11px] font-bold text-rose-600 shadow-sm ring-1 ring-rose-100 transition hover:bg-rose-50"
+                    >
+                      <Trash2 size={11} /> Remove
+                    </button>
+                  </div>
+                </div>
+              )
+            )}
           </div>
           <p className="mt-4 text-center text-xs text-ink-400">Live officiating status will appear here once bracket play starts.</p>
         </div>

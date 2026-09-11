@@ -1,6 +1,7 @@
 import { Plus, Trash2 } from 'lucide-react';
 import { CONTACT_TYPES } from '../../data/constants';
 import { inputClass } from '../ui/FormField';
+import Select from '../ui/Select';
 
 export default function ContactsEditor({ contacts, onChange }) {
   const update = (idx, patch) => {
@@ -20,13 +21,13 @@ export default function ContactsEditor({ contacts, onChange }) {
       {contacts.map((c, idx) => (
         <div key={idx} className="rounded-xl border border-ink-200 p-3">
           <div className="mb-2 flex items-center gap-2">
-            <select value={c.type} onChange={(e) => update(idx, { type: e.target.value })} className={`${inputClass} w-36 py-2`}>
+            <Select value={c.type} onChange={(e) => update(idx, { type: e.target.value })} className={`${inputClass} w-36 py-2`}>
               {CONTACT_TYPES.map((t) => (
                 <option key={t} value={t}>
                   {t}
                 </option>
               ))}
-            </select>
+            </Select>
             <button
               onClick={() => remove(idx)}
               className="ml-auto flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-rose-500 transition hover:bg-rose-50"

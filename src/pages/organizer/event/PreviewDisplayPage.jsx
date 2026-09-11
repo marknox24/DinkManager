@@ -11,10 +11,11 @@ import {
 } from '../../../data/bracketsApi';
 import AutoCarousel from '../../../components/organizer/AutoCarousel';
 import SponsorMarquee from '../../../components/organizer/SponsorMarquee';
-import EventCheckinQr from '../../../components/organizer/EventCheckinQr';
 import { usePagedItems } from '../../../hooks/usePagedItems';
 import { formatDuration } from '../../../utils/format';
 import { teamLabel } from '../../../utils/match';
+import { rankTeams } from '../../../utils/standings';
+import { matchLevelLabel } from '../../../data/playoffApi';
 
 const REFRESH_MS = 6000;
 const SLIDE_MS = 7000;
@@ -24,16 +25,6 @@ const SLIDE_MS = 7000;
 // the venue can actually perform.
 const PAGE_SIZE = 4;
 const PAGE_MS = 10000;
-
-function rankTeams(teams) {
-  const enriched = teams.map((t) => ({ ...t, diff: t.points_for - t.points_against }));
-  enriched.sort((a, b) => {
-    if (a.wins !== b.wins) return b.wins - a.wins;
-    if (a.diff !== b.diff) return b.diff - a.diff;
-    return b.points_for - a.points_for;
-  });
-  return enriched.map((t, i) => ({ ...t, rank: i + 1 }));
-}
 
 export default function PreviewDisplayPage() {
   const { eventId, categoryId } = useParams();
@@ -80,10 +71,11 @@ export default function PreviewDisplayPage() {
     return () => clearInterval(id);
   }, [load]);
 
-  const bracketLetterById = useMemo(() => new Map(brackets.map((b) => [b.id, b.letter])), [brackets]);
-
   const standingsByBracket = useMemo(() => {
+    // The knockout bracket (if any) has no meaningful W/L ranking for a
+    // single-elimination match — only pool brackets get a standings card.
     return brackets
+      .filter((b) => b.kind !== 'playoff')
       .map((b) => ({ bracket: b, ranked: rankTeams(teams.filter((t) => t.bracket_id === b.id)) }))
       .sort((a, b) => a.bracket.letter.localeCompare(b.bracket.letter));
   }, [brackets, teams]);
@@ -126,8 +118,6 @@ export default function PreviewDisplayPage() {
     return <div className="flex h-dvh items-center justify-center bg-[#f0f1f4] text-sm font-medium text-ink-400">Loading preview…</div>;
   }
 
-  const checkinUrl = event?.slug ? `${window.location.origin}/e/${event.slug}/checkin` : null;
-
   return (
     <div className="flex h-dvh w-screen flex-col overflow-hidden bg-gradient-to-br from-[#f5f5f7] to-[#e7e8ec] p-3 sm:p-5 lg:p-6 print:hidden">
       {/* Pinned frame top: never scrolls, whatever the screen size — the
@@ -139,7 +129,6 @@ export default function PreviewDisplayPage() {
             <div className="font-display text-lg font-extrabold tracking-tight text-ink-900 sm:text-xl">{event?.name}</div>
             <div className="text-xs font-semibold text-ink-500 sm:text-sm">{category?.name}</div>
           </div>
-          {checkinUrl && <EventCheckinQr eventName={event.name} categoryName={category?.name} checkinUrl={checkinUrl} />}
           {progress.totalMatches > 0 && (
             <div className="text-right leading-tight">
               <div className="flex items-center justify-end gap-1.5 text-base font-extrabold text-ink-900 sm:text-lg">
@@ -177,10 +166,15 @@ export default function PreviewDisplayPage() {
                     {m && <Radio size={10} className="animate-pulse text-emerald-500" />}
                   </div>
                   {m ? (
-                    <div className="mt-1 text-[11px] font-bold leading-snug text-ink-900">
-                      <div className="truncate">{teamLabel(m.team_a)}</div>
-                      <div className="text-[9px] font-semibold uppercase tracking-wide text-emerald-500">vs</div>
-                      <div className="truncate">{teamLabel(m.team_b)}</div>
+                    <div className="mt-1">
+                      <div className="truncate text-[9px] font-bold uppercase tracking-wide text-emerald-600">
+                        {m.category_name}: {matchLevelLabel(m)}
+                      </div>
+                      <div className="mt-0.5 text-[11px] font-bold leading-snug text-ink-900">
+                        <div className="truncate">{teamLabel(m.team_a)}</div>
+                        <div className="text-[9px] font-semibold uppercase tracking-wide text-emerald-500">vs</div>
+                        <div className="truncate">{teamLabel(m.team_b)}</div>
+                      </div>
                     </div>
                   ) : (
                     <div className="mt-2 text-[11px] text-ink-300">No match</div>
@@ -273,7 +267,7 @@ export default function PreviewDisplayPage() {
               renderItem={(m) => (
                 <div className="flex flex-col items-center gap-1.5 py-1 text-center">
                   <span className="rounded-full bg-violet-50 px-2.5 py-1 text-[10px] font-bold text-violet-700">
-                    {m.match_code} · Bracket {bracketLetterById.get(m.bracket_id)}
+                    {category?.name}: {matchLevelLabel(m)}
                   </span>
                   <div className="text-sm font-bold leading-snug text-ink-900">{teamLabel(m.team_a)}</div>
                   <div className="text-[10px] font-black uppercase tracking-widest text-brand-400">vs</div>
@@ -297,6 +291,9 @@ export default function PreviewDisplayPage() {
                 const loser = winnerIsA ? m.team_b : m.team_a;
                 return (
                   <div className="flex flex-col items-center gap-1 py-1 text-center">
+                    <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[10px] font-bold text-amber-700">
+                      {category?.name}: {matchLevelLabel(m)}
+                    </span>
                     <Trophy size={18} className="text-amber-400" />
                     <div className="text-sm font-extrabold leading-snug text-ink-900">{teamLabel(winner)}</div>
                     <div className="text-[11px] text-ink-400">defeated {teamLabel(loser)}</div>

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Award, Download, Pencil, Plus, Sparkles, TrendingDown, TrendingUp, Trash2, Wallet } from 'lucide-react';
+import { Award, Download, FileText, Pencil, Plus, Sparkles, TrendingDown, TrendingUp, Trash2, Wallet } from 'lucide-react';
 import {
   createEarning,
   createExpense,
@@ -22,6 +22,7 @@ import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLa
 import ExpenseFormModal from '../../../components/organizer/ExpenseFormModal';
 import EarningFormModal from '../../../components/organizer/EarningFormModal';
 import ReceiptThumbnail from '../../../components/organizer/ReceiptThumbnail';
+import AccountingReportModal from '../../../components/organizer/AccountingReportModal';
 import Switch from '../../../components/ui/Switch';
 
 // Intl handles the symbol/placement for whatever ISO code the event's
@@ -67,6 +68,7 @@ export default function AccountingPage() {
   const [tab, setTab] = useState('expenses');
   const [expenseModal, setExpenseModal] = useState(null); // { expense } | 'new' | null
   const [earningModal, setEarningModal] = useState(null);
+  const [reportOpen, setReportOpen] = useState(false);
 
   const money = (n) => formatMoney(n, event?.currency);
 
@@ -184,13 +186,22 @@ export default function AccountingPage() {
           <h1 className="font-display text-2xl font-bold text-ink-900">Accounting</h1>
           <p className="text-sm text-ink-500">Track expenses and earnings, and export a report for this event.</p>
         </div>
-        <button
-          onClick={handleDownload}
-          disabled={loading}
-          className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-4 py-2 text-xs font-bold text-ink-600 shadow-sm transition hover:bg-ink-100 disabled:opacity-50"
-        >
-          <Download size={14} /> Download report
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setReportOpen(true)}
+            disabled={loading}
+            className="flex items-center gap-1.5 rounded-full bg-brand-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-50"
+          >
+            <FileText size={14} /> Financial report (PDF)
+          </button>
+          <button
+            onClick={handleDownload}
+            disabled={loading}
+            className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-4 py-2 text-xs font-bold text-ink-600 shadow-sm transition hover:bg-ink-100 disabled:opacity-50"
+          >
+            <Download size={14} /> Export Excel
+          </button>
+        </div>
       </div>
 
       {loading ? (
@@ -484,6 +495,19 @@ export default function AccountingPage() {
       )}
       {earningModal && (
         <EarningFormModal earning={earningModal === 'new' ? null : earningModal.earning} onSave={saveEarning} onClose={() => setEarningModal(null)} />
+      )}
+      {reportOpen && (
+        <AccountingReportModal
+          event={event}
+          expenses={expenses || []}
+          earnings={earnings || []}
+          registrationEarnings={registrationEarnings}
+          sponsors={sponsors}
+          includeSponsors={includeSponsors}
+          totals={{ earnings: totalEarnings, expenses: totalExpenses, net }}
+          money={money}
+          onClose={() => setReportOpen(false)}
+        />
       )}
     </EventWorkspaceLayout>
   );

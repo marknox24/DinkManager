@@ -84,6 +84,37 @@ export async function listMyEvents(organizerId) {
   return events.map((e) => ({ ...e, player_count: counts[e.id] || 0 }));
 }
 
+// Events this user is helping with as staff (not the owner). Deliberately
+// doesn't compute player_count the way listMyEvents does — a staffer
+// without the Registrations toggle would get 0 rows back from that query,
+// which would misleadingly render as "0 players" on the card.
+export async function listStaffedEvents(userId) {
+  const { data: staffRows, error: staffErr } = await supabase
+    .from('event_staff')
+    .select('*')
+    .eq('user_id', userId)
+    .order('invited_at', { ascending: false });
+  if (staffErr) throw staffErr;
+  if (staffRows.length === 0) return [];
+
+  const { data: events, error } = await supabase
+    .from('events')
+    .select('*')
+    .in(
+      'id',
+      staffRows.map((s) => s.event_id)
+    );
+  if (error) throw error;
+
+  const eventsById = {};
+  events.forEach((e) => {
+    eventsById[e.id] = e;
+  });
+  return staffRows
+    .filter((s) => eventsById[s.event_id])
+    .map((s) => ({ ...eventsById[s.event_id], staff: s }));
+}
+
 export async function getEventById(eventId) {
   const { data, error } = await supabase.from('events').select('*').eq('id', eventId).single();
   if (error) throw error;
@@ -261,6 +292,15 @@ export async function checkInPlayer(registrationId, slot) {
   return getCheckinRegistration(registrationId);
 }
 
+// Un-checks a single slot — used when a lone doubles check-in's 5-minute
+// partner wait times out, so the held spot is released instead of staying
+// checked in with no partner.
+export async function expireCheckin(registrationId, slot) {
+  const patch = slot === 'player2' ? { player2_checked_in_at: null } : { player1_checked_in_at: null };
+  const { error } = await supabase.from('registrations').update(patch).eq('id', registrationId);
+  if (error) throw error;
+}
+
 // ---------------------------------------------------------------------------
 // SPONSORS
 // ---------------------------------------------------------------------------
@@ -400,6 +440,12 @@ export async function createUmpire(eventId, name) {
   return data;
 }
 
+export async function updateUmpire(umpireId, name) {
+  const { data, error } = await supabase.from('umpires').update({ name }).eq('id', umpireId).select().single();
+  if (error) throw error;
+  return data;
+}
+
 export async function deleteUmpire(umpireId) {
   const { error } = await supabase.from('umpires').delete().eq('id', umpireId);
   if (error) throw error;
@@ -460,4 +506,45 @@ export function getEventMediaUrl(path) {
   if (!path) return null;
   const { data } = supabase.storage.from('event-media').getPublicUrl(path);
   return data.publicUrl;
+}
+
+// ---------------------------------------------------------------------------
+// ONBOARDING
+// ---------------------------------------------------------------------------
+// Derives "getting started" progress from real account data instead of a
+// separate tracked flag, so it always reflects what the organizer has
+// actually done and needs no manual bookkeeping to stay in sync.
+export async function getOnboardingProgress(organizerId) {
+  const { data: events, error } = await supabase.from('events').select('id, is_published').eq('organizer_id', organizerId);
+  if (error) throw error;
+
+  const hasEvent = events.length > 0;
+  const hasPublished = events.some((e) => e.is_published);
+  if (!hasEvent) {
+    return { hasEvent, hasCategory: false, hasPublished, hasApprovedRegistration: false, hasBracket: false };
+  }
+
+  const eventIds = events.map((e) => e.id);
+  const [{ data: categories, error: catErr }, { data: approvedRegs, error: regErr }] = await Promise.all([
+    supabase.from('categories').select('id').in('event_id', eventIds),
+    supabase.from('registrations').select('id').in('event_id', eventIds).eq('status', 'approved').limit(1),
+  ]);
+  if (catErr) throw catErr;
+  if (regErr) throw regErr;
+
+  const hasCategory = categories.length > 0;
+  const hasApprovedRegistration = approvedRegs.length > 0;
+
+  let hasBracket = false;
+  if (hasCategory) {
+    const { data: brackets, error: bracketErr } = await supabase
+      .from('brackets')
+      .select('id')
+      .in('category_id', categories.map((c) => c.id))
+      .limit(1);
+    if (bracketErr) throw bracketErr;
+    hasBracket = brackets.length > 0;
+  }
+
+  return { hasEvent, hasCategory, hasPublished, hasApprovedRegistration, hasBracket };
 }

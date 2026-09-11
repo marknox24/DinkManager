@@ -10,6 +10,7 @@ import {
   Copy,
   ExternalLink,
   FileText,
+  Gavel,
   ImagePlus,
   Contact as ContactIcon,
   ListChecks,
@@ -17,16 +18,22 @@ import {
   MapPin,
   Plus,
   QrCode,
+  Trash2,
   Trophy,
 } from 'lucide-react';
+import { useAuth } from '../../context/AuthContext';
+import HintsTour from '../../components/ui/HintsTour';
 import {
   createCategory,
   createRegistrationField,
+  createUmpire,
   deleteCategory,
   deleteRegistrationField,
+  deleteUmpire,
   getEventById,
   listCategories,
   listRegistrationFields,
+  listUmpires,
   updateCategory,
   updateEvent,
   updateRegistrationField,
@@ -40,6 +47,7 @@ import CategoryEditor from '../../components/organizer/CategoryEditor';
 import RegistrationFieldEditor from '../../components/organizer/RegistrationFieldEditor';
 import ContactsEditor from '../../components/organizer/ContactsEditor';
 import FormField, { inputClass, textareaClass } from '../../components/ui/FormField';
+import Select from '../../components/ui/Select';
 
 const STATUS_OPTIONS = ['upcoming', 'ongoing', 'finished', 'cancelled', 'rescheduled'];
 
@@ -50,6 +58,21 @@ const STEPS = [
   { id: 'categories', label: 'Categories', icon: Trophy },
   { id: 'logistics', label: 'Logistics', icon: QrCode },
   { id: 'registration', label: 'Registration', icon: ListChecks },
+];
+
+// Steps that must be filled in before the event can be published — drives
+// the amber dot on the step tab so it's visible at a glance from anywhere
+// in the wizard, not just when togglePublish blocks you.
+const STEP_REQUIREMENTS = {
+  categories: (categories) => categories.length === 0,
+  logistics: (_categories, umpires) => umpires.length === 0,
+};
+
+const TOUR_STEPS = [
+  { target: 'steps-nav', title: 'Set up in a few steps', body: 'Move through Basics, Contact, Description, Categories, Logistics and Registration to fully set up your event.' },
+  { target: 'step-categories', title: 'Add categories', body: 'Add at least one category — players pick one when they register. Required before you can publish.' },
+  { target: 'step-logistics', title: 'Add your umpires', body: "Under Logistics, add the officials running matches. Also required before you can publish." },
+  { target: 'publish-button', title: 'Publish when ready', body: 'Once categories and umpires are set up, publish to make your event live for players to find and register.' },
 ];
 
 function StepHeader({ title, subtitle }) {
@@ -66,20 +89,24 @@ export default function EventEditorPage() {
   const navigate = useNavigate();
   const { pushToast } = useToast();
   const confirm = useConfirm();
+  const { user } = useAuth();
 
   const [event, setEvent] = useState(null);
   const [categories, setCategories] = useState([]);
   const [fields, setFields] = useState([]);
+  const [umpires, setUmpires] = useState([]);
+  const [umpireName, setUmpireName] = useState('');
   const [saveStatus, setSaveStatus] = useState('saved');
   const [step, setStep] = useState(0);
   const [uploadingCover, setUploadingCover] = useState(false);
 
   useEffect(() => {
-    Promise.all([getEventById(eventId), listCategories(eventId), listRegistrationFields(eventId)])
-      .then(([ev, cats, flds]) => {
+    Promise.all([getEventById(eventId), listCategories(eventId), listRegistrationFields(eventId), listUmpires(eventId)])
+      .then(([ev, cats, flds, umps]) => {
         setEvent(ev);
         setCategories(cats);
         setFields(flds);
+        setUmpires(umps);
       })
       .catch((e) => {
         pushToast(e.message, 'error');
@@ -104,6 +131,11 @@ export default function EventEditorPage() {
       if (categories.length === 0) {
         pushToast('Add at least one category before publishing', 'error');
         setStep(3);
+        return;
+      }
+      if (umpires.length === 0) {
+        pushToast('Add at least one umpire before publishing', 'error');
+        setStep(4);
         return;
       }
     }
@@ -139,6 +171,11 @@ export default function EventEditorPage() {
         description: cat.description,
         image_path: cat.image_path,
         estimated_match_minutes: cat.estimated_match_minutes,
+        playoff_enabled: cat.playoff_enabled,
+        playoff_pool_count: cat.playoff_pool_count,
+        playoff_advance_per_pool: cat.playoff_advance_per_pool,
+        playoff_pool_pairs: cat.playoff_pool_pairs,
+        playoff_third_place: cat.playoff_third_place,
       });
       setCategories((prev) => prev.map((c) => (c.id === cat.id ? cat : c)));
     } catch (e) {
@@ -186,6 +223,33 @@ export default function EventEditorPage() {
     }
   };
 
+  const addUmpire = async () => {
+    const trimmed = umpireName.trim();
+    if (!trimmed) return;
+    if (umpires.some((u) => u.name.toLowerCase() === trimmed.toLowerCase())) {
+      pushToast('That umpire is already on the list', 'error');
+      return;
+    }
+    try {
+      const u = await createUmpire(eventId, trimmed);
+      setUmpires((prev) => [...prev, u]);
+      setUmpireName('');
+    } catch (e) {
+      pushToast(e.message, 'error');
+    }
+  };
+
+  const removeUmpire = async (u) => {
+    const ok = await confirm({ title: `Remove ${u.name}?`, confirmLabel: 'Remove', message: 'They will no longer appear as an available umpire for this event.' });
+    if (!ok) return;
+    try {
+      await deleteUmpire(u.id);
+      setUmpires((prev) => prev.filter((x) => x.id !== u.id));
+    } catch (e) {
+      pushToast(e.message, 'error');
+    }
+  };
+
   const handleCoverUpload = async (file) => {
     if (!file) return;
     setUploadingCover(true);
@@ -209,6 +273,8 @@ export default function EventEditorPage() {
       pushToast(err.message, 'error');
     }
   };
+
+  const removeQr = () => saveField({ payment_qr_path: null });
 
   const copyPublicLink = () => {
     const url = `${window.location.origin}/e/${event.slug}`;
@@ -256,6 +322,7 @@ export default function EventEditorPage() {
               Manage players
             </button>
             <button
+              data-tour="publish-button"
               onClick={togglePublish}
               className={`rounded-full px-5 py-2.5 text-sm font-bold text-white shadow-sm transition ${
                 event.is_published ? 'bg-ink-600 hover:bg-ink-700' : 'bg-brand-600 hover:bg-brand-700'
@@ -266,16 +333,18 @@ export default function EventEditorPage() {
           </div>
         </div>
 
-        <div className="mb-6 flex items-center gap-1 overflow-x-auto pb-1 sm:gap-1.5">
+        <div data-tour="steps-nav" className="mb-6 flex items-center gap-1 overflow-x-auto pb-1 sm:gap-1.5">
           {STEPS.map((s, i) => {
             const Icon = s.icon;
             const active = i === step;
             const done = i < step;
+            const missingRequired = STEP_REQUIREMENTS[s.id]?.(categories, umpires);
             return (
               <div key={s.id} className="flex items-center">
                 <button
+                  data-tour={s.id === 'categories' ? 'step-categories' : s.id === 'logistics' ? 'step-logistics' : undefined}
                   onClick={() => setStep(i)}
-                  className={`flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-bold transition sm:px-3 ${
+                  className={`relative flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1.5 text-xs font-bold transition sm:px-3 ${
                     active ? 'bg-ink-900 text-white shadow-sm' : done ? 'bg-brand-50 text-brand-700 hover:bg-brand-100' : 'text-ink-400 hover:bg-ink-100'
                   }`}
                 >
@@ -288,6 +357,9 @@ export default function EventEditorPage() {
                   </span>
                   <Icon size={13} className="hidden sm:block" />
                   <span className="hidden md:inline">{s.label}</span>
+                  {missingRequired && (
+                    <span title="Required before publishing" className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-amber-500 ring-2 ring-white" />
+                  )}
                 </button>
                 {i < STEPS.length - 1 && <span className="mx-0.5 h-px w-3 shrink-0 bg-ink-200 sm:w-5" />}
               </div>
@@ -304,13 +376,13 @@ export default function EventEditorPage() {
                   <input defaultValue={event.name} onBlur={(e) => saveField({ name: e.target.value })} className={inputClass} />
                 </FormField>
                 <FormField label="Status">
-                  <select value={event.status} onChange={(e) => saveField({ status: e.target.value })} className={inputClass}>
+                  <Select value={event.status} onChange={(e) => saveField({ status: e.target.value })} className={inputClass}>
                     {STATUS_OPTIONS.map((s) => (
                       <option key={s} value={s}>
                         {s[0].toUpperCase() + s.slice(1)}
                       </option>
                     ))}
-                  </select>
+                  </Select>
                 </FormField>
                 <FormField label="Location / address">
                   <input
@@ -446,35 +518,102 @@ export default function EventEditorPage() {
 
           {step === 4 && (
             <>
-              <StepHeader title="Logistics & media" />
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <FormField label="Available courts">
-                  <input
-                    type="number"
-                    min={0}
-                    defaultValue={event.num_courts ?? ''}
-                    onBlur={(e) => saveField({ num_courts: e.target.value === '' ? null : parseInt(e.target.value, 10) })}
-                    className={inputClass}
-                  />
-                </FormField>
-                <FormField label="Your club name" hint="Used later to keep players from the same club apart when brackets are drawn.">
-                  <input defaultValue={event.club_name || ''} onBlur={(e) => saveField({ club_name: e.target.value })} className={inputClass} />
-                </FormField>
-                <FormField label="Payment QR / instructions image" className="sm:col-span-2">
-                  <div className="flex items-center gap-4">
-                    {event.payment_qr_path ? (
-                      <img src={getEventMediaUrl(event.payment_qr_path)} alt="Payment QR" className="h-20 w-20 rounded-xl border border-ink-200 object-cover" />
+              <StepHeader title="Logistics & media" subtitle="Courts, officiating and payment info" />
+              <div className="flex flex-col gap-6">
+                <div>
+                  <div className="mb-3 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-ink-400">
+                    <MapPin size={12} /> Venue & courts
+                  </div>
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                    <FormField label="Available courts">
+                      <input
+                        type="number"
+                        min={0}
+                        defaultValue={event.num_courts ?? ''}
+                        onBlur={(e) => saveField({ num_courts: e.target.value === '' ? null : parseInt(e.target.value, 10) })}
+                        className={inputClass}
+                      />
+                    </FormField>
+                    <FormField label="Your club name" hint="Used later to keep players from the same club apart when brackets are drawn.">
+                      <input defaultValue={event.club_name || ''} onBlur={(e) => saveField({ club_name: e.target.value })} className={inputClass} />
+                    </FormField>
+                  </div>
+                </div>
+
+                <div className="border-t border-ink-100 pt-6">
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-ink-400">
+                      <Gavel size={12} /> Officiating
+                    </div>
+                    {umpires.length === 0 && <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">Required to publish</span>}
+                  </div>
+                  <FormField hint="Officials available to run matches — you can rename or remove them later from the Umpires tab.">
+                    <div className="mb-3 flex gap-2">
+                      <input
+                        value={umpireName}
+                        onChange={(e) => setUmpireName(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addUmpire())}
+                        placeholder="Umpire name"
+                        className={inputClass}
+                      />
+                      <button
+                        onClick={addUmpire}
+                        className="flex shrink-0 items-center gap-1.5 rounded-xl bg-brand-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-brand-700"
+                      >
+                        <Plus size={14} /> Add
+                      </button>
+                    </div>
+                    {umpires.length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {umpires.map((u) => (
+                          <span key={u.id} className="flex items-center gap-1.5 rounded-full bg-violet-50 py-1.5 pl-3 pr-1.5 text-xs font-semibold text-violet-700">
+                            <Gavel size={11} /> {u.name}
+                            <button onClick={() => removeUmpire(u)} title="Remove" className="flex h-4 w-4 items-center justify-center rounded-full text-violet-400 hover:bg-violet-100 hover:text-violet-700">
+                              <Trash2 size={10} />
+                            </button>
+                          </span>
+                        ))}
+                      </div>
                     ) : (
-                      <div className="flex h-20 w-20 items-center justify-center rounded-xl border border-dashed border-ink-300 text-ink-300">
-                        <QrCode size={22} />
+                      <div className="flex items-center gap-2 rounded-xl bg-amber-50 px-3.5 py-2.5 text-xs font-semibold text-amber-800">
+                        <Gavel size={14} /> Add at least one umpire before publishing.
                       </div>
                     )}
-                    <label className="cursor-pointer rounded-full border border-ink-200 px-4 py-2 text-xs font-bold text-ink-600 transition hover:bg-ink-100">
-                      Upload image
-                      <input type="file" accept="image/*" onChange={handleQrUpload} className="hidden" />
-                    </label>
+                  </FormField>
+                </div>
+
+                <div className="border-t border-ink-100 pt-6">
+                  <div className="mb-3 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-ink-400">
+                    <QrCode size={12} /> Payment
                   </div>
-                </FormField>
+                  <FormField label="Payment QR / instructions image" hint="Shown to players during registration so they know how to pay.">
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                      {event.payment_qr_path ? (
+                        <img
+                          src={getEventMediaUrl(event.payment_qr_path)}
+                          alt="Payment QR"
+                          className="h-32 w-32 shrink-0 rounded-xl border border-ink-200 object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-32 w-32 shrink-0 flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-ink-300 text-ink-300">
+                          <QrCode size={24} />
+                          <span className="text-[10px] font-semibold">No image yet</span>
+                        </div>
+                      )}
+                      <div className="flex flex-col gap-2">
+                        <label className="w-fit cursor-pointer rounded-full border border-ink-200 bg-white px-3.5 py-2 text-xs font-bold text-ink-600 transition hover:bg-ink-100">
+                          {event.payment_qr_path ? 'Replace image' : 'Upload image'}
+                          <input type="file" accept="image/*" onChange={handleQrUpload} className="hidden" />
+                        </label>
+                        {event.payment_qr_path && (
+                          <button onClick={removeQr} className="w-fit text-xs font-semibold text-rose-600 transition hover:text-rose-700">
+                            Remove image
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  </FormField>
+                </div>
               </div>
             </>
           )}
@@ -525,6 +664,8 @@ export default function EventEditorPage() {
           </div>
         </div>
       </div>
+
+      {user && <HintsTour steps={TOUR_STEPS} storageKey={`dm_event_editor_tour_seen_${user.id}`} />}
     </OrganizerLayout>
   );
 }

@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { CheckCircle2, Loader2, Search, Users } from 'lucide-react';
-import { checkInPlayer, getCheckinRegistration, getPublicEventBySlug, listCategories, listCheckinRoster } from '../../data/eventsApi';
+import { checkInPlayer, expireCheckin, getCheckinRegistration, getPublicEventBySlug, listCategories, listCheckinRoster } from '../../data/eventsApi';
 import Logo from '../../components/ui/Logo';
 
 const POLL_MS = 4000;
+// In doubles, a lone check-in only holds the team's spot for 5 minutes. If
+// the partner hasn't also checked in by then, the first player's check-in
+// expires and they're sent back to step 1 to try again — otherwise one
+// player could check in and hold the slot indefinitely with no partner.
+const PARTNER_WAIT_MS = 5 * 60 * 1000;
 const storageKey = (eventId) => `dm_checkin_${eventId}`;
 
 function loadSaved(eventId) {
@@ -80,6 +85,7 @@ export default function CheckInPage() {
   const [activeSlot, setActiveSlot] = useState(null);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [expiredNotice, setExpiredNotice] = useState(false);
   const pollRef = useRef(null);
 
   const redirectToPreview = useCallback(
@@ -148,11 +154,61 @@ export default function CheckInPage() {
     return () => clearInterval(pollRef.current);
   }, [phase, activeReg, redirectToPreview]);
 
+  // Doubles only: once one player checks in, their spot only holds for 5
+  // minutes while the partner hasn't checked in too. Depending on the
+  // booleans/id rather than the whole activeReg object keeps this from
+  // restarting every 4s poll tick (activeReg is a fresh object each poll
+  // even when nothing relevant changed) — it should only reset when the
+  // team actually completes or a different registration takes over.
+  const activeRegId = activeReg?.id ?? null;
+  const partnerName = activeReg ? (activeSlot === 'player2' ? activeReg.player_name : activeReg.player2_name) : null;
+  const partnerDone = activeReg
+    ? Boolean(activeSlot === 'player2' ? activeReg.player1_checked_in_at : activeReg.player2_checked_in_at)
+    : false;
+  // The current player's OWN check-in timestamp — the hold started then, on
+  // the server, not whenever this effect happens to (re)mount. Without this,
+  // reopening the check-in link (resumed from localStorage, see the effect
+  // above) restarts a full fresh 5-minute timer every time, letting a lone
+  // check-in hold a spot indefinitely just by revisiting the page.
+  const myCheckedInAt = activeReg ? (activeSlot === 'player2' ? activeReg.player2_checked_in_at : activeReg.player1_checked_in_at) : null;
+
+  useEffect(() => {
+    if (phase !== 'waiting' || !activeRegId || !partnerName || partnerDone || !myCheckedInAt) return undefined;
+    const remainingMs = PARTNER_WAIT_MS - (Date.now() - new Date(myCheckedInAt).getTime());
+
+    const expire = async () => {
+      try {
+        await expireCheckin(activeRegId, activeSlot);
+      } catch {
+        // Even if the un-check write fails, still reset the local UI below
+        // so they're not stuck staring at a stale waiting screen.
+      }
+      clearSaved(event.id);
+      setActiveReg(null);
+      setActiveSlot(null);
+      setCategoryId('');
+      setRoster([]);
+      setQuery('');
+      setSelectedEntry(null);
+      setErrorMsg('');
+      setExpiredNotice(true);
+      setPhase('category');
+    };
+
+    if (remainingMs <= 0) {
+      expire();
+      return undefined;
+    }
+    const timeout = setTimeout(expire, remainingMs);
+    return () => clearTimeout(timeout);
+  }, [phase, activeRegId, activeSlot, partnerName, partnerDone, myCheckedInAt, event]);
+
   const selectCategory = async (cat) => {
     setCategoryId(cat.id);
     setQuery('');
     setSelectedEntry(null);
     setErrorMsg('');
+    setExpiredNotice(false);
     try {
       const data = await listCheckinRoster(event.id, cat.id);
       setRoster(data);
@@ -213,8 +269,6 @@ export default function CheckInPage() {
   }
 
   const myName = activeSlot === 'player2' ? activeReg?.player2_name : activeReg?.player_name;
-  const partnerName = activeSlot === 'player2' ? activeReg?.player_name : activeReg?.player2_name;
-  const partnerDone = activeSlot === 'player2' ? Boolean(activeReg?.player1_checked_in_at) : Boolean(activeReg?.player2_checked_in_at);
 
   return (
     <div className="flex min-h-screen flex-col items-center bg-[#f3f6f8] px-4 py-8">
@@ -232,6 +286,11 @@ export default function CheckInPage() {
 
         {phase === 'category' && (
           <div className="rounded-3xl border border-ink-100 bg-white p-5 shadow-sm">
+            {expiredNotice && (
+              <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-xs font-semibold text-amber-700">
+                Your check-in expired because your partner hadn't checked in within 5 minutes. Please check in again.
+              </div>
+            )}
             <h2 className="mb-1 font-display text-lg font-bold text-ink-900">Which category?</h2>
             <p className="mb-4 text-xs text-ink-500">Pick the tournament category you're playing in today.</p>
             {categories.length === 0 ? (
