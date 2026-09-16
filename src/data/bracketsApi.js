@@ -261,9 +261,30 @@ export async function deleteMatch(matchId) {
 // MATCH LIST  (auto-generated schedules)
 // ---------------------------------------------------------------------------
 
+// "A9" < "A10" as plain strings sort the wrong way round ('1' < '9') — once
+// a bracket accumulates 10+ matches (5+ teams), a plain localeCompare on
+// match_code silently reorders the tail of the schedule. Splits off the
+// trailing digits and compares those numerically instead, falling back to a
+// plain string compare for anything without a numeric suffix.
+function compareMatchCode(codeA, codeB) {
+  const a = codeA || '';
+  const b = codeB || '';
+  const numA = a.match(/\d+$/)?.[0];
+  const numB = b.match(/\d+$/)?.[0];
+  if (numA && numB) {
+    const prefixCompare = a.slice(0, a.length - numA.length).localeCompare(b.slice(0, b.length - numB.length));
+    return prefixCompare || Number(numA) - Number(numB);
+  }
+  return a.localeCompare(b);
+}
+
 // Every match across every bracket in a category, any status, with team
 // names embedded and a bracket_letter for grouping — sorted to reconstruct
-// the exact round-by-round, cross-bracket-interleaved generation order.
+// the exact round-by-round, cross-bracket-interleaved generation order. This
+// is the single source of truth for "match list order" — the Match List
+// page and the Round Robin printable score sheets both read this same
+// function/order rather than each doing their own sort, so they can never
+// drift apart.
 export async function listMatchesForCategory(categoryId) {
   const { data: brackets, error: bracketErr } = await supabase.from('brackets').select('id, letter').eq('category_id', categoryId).order('letter');
   if (bracketErr) throw bracketErr;
@@ -287,7 +308,7 @@ export async function listMatchesForCategory(categoryId) {
       (a, b) =>
         (a.round_number || 0) - (b.round_number || 0) ||
         a.bracket_letter.localeCompare(b.bracket_letter) ||
-        (a.match_code || '').localeCompare(b.match_code || '')
+        compareMatchCode(a.match_code, b.match_code)
     );
 }
 

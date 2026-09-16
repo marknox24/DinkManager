@@ -11,21 +11,30 @@ function bracketLetter(index) {
   return String.fromCharCode(65 + index); // A, B, C, ...
 }
 
-// Distributes registrations across `numBrackets` brackets, spreading players
-// from the same club across different brackets as much as possible.
+// Distributes registrations across `numBrackets` brackets. By default,
+// spreads players from the same club across different brackets as much as
+// possible; pass { allowSameClub: true } to ignore club_name entirely and
+// deal a plain shuffle instead (organizer opted into allowing clubmates to
+// land in the same bracket).
 // Returns { A: [reg, ...], B: [reg, ...], ... }.
-export function drawBrackets(registrations, numBrackets) {
+export function drawBrackets(registrations, numBrackets, { allowSameClub = false } = {}) {
   const n = Math.max(1, Math.min(numBrackets, registrations.length || 1));
 
-  const byClub = new Map();
-  registrations.forEach((reg) => {
-    const key = (reg.club_name || '').trim().toLowerCase() || `__solo_${reg.id}`;
-    if (!byClub.has(key)) byClub.set(key, []);
-    byClub.get(key).push(reg);
-  });
-
-  // Shuffle within each club group, then shuffle the order clubs are dealt in.
-  const clubGroups = shuffle(Array.from(byClub.values()).map((group) => shuffle(group)));
+  let clubGroups;
+  if (allowSameClub) {
+    // No club grouping at all — every registration is its own "group" of
+    // one, so dealing them round-robin below is just a plain shuffle.
+    clubGroups = shuffle(registrations).map((reg) => [reg]);
+  } else {
+    const byClub = new Map();
+    registrations.forEach((reg) => {
+      const key = (reg.club_name || '').trim().toLowerCase() || `__solo_${reg.id}`;
+      if (!byClub.has(key)) byClub.set(key, []);
+      byClub.get(key).push(reg);
+    });
+    // Shuffle within each club group, then shuffle the order clubs are dealt in.
+    clubGroups = shuffle(Array.from(byClub.values()).map((group) => shuffle(group)));
+  }
 
   const buckets = Array.from({ length: n }, () => []);
   let cursor = 0;

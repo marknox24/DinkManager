@@ -41,3 +41,13 @@ export async function removeEventStaff(staffId) {
   const { error } = await supabase.from('event_staff').delete().eq('id', staffId);
   if (error) throw error;
 }
+
+// Reverts a staffer to permanent (non-expiring) access without re-inviting
+// or touching their permissions/password. A direct client call — no edge
+// function needed, since the organizer already has UPDATE rights here via
+// the event_staff_owner_all RLS policy.
+export async function clearStaffExpiry(staffId) {
+  const { data, error } = await supabase.from('event_staff').update({ access_expires_at: null }).eq('id', staffId).select().single();
+  if (error) throw error;
+  return data;
+}

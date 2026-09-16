@@ -6,7 +6,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import AuthSplitLayout from '../../components/auth/AuthSplitLayout';
 import RoleToggle from '../../components/auth/RoleToggle';
-import SocialLoginButtons from '../../components/auth/SocialLoginButtons';
+import SocialLoginButtons, { SOCIAL_LOGIN_ENABLED } from '../../components/auth/SocialLoginButtons';
 
 export default function PlayerSignupPage() {
   const { signUp } = useAuth();
@@ -88,12 +88,16 @@ export default function PlayerSignupPage() {
         </button>
       </form>
 
-      <div className="my-5 flex items-center gap-3">
-        <div className="h-px flex-1 bg-ink-100" />
-        <span className="text-xs font-semibold text-ink-400">Or continue with</span>
-        <div className="h-px flex-1 bg-ink-100" />
-      </div>
-      <SocialLoginButtons role="player" />
+      {SOCIAL_LOGIN_ENABLED && (
+        <>
+          <div className="my-5 flex items-center gap-3">
+            <div className="h-px flex-1 bg-ink-100" />
+            <span className="text-xs font-semibold text-ink-400">Or continue with</span>
+            <div className="h-px flex-1 bg-ink-100" />
+          </div>
+          <SocialLoginButtons role="player" />
+        </>
+      )}
 
       <p className="mt-5 text-center text-sm text-ink-500">
         Already have an account?{' '}

@@ -14,7 +14,6 @@ import {
   ImagePlus,
   Contact as ContactIcon,
   ListChecks,
-  Loader2,
   MapPin,
   Plus,
   QrCode,
@@ -48,6 +47,12 @@ import RegistrationFieldEditor from '../../components/organizer/RegistrationFiel
 import ContactsEditor from '../../components/organizer/ContactsEditor';
 import FormField, { inputClass, textareaClass } from '../../components/ui/FormField';
 import Select from '../../components/ui/Select';
+import ImageDropzone from '../../components/ui/ImageDropzone';
+import AccordionItem from '../../components/ui/Accordion';
+import FaqEditor from '../../components/organizer/FaqEditor';
+import { parseFaqItems, serializeFaqItems } from '../../utils/faq';
+import { COURT_TYPES } from '../../data/constants';
+import { PLAN_ORDER, PLAN_LIMITS, planLimit } from '../../data/plans';
 
 const STATUS_OPTIONS = ['upcoming', 'ongoing', 'finished', 'cancelled', 'rescheduled'];
 
@@ -93,12 +98,17 @@ export default function EventEditorPage() {
 
   const [event, setEvent] = useState(null);
   const [categories, setCategories] = useState([]);
+  // Only the category just added via "Add category" opens expanded by
+  // default — every other category card starts collapsed, since with many
+  // categories a fully-expanded list turns into a long, hard-to-scan scroll.
+  const [newCategoryId, setNewCategoryId] = useState(null);
   const [fields, setFields] = useState([]);
   const [umpires, setUmpires] = useState([]);
   const [umpireName, setUmpireName] = useState('');
   const [saveStatus, setSaveStatus] = useState('saved');
   const [step, setStep] = useState(0);
   const [uploadingCover, setUploadingCover] = useState(false);
+  const [uploadingQr, setUploadingQr] = useState(false);
 
   useEffect(() => {
     Promise.all([getEventById(eventId), listCategories(eventId), listRegistrationFields(eventId), listUmpires(eventId)])
@@ -144,6 +154,14 @@ export default function EventEditorPage() {
   };
 
   const addCategory = async () => {
+    const limit = planLimit(event.plan, 'categories');
+    if (limit != null && categories.length >= limit) {
+      pushToast(
+        `Your ${PLAN_LIMITS[event.plan].label} plan allows up to ${limit} categor${limit === 1 ? 'y' : 'ies'} per event — raise this event's plan to add more.`,
+        'error'
+      );
+      return;
+    }
     try {
       const cat = await createCategory(
         eventId,
@@ -151,6 +169,7 @@ export default function EventEditorPage() {
         categories.length
       );
       setCategories((prev) => [...prev, cat]);
+      setNewCategoryId(cat.id);
     } catch (e) {
       pushToast(e.message, 'error');
     }
@@ -263,14 +282,16 @@ export default function EventEditorPage() {
     }
   };
 
-  const handleQrUpload = async (e) => {
-    const file = e.target.files?.[0];
+  const handleQrUpload = async (file) => {
     if (!file) return;
+    setUploadingQr(true);
     try {
       const { path } = await uploadEventMedia(eventId, file);
       await saveField({ payment_qr_path: path });
     } catch (err) {
       pushToast(err.message, 'error');
+    } finally {
+      setUploadingQr(false);
     }
   };
 
@@ -301,7 +322,7 @@ export default function EventEditorPage() {
                 {saveStatus === 'saving' ? <CloudUpload size={12} className="animate-pulse-soft" /> : <Cloud size={12} />}
                 {saveStatus === 'saving' ? 'Saving…' : saveStatus === 'error' ? 'Save failed' : 'Saved'}
               </span>
-              {event.is_published && (
+              {event.is_published && event.visibility !== 'private' && (
                 <>
                   <span>&middot;</span>
                   <button onClick={copyPublicLink} className="flex items-center gap-1 font-semibold text-brand-600">
@@ -310,6 +331,12 @@ export default function EventEditorPage() {
                   <a href={`/e/${event.slug}`} target="_blank" rel="noreferrer" className="flex items-center gap-1 font-semibold text-brand-600">
                     <ExternalLink size={11} /> View
                   </a>
+                </>
+              )}
+              {event.is_published && event.visibility === 'private' && (
+                <>
+                  <span>&middot;</span>
+                  <span className="flex items-center gap-1 font-semibold text-ink-400">Private — manage the share link in Settings</span>
                 </>
               )}
             </div>
@@ -384,6 +411,16 @@ export default function EventEditorPage() {
                     ))}
                   </Select>
                 </FormField>
+                <FormField label="Plan" hint="Caps this event's categories, players per category, and courts.">
+                  <Select value={event.plan || 'free'} onChange={(e) => saveField({ plan: e.target.value })} className={inputClass}>
+                    {PLAN_ORDER.map((p) => (
+                      <option key={p} value={p}>
+                        {PLAN_LIMITS[p].label} — up to {PLAN_LIMITS[p].categories ?? 'unlimited'} categories, {PLAN_LIMITS[p].playersPerCategory}{' '}
+                        players/cat, {PLAN_LIMITS[p].courts} courts
+                      </option>
+                    ))}
+                  </Select>
+                </FormField>
                 <FormField label="Location / address">
                   <input
                     defaultValue={event.location_address || ''}
@@ -397,6 +434,22 @@ export default function EventEditorPage() {
                 </FormField>
                 <FormField label="End date">
                   <input type="date" value={event.end_date || ''} onChange={(e) => saveField({ end_date: e.target.value })} className={inputClass} />
+                </FormField>
+                <FormField label="Registration opens" hint="Optional — shown to players on the public page.">
+                  <input
+                    type="date"
+                    value={event.registration_open_date || ''}
+                    onChange={(e) => saveField({ registration_open_date: e.target.value || null })}
+                    className={inputClass}
+                  />
+                </FormField>
+                <FormField label="Registration closes" hint="Optional — shown to players on the public page.">
+                  <input
+                    type="date"
+                    value={event.registration_close_date || ''}
+                    onChange={(e) => saveField({ registration_close_date: e.target.value || null })}
+                    className={inputClass}
+                  />
                 </FormField>
               </div>
             </>
@@ -418,78 +471,127 @@ export default function EventEditorPage() {
 
           {step === 2 && (
             <>
-              <StepHeader title="Description & rules" />
+              <StepHeader title="Description, rules & policies" subtitle="General tournament information shown to every player" />
               <div className="flex flex-col gap-4">
                 <FormField label="Cover photo" hint="Shown at the top of your public page and as a preview on your dashboard.">
-                  <div className="flex flex-col gap-2.5 sm:flex-row sm:items-center">
-                    {event.cover_photo_path ? (
-                      <img
-                        src={getEventMediaUrl(event.cover_photo_path)}
-                        alt="Event cover"
-                        className="h-32 w-full rounded-xl border border-ink-200 object-cover sm:w-56"
-                      />
-                    ) : (
-                      <div className="flex h-32 w-full items-center justify-center rounded-xl border border-dashed border-ink-300 text-ink-300 sm:w-56">
-                        <ImagePlus size={24} />
-                      </div>
-                    )}
-                    <label className="w-fit cursor-pointer self-start rounded-full border border-ink-200 bg-white px-3.5 py-2 text-xs font-bold text-ink-600 transition hover:bg-ink-100">
-                      {uploadingCover ? (
-                        <Loader2 size={13} className="inline animate-spin" />
-                      ) : event.cover_photo_path ? (
-                        'Replace photo'
-                      ) : (
-                        'Upload photo'
-                      )}
-                      <input
-                        type="file"
-                        accept="image/*"
-                        onChange={(e) => handleCoverUpload(e.target.files?.[0])}
-                        className="hidden"
-                      />
-                    </label>
-                  </div>
-                </FormField>
-                <FormField label="Tournament description">
-                  <textarea
-                    defaultValue={event.description || ''}
-                    onBlur={(e) => saveField({ description: e.target.value })}
-                    placeholder="Welcome players to a weekend of competitive pickleball! Describe the vibe, skill levels welcome, and what makes this tournament worth signing up for."
-                    className={textareaClass}
+                  <ImageDropzone
+                    imagePath={event.cover_photo_path}
+                    getUrl={getEventMediaUrl}
+                    onUpload={handleCoverUpload}
+                    uploading={uploadingCover}
+                    className="h-32 w-full sm:w-56"
+                    emptyIcon={ImagePlus}
+                    emptyLabel="Upload photo"
                   />
                 </FormField>
-                <FormField label="Rules & regulations">
-                  <textarea
-                    defaultValue={event.rules || ''}
-                    onBlur={(e) => saveField({ rules: e.target.value })}
-                    placeholder={'1. Matches are best-of-3 games to 11, win by 2.\n2. Players must check in 15 minutes before their scheduled match.\n3. USAPA/official paddle and ball specs apply.\n4. No-shows after a 10-minute grace period forfeit the match.'}
-                    className={textareaClass}
-                  />
-                </FormField>
-                <FormField label="Venue-specific guidelines">
-                  <textarea
-                    defaultValue={event.venue_guidelines || ''}
-                    onBlur={(e) => saveField({ venue_guidelines: e.target.value })}
-                    placeholder="Parking is available on-site. Indoor court shoes only (no marking soles). Spectators must stay behind the fence line. Food and drinks allowed in the lobby only."
-                    className={textareaClass}
-                  />
-                </FormField>
-                <FormField label="Schedule of play">
-                  <textarea
-                    defaultValue={event.schedule || ''}
-                    onBlur={(e) => saveField({ schedule: e.target.value })}
-                    placeholder={'7:00 AM - Check-in opens\n8:00 AM - Opening remarks\n8:30 AM - Pool play begins\n1:00 PM - Lunch break\n2:00 PM - Bracket play\n5:00 PM - Awards ceremony'}
-                    className={textareaClass}
-                  />
-                </FormField>
-                <FormField label="FAQ" hint="Optional">
-                  <textarea
-                    defaultValue={event.faq || ''}
-                    onBlur={(e) => saveField({ faq: e.target.value })}
-                    placeholder={'Q: Can I register on the day of the event?\nA: Walk-in registrations are subject to availability.\n\nQ: Is there a refund policy?\nA: Full refunds up to 7 days before the event.'}
-                    className={textareaClass}
-                  />
-                </FormField>
+                <div className="flex flex-col gap-2.5">
+                  <AccordionItem
+                    title="Tournament description"
+                    subtitle="Overview, purpose, divisions, dates, and the player experience."
+                    defaultOpen
+                    filled={!!event.description}
+                  >
+                    <textarea
+                      defaultValue={event.description || ''}
+                      onBlur={(e) => saveField({ description: e.target.value })}
+                      placeholder="Welcome players to a weekend of competitive pickleball! Describe the vibe, skill levels welcome, and what makes this tournament worth signing up for."
+                      className={textareaClass}
+                    />
+                  </AccordionItem>
+                  <AccordionItem
+                    title="Rules & regulations"
+                    subtitle="How matches are scored, formats, conduct, and forfeits."
+                    filled={!!event.rules}
+                  >
+                    <textarea
+                      defaultValue={event.rules || ''}
+                      onBlur={(e) => saveField({ rules: e.target.value })}
+                      placeholder={'1. Matches are best-of-3 games to 11, win by 2.\n2. Players must check in 15 minutes before their scheduled match.\n3. USAPA/official paddle and ball specs apply.\n4. No-shows after a 10-minute grace period forfeit the match.'}
+                      className={textareaClass}
+                    />
+                  </AccordionItem>
+                  <AccordionItem
+                    title="Venue-specific guidelines"
+                    subtitle="Parking, court assignments, spectator areas, and facility policies."
+                    filled={!!event.venue_guidelines}
+                  >
+                    <textarea
+                      defaultValue={event.venue_guidelines || ''}
+                      onBlur={(e) => saveField({ venue_guidelines: e.target.value })}
+                      placeholder="Parking is available on-site. Indoor court shoes only (no marking soles). Spectators must stay behind the fence line. Food and drinks allowed in the lobby only."
+                      className={textareaClass}
+                    />
+                  </AccordionItem>
+                  <AccordionItem
+                    title="Schedule of play"
+                    subtitle="Check-in, opening remarks, start times, breaks, and awards."
+                    filled={!!event.schedule}
+                  >
+                    <textarea
+                      defaultValue={event.schedule || ''}
+                      onBlur={(e) => saveField({ schedule: e.target.value })}
+                      placeholder={'7:00 AM - Check-in opens\n8:00 AM - Opening remarks\n8:30 AM - Pool play begins\n1:00 PM - Lunch break\n2:00 PM - Bracket play\n5:00 PM - Awards ceremony'}
+                      className={textareaClass}
+                    />
+                  </AccordionItem>
+                  <AccordionItem
+                    title="FAQ"
+                    subtitle="Answers to common questions, shown to players as an expandable list."
+                    optional
+                    filled={!!event.faq}
+                  >
+                    <FaqEditor items={parseFaqItems(event.faq)} onChange={(items) => saveField({ faq: serializeFaqItems(items) })} />
+                  </AccordionItem>
+                  <AccordionItem
+                    title="Prize pool"
+                    subtitle="Overall prizes across the tournament — per-division prizes are set on each category in the next step."
+                    filled={!!event.prize_pool}
+                  >
+                    <textarea
+                      defaultValue={event.prize_pool || ''}
+                      onBlur={(e) => saveField({ prize_pool: e.target.value })}
+                      placeholder={'Total cash prize pool: $2,000 across all divisions.\nChampion and runner-up medals for every division.\nSpecial award for Most Improved Player.'}
+                      className={textareaClass}
+                    />
+                  </AccordionItem>
+                  <AccordionItem
+                    title="Cancellation / rain policy"
+                    subtitle="What happens if the event is delayed, paused, or cancelled."
+                    filled={!!event.cancellation_policy}
+                  >
+                    <textarea
+                      defaultValue={event.cancellation_policy || ''}
+                      onBlur={(e) => saveField({ cancellation_policy: e.target.value })}
+                      placeholder={'In case of rain or unsafe court conditions, matches may be paused, rescheduled, or moved indoors at the organizer’s discretion. If the event is fully cancelled, players will be notified by email at least 2 hours before the scheduled start.'}
+                      className={textareaClass}
+                    />
+                  </AccordionItem>
+                  <AccordionItem
+                    title="Refund policy"
+                    subtitle="Refund tiers based on how close to the event a player cancels."
+                    filled={!!event.refund_policy}
+                  >
+                    <textarea
+                      defaultValue={event.refund_policy || ''}
+                      onBlur={(e) => saveField({ refund_policy: e.target.value })}
+                      placeholder={'Full refund up to 7 days before the event.\n50% refund within 3-6 days before the event.\nNo refund within 48 hours of the event, except for a full tournament cancellation.'}
+                      className={textareaClass}
+                    />
+                  </AccordionItem>
+                  <AccordionItem
+                    title="Announcements"
+                    subtitle="Anything else players should know before they register."
+                    optional
+                    filled={!!event.announcements}
+                  >
+                    <textarea
+                      defaultValue={event.announcements || ''}
+                      onBlur={(e) => saveField({ announcements: e.target.value })}
+                      placeholder="Bring your own paddle and a spare ball. Free water stations available courtside. Livestream link will be posted here closer to the event."
+                      className={textareaClass}
+                    />
+                  </AccordionItem>
+                </div>
               </div>
             </>
           )}
@@ -499,19 +601,40 @@ export default function EventEditorPage() {
               <StepHeader title="Categories, fees & prizes" subtitle="Players choose one of these when they register" />
               <div className="flex flex-col gap-3">
                 {categories.map((cat) => (
-                  <CategoryEditor key={cat.id} eventId={eventId} category={cat} onSave={saveCategory} onDelete={() => removeCategory(cat)} />
+                  <CategoryEditor
+                    key={cat.id}
+                    eventId={eventId}
+                    category={cat}
+                    onSave={saveCategory}
+                    onDelete={() => removeCategory(cat)}
+                    defaultOpen={cat.id === newCategoryId}
+                  />
                 ))}
                 {categories.length === 0 && (
                   <div className="flex items-center gap-2 rounded-xl bg-amber-50 px-3.5 py-2.5 text-xs font-semibold text-amber-800">
                     <Award size={14} /> Add at least one category before publishing.
                   </div>
                 )}
-                <button
-                  onClick={addCategory}
-                  className="flex w-fit items-center gap-1.5 rounded-full bg-brand-50 px-4 py-2 text-xs font-bold text-brand-700 transition hover:bg-brand-100"
-                >
-                  <Plus size={13} /> Add category
-                </button>
+                {(() => {
+                  const limit = planLimit(event.plan, 'categories');
+                  const atLimit = limit != null && categories.length >= limit;
+                  return (
+                    <>
+                      <button
+                        onClick={addCategory}
+                        disabled={atLimit}
+                        className="flex w-fit items-center gap-1.5 rounded-full bg-brand-50 px-4 py-2 text-xs font-bold text-brand-700 transition hover:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        <Plus size={13} /> Add category
+                      </button>
+                      {atLimit && (
+                        <p className="text-xs text-ink-400">
+                          {PLAN_LIMITS[event.plan].label} plan limit of {limit} categor{limit === 1 ? 'y' : 'ies'} reached — raise this event's plan on the Basics step to add more.
+                        </p>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
             </>
           )}
@@ -525,17 +648,37 @@ export default function EventEditorPage() {
                     <MapPin size={12} /> Venue & courts
                   </div>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <FormField label="Available courts">
+                    <FormField label="Available courts" hint={`Your ${PLAN_LIMITS[event.plan]?.label ?? 'Free Trial'} plan allows up to ${planLimit(event.plan, 'courts')}.`}>
                       <input
                         type="number"
                         min={0}
+                        max={planLimit(event.plan, 'courts') ?? undefined}
                         defaultValue={event.num_courts ?? ''}
-                        onBlur={(e) => saveField({ num_courts: e.target.value === '' ? null : parseInt(e.target.value, 10) })}
+                        onBlur={(e) => {
+                          const n = e.target.value === '' ? null : parseInt(e.target.value, 10);
+                          const limit = planLimit(event.plan, 'courts');
+                          if (n != null && limit != null && n > limit) {
+                            pushToast(`Your ${PLAN_LIMITS[event.plan].label} plan allows up to ${limit} courts — raise this event's plan to add more.`, 'error');
+                            e.target.value = event.num_courts ?? '';
+                            return;
+                          }
+                          saveField({ num_courts: n });
+                        }}
                         className={inputClass}
                       />
                     </FormField>
                     <FormField label="Your club name" hint="Used later to keep players from the same club apart when brackets are drawn.">
                       <input defaultValue={event.club_name || ''} onBlur={(e) => saveField({ club_name: e.target.value })} className={inputClass} />
+                    </FormField>
+                    <FormField label="Court type" hint="Shown to players on the tournament page.">
+                      <Select value={event.court_type || ''} onChange={(e) => saveField({ court_type: e.target.value || null })} className={inputClass}>
+                        <option value="">Not specified</option>
+                        {COURT_TYPES.map((c) => (
+                          <option key={c.value} value={c.value}>
+                            {c.label}
+                          </option>
+                        ))}
+                      </Select>
                     </FormField>
                   </div>
                 </div>
@@ -587,31 +730,16 @@ export default function EventEditorPage() {
                     <QrCode size={12} /> Payment
                   </div>
                   <FormField label="Payment QR / instructions image" hint="Shown to players during registration so they know how to pay.">
-                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
-                      {event.payment_qr_path ? (
-                        <img
-                          src={getEventMediaUrl(event.payment_qr_path)}
-                          alt="Payment QR"
-                          className="h-32 w-32 shrink-0 rounded-xl border border-ink-200 object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-32 w-32 shrink-0 flex-col items-center justify-center gap-1.5 rounded-xl border border-dashed border-ink-300 text-ink-300">
-                          <QrCode size={24} />
-                          <span className="text-[10px] font-semibold">No image yet</span>
-                        </div>
-                      )}
-                      <div className="flex flex-col gap-2">
-                        <label className="w-fit cursor-pointer rounded-full border border-ink-200 bg-white px-3.5 py-2 text-xs font-bold text-ink-600 transition hover:bg-ink-100">
-                          {event.payment_qr_path ? 'Replace image' : 'Upload image'}
-                          <input type="file" accept="image/*" onChange={handleQrUpload} className="hidden" />
-                        </label>
-                        {event.payment_qr_path && (
-                          <button onClick={removeQr} className="w-fit text-xs font-semibold text-rose-600 transition hover:text-rose-700">
-                            Remove image
-                          </button>
-                        )}
-                      </div>
-                    </div>
+                    <ImageDropzone
+                      imagePath={event.payment_qr_path}
+                      getUrl={getEventMediaUrl}
+                      onUpload={handleQrUpload}
+                      uploading={uploadingQr}
+                      onRemove={removeQr}
+                      className="h-32 w-32"
+                      emptyIcon={QrCode}
+                      emptyLabel="No image yet"
+                    />
                   </FormField>
                 </div>
               </div>

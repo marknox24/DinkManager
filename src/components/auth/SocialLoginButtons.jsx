@@ -2,6 +2,12 @@ import { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 
+// Social sign-in isn't offered yet — flip this on (and render the button
+// row + its "Or continue with" divider in the 4 call sites again) once it
+// actually is. The signInWithOAuth flow itself stays wired up below rather
+// than being torn out, so turning it back on is a one-line change.
+export const SOCIAL_LOGIN_ENABLED = false;
+
 function GoogleIcon() {
   return (
     <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true">

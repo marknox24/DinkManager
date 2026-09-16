@@ -6,6 +6,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
 import FormField, { inputClass } from '../../components/ui/FormField';
+import AccountTypeCard from '../../components/ui/AccountTypeCard';
 
 function AccountHeader() {
   const { user, profile, signOut } = useAuth();
@@ -262,6 +263,7 @@ function TwoFactorCard() {
 }
 
 export default function AccountSettingsPage() {
+  const { accountType } = useAuth();
   return (
     <div className="min-h-screen bg-[#f3f6f8]">
       <AccountHeader />
@@ -271,6 +273,7 @@ export default function AccountSettingsPage() {
           <p className="text-sm text-ink-500">Manage your password and two-factor authentication.</p>
         </div>
         <div className="flex flex-col gap-5">
+          <AccountTypeCard accountType={accountType} />
           <ChangePasswordCard />
           <TwoFactorCard />
         </div>

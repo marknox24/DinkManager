@@ -79,9 +79,17 @@ create policy "profiles_update_own" on profiles for update
   using (auth.uid() = id)
   with check (
     auth.uid() = id
-    and is_admin = (select p2.is_admin from profiles p2 where p2.id = id)
-    and access_expires_at is not distinct from (select p2.access_expires_at from profiles p2 where p2.id = id)
-    and max_events is not distinct from (select p2.max_events from profiles p2 where p2.id = id)
+    -- p2.id = profiles.id (not the bare "id") — an unqualified "id" here
+    -- resolves to p2's own column (the subquery's nearest FROM-list table),
+    -- turning the filter into "p2.id = p2.id" (always true). That made
+    -- every one of these three subqueries return every row in the whole
+    -- table instead of one, and Postgres errors "more than one row
+    -- returned by a subquery used as an expression" on ANY profile update
+    -- — this silently broke every profile save from the moment the
+    -- previous (unqualified) version of this policy went live.
+    and is_admin = (select p2.is_admin from profiles p2 where p2.id = profiles.id)
+    and access_expires_at is not distinct from (select p2.access_expires_at from profiles p2 where p2.id = profiles.id)
+    and max_events is not distinct from (select p2.max_events from profiles p2 where p2.id = profiles.id)
   );
 
 -- Auto-create a profile row whenever someone signs up. Role comes from
@@ -130,7 +138,16 @@ create table if not exists events (
   venue_guidelines text,
   schedule text,
   faq text,
+  -- General, tournament-wide info — distinct from categories.qualification,
+  -- which is per-division eligibility criteria.
+  registration_open_date date,
+  registration_close_date date,
+  prize_pool text,
+  cancellation_policy text,
+  refund_policy text,
+  announcements text,
   num_courts integer,
+  court_type text check (court_type in ('indoor', 'outdoor', 'mixed')) default null,
   match_duration_minutes integer not null default 18,
   payment_qr_path text,
   club_name text,
@@ -142,6 +159,26 @@ create table if not exists events (
   -- When true, the Accounting page's Total earnings figure folds in
   -- sponsors.amount alongside registration and manual earnings.
   include_sponsors_in_earnings boolean not null default false,
+  -- 'private' hides the event from the public /tournaments browse list; it
+  -- stays reachable at /e/:slug for a *public* event, or only via its
+  -- share_token (/t/:token) once private — getPublicEventBySlug filters on
+  -- visibility='public' so a private event's plain slug link cleanly
+  -- 404s. This is an unlisted-link model (like a YouTube unlisted video),
+  -- not per-user access control — RLS still grants any is_published=true
+  -- row to anon regardless of visibility, since gating that too would mean
+  -- touching every dependent table's policy (categories/registrations/
+  -- brackets/teams/matches) for marginal extra protection.
+  visibility text not null default 'public' check (visibility in ('public', 'private')),
+  -- Random (crypto.randomUUID()), generated client-side the first time an
+  -- event is switched to private; stays stable across public<->private
+  -- toggles so a previously-shared link keeps working, unless the organizer
+  -- explicitly rotates it via "Generate new link".
+  share_token text unique,
+  -- Randomizer preference, set once in Settings rather than re-chosen on
+  -- every draw: off means the Randomizer tries to spread players from the
+  -- same club across different brackets (its long-standing default
+  -- behavior); on lets clubmates land in the same bracket.
+  randomizer_allow_same_club boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -150,6 +187,20 @@ alter table events add column if not exists match_duration_minutes integer not n
 alter table events add column if not exists cover_photo_path text;
 alter table events add column if not exists currency text not null default 'USD';
 alter table events add column if not exists include_sponsors_in_earnings boolean not null default false;
+alter table events add column if not exists visibility text not null default 'public';
+alter table events drop constraint if exists events_visibility_check;
+alter table events add constraint events_visibility_check check (visibility in ('public', 'private'));
+alter table events add column if not exists share_token text unique;
+alter table events add column if not exists randomizer_allow_same_club boolean not null default false;
+alter table events add column if not exists court_type text;
+alter table events drop constraint if exists events_court_type_check;
+alter table events add constraint events_court_type_check check (court_type in ('indoor', 'outdoor', 'mixed'));
+alter table events add column if not exists registration_open_date date;
+alter table events add column if not exists registration_close_date date;
+alter table events add column if not exists prize_pool text;
+alter table events add column if not exists cancellation_policy text;
+alter table events add column if not exists refund_policy text;
+alter table events add column if not exists announcements text;
 
 -- ----------------------------------------------------------------------------
 -- EVENT STAFF  ("table committee" helper accounts, invited by the organizer
@@ -180,10 +231,16 @@ create table if not exists event_staff (
   can_accounting boolean not null default false,
   can_settings boolean not null default false,
   can_edit_event boolean not null default false,
+  -- null = permanent access (matches profiles.access_expires_at's existing
+  -- convention). Set when the organizer issues a temporary login; cleared
+  -- back to null by a plain email invite or an explicit "Make permanent".
+  access_expires_at timestamptz,
   invited_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
   unique (event_id, user_id)
 );
+
+alter table event_staff add column if not exists access_expires_at timestamptz;
 
 create index if not exists event_staff_user_idx on event_staff (user_id);
 
@@ -212,6 +269,13 @@ create policy "event_staff_select_self" on event_staff for select
 -- rejects as recursive RLS evaluation exactly like a direct self-reference
 -- would. A security-definer body reads event_staff with RLS bypassed,
 -- breaking the cycle.
+--
+-- The access_expires_at check below is what actually enforces a temporary
+-- login's validity window — every other table's RLS funnels through this
+-- one function, so gating it here alone is sufficient everywhere (no other
+-- policy needs to know about expiry). event_staff_owner_all/select_self are
+-- deliberately NOT gated by this function — an expired helper still needs
+-- to read their own row so the UI can explain why they're locked out.
 create or replace function has_event_permission(p_event_id uuid, p_permission text)
 returns boolean
 language sql
@@ -223,6 +287,7 @@ as $$
     select 1 from event_staff s
     where s.event_id = p_event_id
       and s.user_id = auth.uid()
+      and (s.access_expires_at is null or s.access_expires_at > now())
       and case p_permission
         when 'member' then true
         when 'overview' then s.can_overview
@@ -280,7 +345,10 @@ create policy "events_insert_owner" on events for insert
 drop policy if exists "events_update_owner" on events;
 create policy "events_update_owner" on events for update
   using (auth.uid() = organizer_id or has_event_permission(id, 'settings') or has_event_permission(id, 'edit_event'))
-  with check (organizer_id = (select e2.organizer_id from events e2 where e2.id = id));
+  -- e2.id = events.id (not the bare "id") — see the identical note on
+  -- profiles_update_own above; the unqualified form made this subquery
+  -- return every row in the events table and broke every event update.
+  with check (organizer_id = (select e2.organizer_id from events e2 where e2.id = events.id));
 
 drop policy if exists "events_delete_owner" on events;
 create policy "events_delete_owner" on events for delete
@@ -322,6 +390,14 @@ create table if not exists categories (
   image_path text,
   estimated_match_minutes integer,
   order_index integer not null default 0,
+  -- Per-division eligibility criteria, distinct from events.* (which is
+  -- tournament-wide). qualification is an organizer-defined list of
+  -- {label, value} rows (DUPR requirement, age, gender, club/location
+  -- restriction, prior-podium restriction, partner/team requirement, etc.)
+  -- rendered as a checklist on the player-facing category detail view.
+  qualification jsonb not null default '[]',
+  qualification_notes text,
+  disqualification_notes text,
   created_at timestamptz not null default now()
 );
 
@@ -329,6 +405,9 @@ create table if not exists categories (
 alter table categories add column if not exists description text;
 alter table categories add column if not exists image_path text;
 alter table categories add column if not exists estimated_match_minutes integer;
+alter table categories add column if not exists qualification jsonb not null default '[]';
+alter table categories add column if not exists qualification_notes text;
+alter table categories add column if not exists disqualification_notes text;
 
 alter table categories enable row level security;
 
@@ -700,8 +779,21 @@ grant update (player1_checked_in_at, player2_checked_in_at) on registrations to 
 revoke select on registrations from anon;
 grant select (id, event_id, category_id, player_name, player2_name, status, player1_checked_in_at, player2_checked_in_at) on registrations to anon;
 
+-- SECURITY: both policies below are scoped `to anon` deliberately — this
+-- pair exists only for the anonymous, no-login player self-check-in flow
+-- (CheckInPage.jsx). A Postgres RLS policy with no `to <role>` clause
+-- defaults to PUBLIC, i.e. every role including `authenticated` — without
+-- `to anon` here, ANY signed-in user on the entire platform (any player, or
+-- any staffer/expired-temporary-staffer of a totally unrelated event) could
+-- read or check in every approved registration's full PII for every
+-- published event, completely bypassing has_event_permission() and the
+-- organizer_id checks on registrations_select_owner/_update_owner above.
+-- Authenticated staff never needed these two policies anyway — checkin
+-- permission already grants full access via registrations_select_owner /
+-- registrations_update_owner.
 drop policy if exists "registrations_public_checkin_select" on registrations;
 create policy "registrations_public_checkin_select" on registrations for select
+  to anon
   using (
     status = 'approved'
     and exists (select 1 from events e where e.id = registrations.event_id and e.is_published = true)
@@ -709,6 +801,7 @@ create policy "registrations_public_checkin_select" on registrations for select
 
 drop policy if exists "registrations_public_checkin_update" on registrations;
 create policy "registrations_public_checkin_update" on registrations for update
+  to anon
   using (
     status = 'approved'
     and exists (select 1 from events e where e.id = registrations.event_id and e.is_published = true)
@@ -831,9 +924,6 @@ alter table sponsors add constraint sponsors_tier_check check (tier in ('bronze'
 
 alter table sponsors enable row level security;
 
--- The Preview Screen itself is an organizer-only route (see PreviewDisplayPage,
--- gated behind ProtectedRoute), so sponsors don't need a public select policy
--- the way categories/registrations do — owner-only is sufficient everywhere.
 -- Write access is gated on the Sponsors toggle specifically; a separate
 -- base-membership select policy below keeps sponsor logos visible to any
 -- staff member (e.g. whoever runs Preview) even without that toggle — no
@@ -847,6 +937,17 @@ create policy "sponsors_owner_all" on sponsors for all
 drop policy if exists "sponsors_select_staff_member" on sponsors;
 create policy "sponsors_select_staff_member" on sponsors for select
   using (exists (select 1 from events e where e.id = sponsors.event_id and has_event_permission(e.id, 'member')));
+
+-- The Preview Screen (PreviewDisplayPage, /events/:eventId/preview/:categoryId)
+-- is deliberately public — spectators and players land on it with no session
+-- at all straight from a QR/check-in flow, same as the venue TV itself. The
+-- two policies above only ever match a signed-in organizer/staff member, so
+-- without this, sponsor logos silently never rendered for the actual anonymous
+-- audience that page exists for. Scoped to published events only, matching
+-- every other spectator-facing table (categories/registrations/brackets/etc).
+drop policy if exists "sponsors_select_public" on sponsors;
+create policy "sponsors_select_public" on sponsors for select
+  using (exists (select 1 from events e where e.id = sponsors.event_id and e.is_published = true));
 
 -- ----------------------------------------------------------------------------
 -- ACCOUNTING  (expenses + manual earnings; registration-fee earnings are
@@ -987,3 +1088,265 @@ create policy "reg_uploads_owner_delete" on storage.objects for delete
         and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'registrations'))
     )
   );
+
+-- ----------------------------------------------------------------------------
+-- EXPIRED TEMPORARY LOGIN CLEANUP
+-- has_event_permission() already blocks an expired temporary helper from
+-- doing anything the moment their window passes — this is purely about
+-- reclaiming the storage afterward, on a schedule, rather than leaving
+-- expired rows/accounts to accumulate forever.
+-- ----------------------------------------------------------------------------
+create extension if not exists pg_cron;
+
+create or replace function cleanup_expired_event_staff()
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  -- A temporary login is a single-purpose synthetic account (see
+  -- generateUsername() client-side) — once its one event_staff row expires
+  -- and it isn't an organizer or valid/staff anywhere else, deleting the
+  -- auth.users row reclaims the whole account: profiles and every
+  -- event_staff row for that user cascade-delete with it (both reference
+  -- auth.users(id) on delete cascade).
+  delete from auth.users u
+  where exists (
+    select 1 from event_staff s
+    where s.user_id = u.id and s.access_expires_at is not null and s.access_expires_at < now()
+  )
+  and not exists (select 1 from events e where e.organizer_id = u.id)
+  and not exists (
+    select 1 from event_staff s2
+    where s2.user_id = u.id and (s2.access_expires_at is null or s2.access_expires_at >= now())
+  );
+
+  -- Anyone who kept their account (an organizer, or still valid/staff
+  -- elsewhere) just has the specific expired membership row dropped instead
+  -- of their whole account.
+  delete from event_staff where access_expires_at is not null and access_expires_at < now();
+end;
+$$;
+
+select cron.unschedule('cleanup-expired-event-staff') where exists (select 1 from cron.job where jobname = 'cleanup-expired-event-staff');
+select cron.schedule('cleanup-expired-event-staff', '0 * * * *', 'select cleanup_expired_event_staff();');
+
+-- ----------------------------------------------------------------------------
+-- EVENT PLAN TIERS  (self-declared by the organizer at event-setup time;
+-- drives the category/player/court caps below and in the client). NOT tied
+-- to subscription_requests.plan below — a human already reviews the payment
+-- screenshot before approving a request, so there is no credit-ledger
+-- binding one specific approval to one specific event. Keep these numbers
+-- hand-synced with src/data/plans.js and the categories_insert_owner CASE
+-- below — Postgres/edge functions can't import a JS module.
+-- ----------------------------------------------------------------------------
+alter table events add column if not exists plan text not null default 'free';
+alter table events drop constraint if exists events_plan_check;
+alter table events add constraint events_plan_check check (plan in ('free', 'starter', 'pro', 'business'));
+
+-- ----------------------------------------------------------------------------
+-- APP SETTINGS  (platform-wide, single row — currently just the one payment
+-- QR image the product owner uploads once for the manual/QR subscription
+-- flow below).
+-- ----------------------------------------------------------------------------
+create table if not exists app_settings (
+  id boolean primary key default true,
+  payment_qr_path text,
+  updated_at timestamptz not null default now(),
+  constraint app_settings_singleton check (id)
+);
+
+insert into app_settings (id) values (true) on conflict (id) do nothing;
+
+alter table app_settings enable row level security;
+
+drop policy if exists "app_settings_select_public" on app_settings;
+create policy "app_settings_select_public" on app_settings for select using (true);
+
+drop policy if exists "app_settings_update_admin" on app_settings;
+create policy "app_settings_update_admin" on app_settings for update
+  using (is_admin_user())
+  with check (is_admin_user());
+
+-- ----------------------------------------------------------------------------
+-- SUBSCRIPTION REQUESTS  (manual/QR payment flow — no Stripe. A prospective
+-- customer picks a plan, is shown the platform's one payment QR from
+-- app_settings, and submits their email + a screenshot proving payment, with
+-- no account required. An admin reviews the screenshot from /admin/customers
+-- and approves/rejects. Approving grants +1 to profiles.max_events on the
+-- matching account (inviting the email if it has none yet) via the
+-- approve-subscription-request edge function — see that file. The chosen
+-- plan here is never written onto a specific event; the organizer separately
+-- self-declares a plan per event (events.plan above) when they create it.
+-- ----------------------------------------------------------------------------
+create table if not exists subscription_requests (
+  id uuid primary key default gen_random_uuid(),
+  email text not null,
+  plan text not null check (plan in ('starter', 'pro', 'business')),
+  screenshot_path text not null,
+  status text not null default 'pending' check (status in ('pending', 'approved', 'rejected')),
+  admin_note text,
+  created_at timestamptz not null default now(),
+  resolved_at timestamptz
+);
+
+alter table subscription_requests enable row level security;
+
+-- Pinning status/resolved_at here stops a crafted anonymous insert from
+-- self-approving or backdating resolution — same defensive spirit as
+-- registrations_insert_public's WITH CHECK elsewhere in this file.
+drop policy if exists "subscription_requests_insert_public" on subscription_requests;
+create policy "subscription_requests_insert_public" on subscription_requests for insert
+  with check (status = 'pending' and resolved_at is null);
+
+drop policy if exists "subscription_requests_select_admin" on subscription_requests;
+create policy "subscription_requests_select_admin" on subscription_requests for select
+  using (is_admin_user());
+
+-- Covers the Reject action (a plain client-side update); Approve goes
+-- through the service-role edge function instead since it also has to touch
+-- auth.users/profiles, which this policy alone can't do.
+drop policy if exists "subscription_requests_update_admin" on subscription_requests;
+create policy "subscription_requests_update_admin" on subscription_requests for update
+  using (is_admin_user())
+  with check (is_admin_user());
+
+-- ----------------------------------------------------------------------------
+-- STORAGE  (subscription payment proofs + the platform payment QR)
+-- ----------------------------------------------------------------------------
+
+-- subscription-proofs: anonymous visitors upload their payment screenshot
+-- when submitting a subscription request; only an admin can read it back.
+-- Mirrors registration-uploads' public-insert/owner-read shape, but "owner"
+-- here means is_admin_user() instead of the event's organizer, and there's
+-- no event to scope the insert against (any visitor filling out the
+-- subscribe form may upload one proof file to any path).
+insert into storage.buckets (id, name, public)
+values ('subscription-proofs', 'subscription-proofs', false)
+on conflict (id) do nothing;
+
+drop policy if exists "subscription_proofs_public_insert" on storage.objects;
+create policy "subscription_proofs_public_insert" on storage.objects for insert
+  with check (bucket_id = 'subscription-proofs');
+
+drop policy if exists "subscription_proofs_admin_read" on storage.objects;
+create policy "subscription_proofs_admin_read" on storage.objects for select
+  using (bucket_id = 'subscription-proofs' and is_admin_user());
+
+drop policy if exists "subscription_proofs_admin_delete" on storage.objects;
+create policy "subscription_proofs_admin_delete" on storage.objects for delete
+  using (bucket_id = 'subscription-proofs' and is_admin_user());
+
+-- The platform payment QR lives in the existing public event-media bucket
+-- (under a reserved 'platform/' path) so it's viewable by anonymous visitors
+-- via the same event_media_public_read policy already in place — it just
+-- needs its own admin-only write policy, since event_media_owner_write is
+-- scoped to a real event's organizer/staff and 'platform' isn't a real event.
+drop policy if exists "event_media_admin_write" on storage.objects;
+create policy "event_media_admin_write" on storage.objects for insert
+  with check (
+    bucket_id = 'event-media'
+    and (storage.foldername(storage.objects.name))[1] = 'platform'
+    and is_admin_user()
+  );
+
+-- ----------------------------------------------------------------------------
+-- CATEGORY CAP PER EVENT PLAN  (defense-in-depth, mirroring how
+-- events_insert_owner above already enforces max_events at the DB level,
+-- not just in the UI). categories_write_owner was a single "for all" policy
+-- — Postgres OR's multiple permissive policies for the same command
+-- together, so a second "for insert" policy alongside it would do nothing;
+-- the original's WITH CHECK (which knows nothing about the cap) would still
+-- let the insert through on its own. It has to be split into per-command
+-- policies instead, the same way events_insert_owner/_update_owner/
+-- _delete_owner already are split for the identical reason.
+-- ----------------------------------------------------------------------------
+drop policy if exists "categories_write_owner" on categories;
+
+-- A raw "select count(*) from categories" inside a categories policy makes
+-- Postgres re-evaluate categories' own SELECT policy while the INSERT policy
+-- is still being evaluated, which Postgres's RLS planner always rejects as
+-- "infinite recursion detected in policy for relation categories" — even
+-- though the count query itself doesn't actually recurse. The fix is the
+-- same one is_admin_user()/has_event_permission() already use elsewhere in
+-- this file: do the self-referencing count in a security-definer function,
+-- which runs with RLS bypassed and so never re-triggers categories' policies.
+create or replace function category_count_for_event(p_event_id uuid)
+returns integer
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select count(*)::integer from categories where event_id = p_event_id;
+$$;
+
+drop policy if exists "categories_insert_owner" on categories;
+create policy "categories_insert_owner" on categories for insert
+  with check (
+    exists (
+      select 1 from events e
+      where e.id = categories.event_id
+        and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'edit_event'))
+        and (
+          -- null (business tier) = unlimited; parenthesized explicitly per
+          -- the operator-precedence warning already left twice in this file
+          -- (profiles_update_own, events_update_owner) — "a and b is null or
+          -- c" silently parses as "(a and b is null) or c", not what's meant.
+          (case e.plan when 'free' then 1 when 'starter' then 5 when 'pro' then 10 else null end) is null
+          or category_count_for_event(e.id)
+             < (case e.plan when 'free' then 1 when 'starter' then 5 when 'pro' then 10 else null end)
+        )
+    )
+  );
+
+drop policy if exists "categories_update_owner" on categories;
+create policy "categories_update_owner" on categories for update
+  using (exists (select 1 from events e where e.id = categories.event_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'edit_event'))))
+  with check (exists (select 1 from events e where e.id = categories.event_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'edit_event'))));
+
+drop policy if exists "categories_delete_owner" on categories;
+create policy "categories_delete_owner" on categories for delete
+  using (exists (select 1 from events e where e.id = categories.event_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'edit_event'))));
+
+-- ----------------------------------------------------------------------------
+-- PUBLIC EVENT DISCOVERY  (excludes trial-account organizers, so the public
+-- "Browse tournaments" page and a player's dashboard only ever surface real
+-- organizers' events, not test events created during an admin-issued trial).
+-- events_select_published above already lets anyone SELECT a published
+-- event row — this is a further narrowing on top of that, not a visibility
+-- grant — but it needs profiles.access_expires_at, which a player/anonymous
+-- visitor can't read directly (profiles_select_own restricts that table to
+-- the row's own owner or an admin). A plain client-side join is therefore
+-- impossible for non-admin callers; this has to run server-side as a
+-- security-definer function, same reason as is_admin_user()/
+-- has_event_permission() above.
+-- ----------------------------------------------------------------------------
+create or replace function public_published_events()
+returns table (
+  id uuid,
+  slug text,
+  name text,
+  status text,
+  cover_photo_path text,
+  location_address text,
+  start_date date,
+  end_date date
+)
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select e.id, e.slug, e.name, e.status, e.cover_photo_path, e.location_address, e.start_date, e.end_date
+  from events e
+  join profiles p on p.id = e.organizer_id
+  where e.is_published = true
+    and e.visibility = 'public'
+    and e.status <> 'cancelled'
+    and p.access_expires_at is null
+  order by e.start_date asc nulls last;
+$$;
+
+grant execute on function public_published_events() to anon, authenticated;

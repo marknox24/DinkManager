@@ -123,6 +123,14 @@ export function AuthProvider({ children }) {
   const isExpired = Boolean(profile?.access_expires_at && new Date(profile.access_expires_at) < new Date());
   const isAdmin = Boolean(profile?.is_admin);
 
+  // Single derived source for the user-facing "Account Type" label and any
+  // role-hierarchy decisions (ADMIRAL > ORGANIZER > PLAYER). is_admin stays
+  // an orthogonal flag on the existing 'organizer'/'player' role column
+  // rather than a third role value — that keeps every existing role check
+  // (RLS, ProtectedRoute, EventAccessContext) unchanged; this just labels
+  // the is_admin case distinctly instead of showing "Organizer" for admins.
+  const accountType = isAdmin ? 'admiral' : profile?.role === 'player' ? 'player' : 'organizer';
+
   // Called right after a successful MFA verification, before navigating away
   // from the login page. The `aal` effect above would also pick this up on
   // its own, but only once the session-change event finishes propagating —
@@ -146,6 +154,7 @@ export function AuthProvider({ children }) {
       refreshAal,
       isExpired,
       isAdmin,
+      accountType,
       // Admin-only: invites a temporary customer by email (real auth user +
       // profile row with access_expires_at/max_events set). Runs server-side
       // in the create-trial-account Edge Function since only the service
@@ -165,8 +174,15 @@ export function AuthProvider({ children }) {
       // with a per-feature permission set. Runs server-side in
       // invite-event-staff since inviting by email needs the service role;
       // the function re-checks the caller owns the event itself.
-      inviteEventStaff: ({ eventId, email, permissions }) =>
-        invokeAdminFunction('invite-event-staff', { eventId, email, permissions, origin: window.location.origin }),
+      inviteEventStaff: ({ eventId, email, permissions, temporaryAccess }) =>
+        invokeAdminFunction('invite-event-staff', { eventId, email, permissions, temporaryAccess, origin: window.location.origin }),
+      // Admin-only: approves a manual/QR subscription_requests row — invites
+      // the email (or grants directly onto an existing account) and grants
+      // +1 event credit. Runs server-side in approve-subscription-request
+      // for the same reason as createTrialAccount above (admin.auth.admin
+      // calls need the service role).
+      approveSubscriptionRequest: (requestId) =>
+        invokeAdminFunction('approve-subscription-request', { requestId, origin: window.location.origin }),
       signUp: (email, password, displayName, role = 'organizer') =>
         supabase.auth.signUp({ email, password, options: { data: { display_name: displayName, role } } }),
       signIn: (email, password) => supabase.auth.signInWithPassword({ email, password }),

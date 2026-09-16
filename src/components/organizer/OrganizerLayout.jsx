@@ -17,7 +17,7 @@ export default function OrganizerLayout({ children, backTo, backLabel }) {
   };
 
   return (
-    <div className="min-h-screen bg-[#f3f6f8]">
+    <div className="min-h-screen">
       <header className="sticky top-0 z-40 border-b border-ink-100 bg-white/85 px-4 py-3 backdrop-blur-md sm:px-6">
         <div className="mx-auto flex max-w-[1200px] items-center justify-between gap-3">
           <div className="flex items-center gap-4">

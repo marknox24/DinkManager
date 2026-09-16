@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Activity, CheckCircle2, FileSpreadsheet, ImageIcon, Pencil, QrCode, Shuffle, Trash2, Trophy, UserPlus, XCircle } from 'lucide-react';
+import { Activity, CheckCircle2, Download, FileSpreadsheet, ImageIcon, Pencil, QrCode, Shuffle, Trash2, Trophy, UserPlus, XCircle } from 'lucide-react';
 import {
   createRegistration,
   createRegistrationsBulk,
@@ -20,6 +20,8 @@ import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLa
 import EditRegistrationModal from '../../../components/organizer/EditRegistrationModal';
 import AddPlayerModal from '../../../components/organizer/AddPlayerModal';
 import ImportPlayersModal from '../../../components/organizer/ImportPlayersModal';
+import DownloadRegistrationsModal from '../../../components/organizer/DownloadRegistrationsModal';
+import { PLAN_LIMITS, planLimit } from '../../../data/plans';
 
 const STATUS_STYLES = {
   pending: 'bg-amber-100 text-amber-800',
@@ -56,6 +58,7 @@ export default function RegistrationsPage() {
   const [bracketAssignments, setBracketAssignments] = useState({});
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
+  const [downloadModalOpen, setDownloadModalOpen] = useState(false);
 
   const reload = useCallback(async () => {
     try {
@@ -76,6 +79,17 @@ export default function RegistrationsPage() {
   }, [reload]);
 
   const setStatus = async (reg, status) => {
+    if (status === 'approved') {
+      const limit = planLimit(event?.plan, 'playersPerCategory');
+      const approvedInCategory = registrations.filter((r) => r.category_id === reg.category_id && r.status === 'approved').length;
+      if (limit != null && approvedInCategory >= limit) {
+        pushToast(
+          `This category is at its ${PLAN_LIMITS[event.plan].label} plan limit of ${limit} players/pairs — raise this event's plan to approve more.`,
+          'error'
+        );
+        return;
+      }
+    }
     try {
       await updateRegistrationStatus(reg.id, status);
       setRegistrations((prev) => prev.map((r) => (r.id === reg.id ? { ...r, status } : r)));
@@ -157,6 +171,13 @@ export default function RegistrationsPage() {
           <p className="text-sm text-ink-500">Approve players and follow activity for this event</p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setDownloadModalOpen(true)}
+            disabled={categories.length === 0}
+            className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-2 text-xs font-bold text-ink-600 transition hover:bg-ink-100 disabled:opacity-50"
+          >
+            <Download size={14} /> Download
+          </button>
           <button
             onClick={() => setImportModalOpen(true)}
             disabled={categories.length === 0}
@@ -319,6 +340,15 @@ export default function RegistrationsPage() {
 
       {importModalOpen && (
         <ImportPlayersModal categories={categories} onImport={handleImportPlayers} onClose={() => setImportModalOpen(false)} />
+      )}
+
+      {downloadModalOpen && (
+        <DownloadRegistrationsModal
+          event={event}
+          categories={categories}
+          registrations={registrations}
+          onClose={() => setDownloadModalOpen(false)}
+        />
       )}
     </EventWorkspaceLayout>
   );

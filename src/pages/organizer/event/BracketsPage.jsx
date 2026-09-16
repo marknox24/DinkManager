@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Crown, Play, Radio, Shuffle, Timer, Trophy } from 'lucide-react';
-import { getEventById, listCategories, listRegistrations, listUmpires } from '../../../data/eventsApi';
+import { ChevronDown, Crown, Radio, Shuffle, Timer } from 'lucide-react';
+import { getEventById, listCategories, listRegistrations } from '../../../data/eventsApi';
 import {
   cancelLiveMatch,
   deleteBracketsForCategory,
@@ -14,9 +14,7 @@ import {
   listMatchesForBracket,
   listTeamsForBracket,
   pauseMatch,
-  recordMatch,
   resumeMatch,
-  startMatch,
 } from '../../../data/bracketsApi';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
@@ -24,19 +22,117 @@ import { useEventAccess } from '../../../context/EventAccessContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import RandomizerModal from '../../../components/organizer/RandomizerModal';
 import LiveMatchCard from '../../../components/organizer/LiveMatchCard';
-import { inputClass } from '../../../components/ui/FormField';
-import Select from '../../../components/ui/Select';
 import { useNow } from '../../../hooks/useNow';
 import { formatDuration } from '../../../utils/format';
 import { liveElapsedSeconds, teamLabel } from '../../../utils/match';
 import { rankTeams } from '../../../utils/standings';
 
-function hasPlayed(matches, teamAId, teamBId) {
-  return matches.some((m) => (m.team_a_id === teamAId && m.team_b_id === teamBId) || (m.team_a_id === teamBId && m.team_b_id === teamAId));
-}
+// One collapsible section per drawn pool — standings + its own recent
+// matches. Starting/logging matches now lives entirely on Match List, so
+// this page is read-only: draw brackets, watch progress, see results.
+// (Printable Round Robin score sheets also moved to Match List — see its
+// header action — since a print run spans every pool bracket in a
+// category, grouped by round, rather than one bracket at a time.)
+function BracketSection({ bracket, progress, expanded, onToggle, teams, matches }) {
+  const rankedTeams = useMemo(() => rankTeams(teams || []), [teams]);
+  const loaded = !!teams;
 
-function isTeamLive(liveMatches, teamId) {
-  return liveMatches.some((m) => m.team_a_id === teamId || m.team_b_id === teamId);
+  return (
+    <div className="overflow-hidden rounded-2xl border border-ink-100 bg-white shadow-sm">
+      <div
+        onClick={onToggle}
+        className="flex cursor-pointer items-center justify-between gap-3 px-5 py-3.5 transition hover:bg-ink-50/60"
+      >
+        <div className="flex items-center gap-2.5">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-sm font-extrabold text-brand-700">
+            {bracket.letter}
+          </span>
+          <div>
+            <div className="text-sm font-bold text-ink-900">Bracket {bracket.letter}</div>
+            {progress && (
+              <div className="text-xs text-ink-500">
+                {progress.completedCount}/{progress.totalMatches} matches played
+                {progress.remaining > 0 ? ` · ${progress.remaining} left` : ' · Complete'}
+              </div>
+            )}
+          </div>
+        </div>
+        <ChevronDown size={16} className={`shrink-0 text-ink-400 transition-transform ${expanded ? 'rotate-180' : ''}`} />
+      </div>
+
+      {expanded && (
+        <div className="border-t border-ink-100">
+          {!loaded ? (
+            <div className="py-8 text-center text-sm text-ink-400">Loading…</div>
+          ) : (
+            <>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[640px] text-sm">
+                  <thead>
+                    <tr className="border-b-2 border-ink-100 text-[11px] font-bold uppercase tracking-wide text-ink-400">
+                      <th className="px-3 py-2.5 text-center">Rank</th>
+                      <th className="px-3 py-2.5 text-left">Team</th>
+                      <th className="px-3 py-2.5 text-left">Club</th>
+                      <th className="px-3 py-2.5 text-center">W</th>
+                      <th className="px-3 py-2.5 text-center">L</th>
+                      <th className="px-3 py-2.5 text-center">RF</th>
+                      <th className="px-3 py-2.5 text-center">RA</th>
+                      <th className="px-3 py-2.5 text-center">Diff</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rankedTeams.map((t) => (
+                      <tr key={t.id} className={`border-b border-ink-50 ${t.rank === 1 ? 'bg-amber-50/70' : ''}`}>
+                        <td className="px-3 py-2.5 text-center">
+                          <span
+                            className={`inline-flex h-6 min-w-6 items-center justify-center gap-0.5 rounded-full px-1.5 text-xs font-extrabold ${t.rank === 1 ? 'bg-amber-400 text-amber-950' : 'bg-ink-100 text-ink-600'}`}
+                          >
+                            {t.rank === 1 && <Crown size={11} />}
+                            {t.rank}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2.5 font-semibold text-ink-800">{teamLabel(t)}</td>
+                        <td className="px-3 py-2.5 text-ink-500">{t.club_name || '—'}</td>
+                        <td className="px-3 py-2.5 text-center font-mono">{t.wins}</td>
+                        <td className="px-3 py-2.5 text-center font-mono">{t.losses}</td>
+                        <td className="px-3 py-2.5 text-center font-mono">{t.points_for}</td>
+                        <td className="px-3 py-2.5 text-center font-mono">{t.points_against}</td>
+                        <td className={`px-3 py-2.5 text-center font-mono font-bold ${t.diff >= 0 ? 'text-brand-600' : 'text-rose-600'}`}>
+                          {t.diff >= 0 ? `+${t.diff}` : t.diff}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {matches.length > 0 && (
+                <div className="border-t border-ink-100 bg-ink-50/40 p-4">
+                  <div className="mb-2.5 flex items-center gap-2 text-xs font-bold text-ink-700">
+                    <Radio size={13} className="text-ink-400" /> Recent matches
+                  </div>
+                  <div className="flex flex-col gap-1.5">
+                    {matches.slice(0, 8).map((m) => {
+                      const teamA = teams.find((t) => t.id === m.team_a_id);
+                      const teamB = teams.find((t) => t.id === m.team_b_id);
+                      return (
+                        <div key={m.id} className="rounded-lg bg-white px-3 py-2 text-xs text-ink-600 ring-1 ring-ink-100">
+                          <span className="font-semibold text-ink-800">{teamA ? teamLabel(teamA) : '—'}</span> vs{' '}
+                          <span className="font-semibold text-ink-800">{teamB ? teamLabel(teamB) : '—'}</span> — {m.score_a}–{m.score_b}
+                          {m.court ? ` · Court ${m.court}` : ''}
+                          {m.umpire_name ? ` · ${m.umpire_name}` : ''}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function BracketsPage() {
@@ -49,33 +145,22 @@ export default function BracketsPage() {
   const [event, setEvent] = useState(null);
   const [categories, setCategories] = useState([]);
   const [registrations, setRegistrations] = useState([]);
-  const [umpires, setUmpires] = useState([]);
   const [activeCatIdx, setActiveCatIdx] = useState(0);
   const [brackets, setBrackets] = useState([]);
-  const [activeBracketIdx, setActiveBracketIdx] = useState(0);
-  const [teams, setTeams] = useState([]);
-  const [matches, setMatches] = useState([]);
+  const [bracketData, setBracketData] = useState({});
+  const [expandedIds, setExpandedIds] = useState(new Set());
   const [liveMatches, setLiveMatches] = useState([]);
   const [bracketProgress, setBracketProgress] = useState([]);
   const [randomizerOpen, setRandomizerOpen] = useState(false);
   const [loadingBrackets, setLoadingBrackets] = useState(false);
 
-  const [panelMode, setPanelMode] = useState('start');
-  const [teamAId, setTeamAId] = useState('');
-  const [teamBId, setTeamBId] = useState('');
-  const [scoreA, setScoreA] = useState('11');
-  const [scoreB, setScoreB] = useState('7');
-  const [court, setCourt] = useState('');
-  const [umpireName, setUmpireName] = useState('');
-
   const now = useNow(1000);
 
   useEffect(() => {
-    Promise.all([getEventById(eventId), listCategories(eventId), listUmpires(eventId)])
-      .then(([ev, cats, ump]) => {
+    Promise.all([getEventById(eventId), listCategories(eventId)])
+      .then(([ev, cats]) => {
         setEvent(ev);
         setCategories(cats);
-        setUmpires(ump);
       })
       .catch((e) => pushToast(e.message, 'error'));
   }, [eventId, pushToast]);
@@ -102,10 +187,15 @@ export default function BracketsPage() {
       const [bkts, regs] = await Promise.all([listBracketsForCategory(activeCategory.id), listRegistrations(eventId)]);
       // The knockout ladder (if any) lives in its own 'playoff' bracket and
       // is played out from Match List instead — see PlayoffStagesEditor /
-      // MatchListPage's Playoffs panel. Only pool brackets get a tab here.
-      setBrackets(bkts.filter((b) => b.kind !== 'playoff'));
+      // MatchListPage's Playoffs panel. Only pool brackets show here.
+      const poolBrackets = bkts.filter((b) => b.kind !== 'playoff');
+      setBrackets(poolBrackets);
+      setBracketData({});
+      // All pools start expanded — the point of the accordion is to let the
+      // organizer collapse the ones they don't need right now, not to hide
+      // everything by default the way a brand-new category would.
+      setExpandedIds(new Set(poolBrackets.map((b) => b.id)));
       setRegistrations(regs.filter((r) => r.category_id === activeCategory.id && r.status === 'approved'));
-      setActiveBracketIdx(0);
     } catch (e) {
       pushToast(e.message, 'error');
     } finally {
@@ -124,10 +214,10 @@ export default function BracketsPage() {
     }
     try {
       const progress = await getBracketProgressForCategory(activeCategory.id);
-      // This page only ever shows pool-bracket tabs (see loadBrackets above)
-      // — exclude the playoff bracket here too, or its match counts silently
-      // bleed into this page's "Category progress" ETA with no tab to
-      // explain the stray "Bracket PO" chip that appears alongside it.
+      // This page only ever shows pool brackets (see loadBrackets above) —
+      // exclude the playoff bracket here too, or its match counts silently
+      // bleed into this page's "Category progress" ETA with no section to
+      // explain the stray "Bracket PO" entry that appears alongside it.
       setBracketProgress(progress.filter((b) => b.kind !== 'playoff'));
     } catch (e) {
       pushToast(e.message, 'error');
@@ -138,51 +228,41 @@ export default function BracketsPage() {
     loadBracketProgress();
   }, [loadBracketProgress]);
 
-  const activeBracket = brackets[activeBracketIdx];
-
-  const loadBracketDetail = useCallback(async () => {
-    if (!activeBracket) {
-      setTeams([]);
-      setMatches([]);
-      return;
-    }
+  // Every pool's standings + recent matches load together (not lazily per
+  // section) since all of them start expanded — staggering it in per
+  // section would just mean each one flashes "Loading…" independently.
+  const loadAllBracketDetails = useCallback(async () => {
+    if (brackets.length === 0) return;
     try {
-      const [t, m] = await Promise.all([listTeamsForBracket(activeBracket.id), listMatchesForBracket(activeBracket.id)]);
-      setTeams(t);
-      setMatches(m);
+      const entries = await Promise.all(
+        brackets.map(async (b) => {
+          const [teams, matches] = await Promise.all([listTeamsForBracket(b.id), listMatchesForBracket(b.id)]);
+          return [b.id, { teams, matches }];
+        })
+      );
+      setBracketData(Object.fromEntries(entries));
     } catch (e) {
       pushToast(e.message, 'error');
     }
-  }, [activeBracket, pushToast]);
+  }, [brackets, pushToast]);
 
   useEffect(() => {
-    loadBracketDetail();
-  }, [loadBracketDetail]);
+    loadAllBracketDetails();
+  }, [loadAllBracketDetails]);
 
-  useEffect(() => {
-    setTeamAId('');
-    setTeamBId('');
-  }, [activeBracket]);
-
-  const rankedTeams = useMemo(() => rankTeams(teams), [teams]);
-
-  // A match can only go live if a court is free — capped by the event's
-  // configured court count (Settings page), minus courts already in use.
-  const numCourts = event?.num_courts ?? 4;
-  const availableCourts = useMemo(() => {
-    const occupied = new Set(liveMatches.map((m) => m.court).filter(Boolean));
-    return Array.from({ length: numCourts }, (_, i) => i + 1).filter((c) => !occupied.has(c));
-  }, [numCourts, liveMatches]);
-
-  // An umpire already officiating a live match can't be double-booked onto another.
-  const availableUmpires = useMemo(() => {
-    const occupied = new Set(liveMatches.map((m) => m.umpire_name).filter(Boolean));
-    return umpires.filter((u) => !occupied.has(u.name));
-  }, [umpires, liveMatches]);
+  const toggleBracket = (id) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   // Matches run numCourts-at-a-time, not one after another, so the ETA
   // divides the remaining count across all courts before multiplying by
   // the per-match duration.
+  const numCourts = event?.num_courts ?? 4;
   const categoryProgress = useMemo(() => {
     const totalMatches = bracketProgress.reduce((sum, b) => sum + b.totalMatches, 0);
     const completed = bracketProgress.reduce((sum, b) => sum + b.completedCount, 0);
@@ -201,44 +281,6 @@ export default function BracketsPage() {
       pushToast('Brackets drawn', 'success');
       setRandomizerOpen(false);
       await Promise.all([loadBrackets(), loadLiveMatches(), loadBracketProgress()]);
-    } catch (e) {
-      pushToast(e.message, 'error');
-    }
-  };
-
-  const handleStartMatch = async () => {
-    if (!teamAId || !teamBId || teamAId === teamBId) {
-      pushToast('Select two different teams', 'error');
-      return;
-    }
-    if (!court) {
-      pushToast('Select a court', 'error');
-      return;
-    }
-    if (!umpireName) {
-      pushToast('Select an umpire', 'error');
-      return;
-    }
-    if (isTeamLive(liveMatches, teamAId) || isTeamLive(liveMatches, teamBId)) {
-      pushToast('One of these teams already has a match in progress', 'error');
-      return;
-    }
-    if (hasPlayed(matches, teamAId, teamBId)) {
-      pushToast('These teams already played each other', 'error');
-      return;
-    }
-    try {
-      await startMatch({
-        bracket_id: activeBracket.id,
-        team_a_id: teamAId,
-        team_b_id: teamBId,
-        court: court ? parseInt(court, 10) : null,
-        umpire_name: umpireName || null,
-      });
-      pushToast('Match started', 'success');
-      setTeamAId('');
-      setTeamBId('');
-      await Promise.all([loadBracketDetail(), loadLiveMatches()]);
     } catch (e) {
       pushToast(e.message, 'error');
     }
@@ -292,7 +334,7 @@ export default function BracketsPage() {
       duration_minutes: Math.max(1, Math.round(elapsedSeconds / 60)),
     });
     pushToast('Match recorded', 'success');
-    await Promise.all([loadBracketDetail(), loadLiveMatches(), loadBracketProgress()]);
+    await Promise.all([loadAllBracketDetails(), loadLiveMatches(), loadBracketProgress()]);
   };
 
   const handleRedrawClick = async () => {
@@ -305,52 +347,11 @@ export default function BracketsPage() {
     setRandomizerOpen(true);
   };
 
-  const handleRecordMatch = async () => {
-    if (!teamAId || !teamBId || teamAId === teamBId) {
-      pushToast('Select two different teams', 'error');
-      return;
-    }
-    const sA = parseInt(scoreA, 10);
-    const sB = parseInt(scoreB, 10);
-    if (Number.isNaN(sA) || Number.isNaN(sB) || sA < 0 || sB < 0) {
-      pushToast('Enter valid, non-negative scores', 'error');
-      return;
-    }
-    if (sA === sB) {
-      pushToast('Ties are not allowed', 'error');
-      return;
-    }
-    if (hasPlayed(matches, teamAId, teamBId)) {
-      pushToast('These teams already played each other', 'error');
-      return;
-    }
-    try {
-      await recordMatch({
-        bracket_id: activeBracket.id,
-        team_a_id: teamAId,
-        team_b_id: teamBId,
-        score_a: sA,
-        score_b: sB,
-        winner_team_id: sA > sB ? teamAId : teamBId,
-        court: court ? parseInt(court, 10) : null,
-        umpire_name: umpireName || null,
-      });
-      pushToast('Match recorded', 'success');
-      setTeamAId('');
-      setTeamBId('');
-      setScoreA('11');
-      setScoreB('7');
-      await Promise.all([loadBracketDetail(), loadBracketProgress()]);
-    } catch (e) {
-      pushToast(e.message, 'error');
-    }
-  };
-
   return (
     <EventWorkspaceLayout eventName={event?.name}>
       <div className="mb-6">
         <h1 className="font-display text-2xl font-bold text-ink-900">Brackets</h1>
-        <p className="text-sm text-ink-500">Draw brackets from approved players and record match results</p>
+        <p className="text-sm text-ink-500">Draw brackets from approved players and track pool standings</p>
       </div>
 
       {!event ? (
@@ -411,19 +412,7 @@ export default function BracketsPage() {
           ) : (
             <>
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap gap-2">
-                  {brackets.map((b, i) => (
-                    <button
-                      key={b.id}
-                      onClick={() => setActiveBracketIdx(i)}
-                      className={`rounded-full px-3.5 py-1.5 text-xs font-bold transition ${
-                        i === activeBracketIdx ? 'bg-brand-600 text-white' : 'bg-white text-ink-600 ring-1 ring-ink-200 hover:bg-ink-50'
-                      }`}
-                    >
-                      Bracket {b.letter}
-                    </button>
-                  ))}
-                </div>
+                <h2 className="text-sm font-bold text-ink-800">Pools</h2>
                 {canRedraw && (
                   <button
                     onClick={handleRedrawClick}
@@ -456,231 +445,19 @@ export default function BracketsPage() {
                 </div>
               )}
 
-              <div className="overflow-hidden rounded-2xl border border-ink-100 bg-white shadow-sm">
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[640px] text-sm">
-                    <thead>
-                      <tr className="border-b-2 border-ink-100 text-[11px] font-bold uppercase tracking-wide text-ink-400">
-                        <th className="px-3 py-2.5 text-center">Rank</th>
-                        <th className="px-3 py-2.5 text-left">Team</th>
-                        <th className="px-3 py-2.5 text-left">Club</th>
-                        <th className="px-3 py-2.5 text-center">W</th>
-                        <th className="px-3 py-2.5 text-center">L</th>
-                        <th className="px-3 py-2.5 text-center">RF</th>
-                        <th className="px-3 py-2.5 text-center">RA</th>
-                        <th className="px-3 py-2.5 text-center">Diff</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {rankedTeams.map((t) => (
-                        <tr key={t.id} className={`border-b border-ink-50 ${t.rank === 1 ? 'bg-amber-50/70' : ''}`}>
-                          <td className="px-3 py-2.5 text-center">
-                            <span className={`inline-flex h-6 min-w-6 items-center justify-center gap-0.5 rounded-full px-1.5 text-xs font-extrabold ${t.rank === 1 ? 'bg-amber-400 text-amber-950' : 'bg-ink-100 text-ink-600'}`}>
-                              {t.rank === 1 && <Crown size={11} />}
-                              {t.rank}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2.5 font-semibold text-ink-800">{teamLabel(t)}</td>
-                          <td className="px-3 py-2.5 text-ink-500">{t.club_name || '—'}</td>
-                          <td className="px-3 py-2.5 text-center font-mono">{t.wins}</td>
-                          <td className="px-3 py-2.5 text-center font-mono">{t.losses}</td>
-                          <td className="px-3 py-2.5 text-center font-mono">{t.points_for}</td>
-                          <td className="px-3 py-2.5 text-center font-mono">{t.points_against}</td>
-                          <td className={`px-3 py-2.5 text-center font-mono font-bold ${t.diff >= 0 ? 'text-brand-600' : 'text-rose-600'}`}>
-                            {t.diff >= 0 ? `+${t.diff}` : t.diff}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                <div className="border-t border-ink-100 bg-ink-50/60 p-4">
-                  <div className="mb-3 inline-flex rounded-full bg-white p-1 ring-1 ring-ink-200">
-                    <button
-                      onClick={() => setPanelMode('start')}
-                      className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-bold transition ${
-                        panelMode === 'start' ? 'bg-ink-900 text-white' : 'text-ink-500 hover:text-ink-800'
-                      }`}
-                    >
-                      <Play size={12} /> Start match
-                    </button>
-                    <button
-                      onClick={() => setPanelMode('log')}
-                      className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-bold transition ${
-                        panelMode === 'log' ? 'bg-ink-900 text-white' : 'text-ink-500 hover:text-ink-800'
-                      }`}
-                    >
-                      <Trophy size={12} /> Log score directly
-                    </button>
-                  </div>
-
-                  {panelMode === 'start' ? (
-                    <>
-                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
-                        <div className="col-span-2">
-                          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Team A</label>
-                          <Select value={teamAId} onChange={(e) => setTeamAId(e.target.value)} className={inputClass}>
-                            <option value="" disabled>
-                              Select team
-                            </option>
-                            {teams.map((t) => (
-                              <option
-                                key={t.id}
-                                value={t.id}
-                                disabled={t.id === teamBId || hasPlayed(matches, t.id, teamBId) || isTeamLive(liveMatches, t.id)}
-                              >
-                                {teamLabel(t)}
-                                {isTeamLive(liveMatches, t.id) ? ' (playing)' : ''}
-                              </option>
-                            ))}
-                          </Select>
-                        </div>
-                        <div className="col-span-2">
-                          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Team B</label>
-                          <Select value={teamBId} onChange={(e) => setTeamBId(e.target.value)} className={inputClass}>
-                            <option value="" disabled>
-                              Select team
-                            </option>
-                            {teams.map((t) => (
-                              <option
-                                key={t.id}
-                                value={t.id}
-                                disabled={t.id === teamAId || hasPlayed(matches, t.id, teamAId) || isTeamLive(liveMatches, t.id)}
-                              >
-                                {teamLabel(t)}
-                                {isTeamLive(liveMatches, t.id) ? ' (playing)' : ''}
-                              </option>
-                            ))}
-                          </Select>
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Court</label>
-                          <Select value={court} onChange={(e) => setCourt(e.target.value)} className={inputClass}>
-                            <option value="" disabled>
-                              {availableCourts.length === 0 ? 'No courts free' : 'Select court'}
-                            </option>
-                            {availableCourts.map((c) => (
-                              <option key={c} value={c}>
-                                Court {c}
-                              </option>
-                            ))}
-                          </Select>
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Umpire</label>
-                          <Select value={umpireName} onChange={(e) => setUmpireName(e.target.value)} className={inputClass}>
-                            <option value="" disabled>
-                              {availableUmpires.length === 0 ? 'No umpires available' : 'Select umpire'}
-                            </option>
-                            {availableUmpires.map((u) => (
-                              <option key={u.id} value={u.name}>
-                                {u.name}
-                              </option>
-                            ))}
-                          </Select>
-                        </div>
-                      </div>
-                      <button
-                        onClick={handleStartMatch}
-                        disabled={availableCourts.length === 0 || availableUmpires.length === 0}
-                        title={
-                          availableCourts.length === 0
-                            ? 'All courts are in use'
-                            : availableUmpires.length === 0
-                              ? 'No umpires available'
-                              : undefined
-                        }
-                        className="mt-3 flex items-center gap-1.5 rounded-xl bg-brand-600 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        <Play size={13} /> Start match
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
-                        <div className="col-span-2">
-                          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Team A</label>
-                          <Select value={teamAId} onChange={(e) => setTeamAId(e.target.value)} className={inputClass}>
-                            <option value="" disabled>
-                              Select team
-                            </option>
-                            {teams.map((t) => (
-                              <option key={t.id} value={t.id} disabled={t.id === teamBId || hasPlayed(matches, t.id, teamBId)}>
-                                {teamLabel(t)}
-                              </option>
-                            ))}
-                          </Select>
-                        </div>
-                        <div className="col-span-2">
-                          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Team B</label>
-                          <Select value={teamBId} onChange={(e) => setTeamBId(e.target.value)} className={inputClass}>
-                            <option value="" disabled>
-                              Select team
-                            </option>
-                            {teams.map((t) => (
-                              <option key={t.id} value={t.id} disabled={t.id === teamAId || hasPlayed(matches, t.id, teamAId)}>
-                                {teamLabel(t)}
-                              </option>
-                            ))}
-                          </Select>
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Score A</label>
-                          <input type="number" value={scoreA} onChange={(e) => setScoreA(e.target.value)} className={`${inputClass} text-center`} />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Score B</label>
-                          <input type="number" value={scoreB} onChange={(e) => setScoreB(e.target.value)} className={`${inputClass} text-center`} />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Court</label>
-                          <input type="number" min={1} value={court} onChange={(e) => setCourt(e.target.value)} className={inputClass} />
-                        </div>
-                        <div>
-                          <label className="mb-1 block text-[10px] font-bold uppercase tracking-wide text-ink-400">Umpire</label>
-                          <Select value={umpireName} onChange={(e) => setUmpireName(e.target.value)} className={inputClass}>
-                            <option value="">None</option>
-                            {umpires.map((u) => (
-                              <option key={u.id} value={u.name}>
-                                {u.name}
-                              </option>
-                            ))}
-                          </Select>
-                        </div>
-                      </div>
-                      <button
-                        onClick={handleRecordMatch}
-                        className="mt-3 flex items-center gap-1.5 rounded-xl bg-ink-900 px-4 py-2.5 text-xs font-bold text-white shadow-sm transition hover:bg-ink-800"
-                      >
-                        <Trophy size={13} /> Record match
-                      </button>
-                    </>
-                  )}
-                </div>
+              <div className="flex flex-col gap-3">
+                {brackets.map((b) => (
+                  <BracketSection
+                    key={b.id}
+                    bracket={b}
+                    progress={bracketProgress.find((p) => p.bracket_id === b.id)}
+                    expanded={expandedIds.has(b.id)}
+                    onToggle={() => toggleBracket(b.id)}
+                    teams={bracketData[b.id]?.teams}
+                    matches={bracketData[b.id]?.matches || []}
+                  />
+                ))}
               </div>
-
-              {matches.length > 0 && (
-                <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
-                  <div className="mb-3 flex items-center gap-2 text-sm font-bold text-ink-800">
-                    <Radio size={14} className="text-ink-400" /> Recent matches
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    {matches.slice(0, 8).map((m) => {
-                      const teamA = teams.find((t) => t.id === m.team_a_id);
-                      const teamB = teams.find((t) => t.id === m.team_b_id);
-                      return (
-                        <div key={m.id} className="rounded-xl bg-ink-50 px-3 py-2 text-xs text-ink-600">
-                          <span className="font-semibold text-ink-800">{teamA ? teamLabel(teamA) : '—'}</span> vs{' '}
-                          <span className="font-semibold text-ink-800">{teamB ? teamLabel(teamB) : '—'}</span> — {m.score_a}–{m.score_b}
-                          {m.court ? ` · Court ${m.court}` : ''}
-                          {m.umpire_name ? ` · ${m.umpire_name}` : ''}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
             </>
           )}
         </div>
@@ -691,10 +468,12 @@ export default function BracketsPage() {
           category={activeCategory}
           registrations={registrations}
           hasExistingBrackets={brackets.length > 0}
+          allowSameClub={!!event.randomizer_allow_same_club}
           onConfirm={handleGenerate}
           onClose={() => setRandomizerOpen(false)}
         />
       )}
+
     </EventWorkspaceLayout>
   );
 }

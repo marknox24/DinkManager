@@ -122,9 +122,48 @@ export async function getEventById(eventId) {
 }
 
 export async function getPublicEventBySlug(slug) {
-  const { data, error } = await supabase.from('events').select('*').eq('slug', slug).eq('is_published', true).single();
+  const { data, error } = await supabase.from('events').select('*').eq('slug', slug).eq('is_published', true).eq('visibility', 'public').single();
   if (error) throw error;
   return data;
+}
+
+// Resolves a private event via its secret share link instead of its slug —
+// visibility is irrelevant here since the token itself is the credential.
+export async function getPublicEventByShareToken(token) {
+  const { data, error } = await supabase.from('events').select('*').eq('share_token', token).eq('is_published', true).single();
+  if (error) throw error;
+  return data;
+}
+
+// Cross-organizer feed for the public /tournaments browse page. Anyone
+// (anonymous) can call this — the same RLS policy that already lets anon
+// read a single published event by slug lets this read the full public set.
+// Excludes cancelled events (nothing to register for) but keeps finished
+// ones visible, de-emphasized via StatusBadge rather than hidden outright.
+// Also excludes events organized by a trial account (profiles.access_expires_at
+// set) — a player/anonymous caller can't read another account's profile row
+// directly, so that filter runs server-side via the public_published_events()
+// security-definer function rather than a client-side join.
+export async function getPublishedEvents() {
+  const { data, error } = await supabase.rpc('public_published_events');
+  if (error) throw error;
+  return data;
+}
+
+// Toggles an event public/private. Switching to private for the first time
+// mints a share token (kept stable across later toggles so a link the
+// organizer already sent out keeps working).
+export async function setEventVisibility(eventId, visibility, existingToken) {
+  const patch = { visibility };
+  if (visibility === 'private' && !existingToken) {
+    patch.share_token = crypto.randomUUID();
+  }
+  return updateEvent(eventId, patch);
+}
+
+// Rotates the share link, invalidating the old one immediately.
+export async function regenerateShareToken(eventId) {
+  return updateEvent(eventId, { share_token: crypto.randomUUID() });
 }
 
 // ---------------------------------------------------------------------------
@@ -252,6 +291,21 @@ export async function updateRegistrationStatus(registrationId, status) {
 export async function updateRegistration(registrationId, patch) {
   const { data, error } = await supabase.from('registrations').update(patch).eq('id', registrationId).select('*, categories(name)').single();
   if (error) throw error;
+
+  // Once a bracket is drawn, `teams.player1_name`/`player2_name` are their
+  // own copy captured at draw time (see generateBrackets in bracketsApi.js)
+  // rather than a live reference back to this registration — without this,
+  // a post-draw name correction (a typo fix) would silently never reach
+  // standings, the match list, live match cards, or printable score sheets.
+  // No-ops harmlessly if no team was ever drawn for this registration.
+  if ('player_name' in patch || 'player2_name' in patch) {
+    const { error: teamErr } = await supabase
+      .from('teams')
+      .update({ player1_name: data.player_name, player2_name: data.player2_name })
+      .eq('registration_id', registrationId);
+    if (teamErr) throw teamErr;
+  }
+
   return data;
 }
 
@@ -506,6 +560,73 @@ export function getEventMediaUrl(path) {
   if (!path) return null;
   const { data } = supabase.storage.from('event-media').getPublicUrl(path);
   return data.publicUrl;
+}
+
+// ---------------------------------------------------------------------------
+// SUBSCRIPTION REQUESTS  (manual/QR payment flow — see supabase/schema.sql's
+// "SUBSCRIPTION REQUESTS" section and supabase/functions/approve-subscription-request)
+// ---------------------------------------------------------------------------
+export async function uploadSubscriptionProof(file) {
+  const path = `${Date.now()}-${slugify(file.name)}`;
+  const { error } = await supabase.storage.from('subscription-proofs').upload(path, file);
+  if (error) throw error;
+  return { path };
+}
+
+export async function getSubscriptionProofUrl(path) {
+  const { data, error } = await supabase.storage.from('subscription-proofs').createSignedUrl(path, 60 * 5);
+  if (error) throw error;
+  return data.signedUrl;
+}
+
+// No .select() here deliberately — an anonymous submitter has no SELECT
+// policy on subscription_requests (only subscription_requests_select_admin
+// exists), and Postgres rejects the whole INSERT when a RETURNING clause
+// can't satisfy that row's SELECT policy, not just the returned data. The
+// caller doesn't use the inserted row anyway (see SubscribePage.jsx).
+export async function submitSubscriptionRequest({ email, plan, screenshotPath }) {
+  const { error } = await supabase.from('subscription_requests').insert({ email, plan, screenshot_path: screenshotPath });
+  if (error) throw error;
+}
+
+export async function listSubscriptionRequests() {
+  const { data, error } = await supabase.from('subscription_requests').select('*').order('created_at', { ascending: false });
+  if (error) throw error;
+  return data;
+}
+
+export async function rejectSubscriptionRequest(requestId, adminNote) {
+  const { data, error } = await supabase
+    .from('subscription_requests')
+    .update({ status: 'rejected', admin_note: adminNote || null, resolved_at: new Date().toISOString() })
+    .eq('id', requestId)
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// APP SETTINGS  (platform-wide singleton row — currently just the one
+// payment QR image shown on /subscribe/:plan)
+// ---------------------------------------------------------------------------
+export async function getAppSettings() {
+  const { data, error } = await supabase.from('app_settings').select('*').eq('id', true).single();
+  if (error) throw error;
+  return data;
+}
+
+// Stored in the existing public event-media bucket under a reserved
+// 'platform/' path (see the event_media_admin_write storage policy) rather
+// than a new bucket, since it needs to be publicly viewable by anonymous
+// visitors the same way event cover photos already are.
+export async function uploadPaymentQr(file) {
+  const path = `platform/${Date.now()}-${slugify(file.name)}`;
+  const { error } = await supabase.storage.from('event-media').upload(path, file, { upsert: true });
+  if (error) throw error;
+  const { data, error: updateErr } = await supabase.from('app_settings').update({ payment_qr_path: path }).eq('id', true).select().single();
+  if (updateErr) throw updateErr;
+  return data;
 }
 
 // ---------------------------------------------------------------------------

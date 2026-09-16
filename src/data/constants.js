@@ -49,6 +49,12 @@ export const CURRENCIES = [
 
 export const CONTACT_TYPES = ['Phone', 'Email', 'Website'];
 
+export const COURT_TYPES = [
+  { value: 'indoor', label: 'Indoor' },
+  { value: 'outdoor', label: 'Outdoor' },
+  { value: 'mixed', label: 'Mixed indoor & outdoor' },
+];
+
 // Order matters here — it's the display/sort order everywhere sponsors are
 // grouped or listed (highest tier first, "regular" last since it carries no
 // medal).
@@ -67,6 +73,19 @@ export const EXPENSE_CATEGORIES = [
   'Staff & Officials',
   'Marketing',
   'Other',
+];
+
+// Quick-add suggestions for a category's qualification checklist — organizers
+// can still type any custom label, these just save typing for the common ones.
+export const QUALIFICATION_LABEL_PRESETS = [
+  'DUPR Requirement',
+  'Age Requirement',
+  'Gender Requirement',
+  'Location / Club Restriction',
+  'Previous Podium Restriction',
+  'Player Rating Restriction',
+  'Partner Requirement',
+  'Team / Pair Requirement',
 ];
 
 export const REGISTRATION_FIELD_TYPES = [

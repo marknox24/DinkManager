@@ -14,6 +14,13 @@ function teamLabel(reg) {
   return reg.player2_name ? `${reg.player_name} & ${reg.player2_name}` : reg.player_name;
 }
 
+// Full name(s) plus club, shown consistently everywhere a team appears in
+// this modal (the shuffling pool, the live callout, each bracket filling up,
+// and the final result) — not just the result screen.
+function teamLabelWithClub(reg) {
+  return reg.club_name ? `${teamLabel(reg)} · ${reg.club_name}` : teamLabel(reg);
+}
+
 const BRACKET_GRID_COLS = {
   2: 'sm:grid-cols-2',
   3: 'sm:grid-cols-3',
@@ -31,7 +38,10 @@ const BRACKET_COLORS = [
   'border-teal-300 bg-teal-50/60 text-teal-700',
 ];
 
-export default function RandomizerModal({ category, registrations, hasExistingBrackets, onConfirm, onClose }) {
+// allowSameClub is a per-event preference set on the Settings page (Club
+// separation), not a per-run modal option — passed straight through to
+// drawBrackets rather than re-chosen here.
+export default function RandomizerModal({ category, registrations, hasExistingBrackets, allowSameClub, onConfirm, onClose }) {
   const { pushToast } = useToast();
   const [numBrackets, setNumBrackets] = useState(suggestBracketCount(registrations.length));
   const [phase, setPhase] = useState('config'); // config | shuffling | drawing | complete | result
@@ -67,7 +77,7 @@ export default function RandomizerModal({ category, registrations, hasExistingBr
   const runLiveDraw = async () => {
     cancelledRef.current = false; // a fresh draw is never cancelled, even if StrictMode's
     // mount-simulation flipped this during an earlier dev double-render.
-    const fullGrouping = drawBrackets(registrations, numBrackets);
+    const fullGrouping = drawBrackets(registrations, numBrackets, { allowSameClub });
     const order = flattenDrawOrder(fullGrouping);
     const { chaseMs, landingMs } = drawTimings(order.length);
 
@@ -222,7 +232,7 @@ export default function RandomizerModal({ category, registrations, hasExistingBr
               <div key={callout.reg.id} className="animate-modal-in flex items-center justify-center gap-2 rounded-xl bg-amber-50 px-4 py-3 text-center">
                 <Sparkles size={16} className="shrink-0 text-amber-500" />
                 <span className="text-sm font-bold text-amber-900">
-                  {teamLabel(callout.reg)} <span className="font-normal text-amber-700">goes to</span> Bracket {callout.letter}!
+                  {teamLabelWithClub(callout.reg)} <span className="font-normal text-amber-700">goes to</span> Bracket {callout.letter}!
                 </span>
               </div>
             )}
@@ -246,7 +256,7 @@ export default function RandomizerModal({ category, registrations, hasExistingBr
                       spot ? 'scale-110 bg-brand-600 text-white shadow-lg shadow-brand-600/40' : 'bg-white text-ink-600 shadow-sm'
                     }`}
                   >
-                    {teamLabel(reg)}
+                    {teamLabelWithClub(reg)}
                   </span>
                 );
               })}
@@ -268,7 +278,7 @@ export default function RandomizerModal({ category, registrations, hasExistingBr
                     .filter((p) => p.letter === letter)
                     .map((p) => (
                       <div key={p.reg.id} className="animate-modal-in truncate rounded-lg bg-white/80 px-2 py-1 text-[11px] font-medium">
-                        {teamLabel(p.reg)}
+                        {teamLabelWithClub(p.reg)}
                       </div>
                     ))}
                 </div>
@@ -312,10 +322,7 @@ export default function RandomizerModal({ category, registrations, hasExistingBr
                         <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-ink-100 text-[9px] font-bold text-ink-500">
                           {i + 1}
                         </span>
-                        <span className="truncate">
-                          {teamLabel(reg)}
-                          {reg.club_name && <span className="text-ink-400"> · {reg.club_name}</span>}
-                        </span>
+                        <span className="truncate">{teamLabelWithClub(reg)}</span>
                       </div>
                     ))}
                   </div>

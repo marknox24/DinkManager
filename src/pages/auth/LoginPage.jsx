@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { LogIn, ShieldCheck } from 'lucide-react';
+import { Eye, EyeOff, LogIn, ShieldCheck } from 'lucide-react';
 import Logo from '../../components/ui/Logo';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
+import { supabase } from '../../lib/supabaseClient';
 import AuthSplitLayout from '../../components/auth/AuthSplitLayout';
 import RoleToggle from '../../components/auth/RoleToggle';
-import SocialLoginButtons from '../../components/auth/SocialLoginButtons';
+import SocialLoginButtons, { SOCIAL_LOGIN_ENABLED } from '../../components/auth/SocialLoginButtons';
 
 const REMEMBER_KEY = 'dinkmanager_remembered_organizer_email';
 
@@ -18,6 +19,7 @@ export default function LoginPage() {
   const [step, setStep] = useState('credentials');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [mfaCode, setMfaCode] = useState('');
@@ -28,13 +30,27 @@ export default function LoginPage() {
     if (saved) setEmail(saved);
   }, []);
 
-  const finishLogin = () => {
+  const finishLogin = async () => {
     if (rememberMe) {
       localStorage.setItem(REMEMBER_KEY, email);
     } else {
       localStorage.removeItem(REMEMBER_KEY);
     }
-    navigate(location.state?.from?.pathname || '/dashboard', { replace: true });
+    // A specific deep link (e.g. an event page) always wins — only decide
+    // by account type when there's nowhere more specific to send them.
+    const from = location.state?.from?.pathname;
+    if (from) {
+      navigate(from, { replace: true });
+      return;
+    }
+    // AuthContext's own profile fetch is async and may not have resolved
+    // yet at this exact moment, so this reads is_admin directly rather than
+    // risking a stale/not-yet-loaded value from useAuth().
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    const { data: prof } = await supabase.from('profiles').select('is_admin').eq('id', user.id).maybeSingle();
+    navigate(prof?.is_admin ? '/admin/customers' : '/dashboard', { replace: true });
   };
 
   const handleSubmit = async (e) => {
@@ -64,7 +80,7 @@ export default function LoginPage() {
       return;
     }
     setSubmitting(false);
-    finishLogin();
+    await finishLogin();
   };
 
   const handleVerifyMfa = async (e) => {
@@ -76,7 +92,7 @@ export default function LoginPage() {
       const { error: verifyError } = await mfaVerify(mfaFactorId, challenge.id, mfaCode);
       if (verifyError) throw verifyError;
       await refreshAal();
-      finishLogin();
+      await finishLogin();
     } catch (err) {
       pushToast(err.message, 'error');
     } finally {
@@ -95,6 +111,9 @@ export default function LoginPage() {
     <AuthSplitLayout>
       {step === 'credentials' ? (
         <>
+          <Link to="/" className="mb-4 inline-flex w-fit items-center gap-1 text-xs font-semibold text-ink-500 hover:text-ink-800">
+            ← Back to website
+          </Link>
           <div className="mb-6 flex flex-col items-center text-center">
             <Logo size={44} />
             <h1 className="mt-3 font-display text-xl font-bold text-ink-900">Welcome back</h1>
@@ -121,13 +140,24 @@ export default function LoginPage() {
                   Forgot password?
                 </Link>
               </div>
-              <input
-                type="password"
-                required
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
-              />
+              <div className="relative">
+                <input
+                  type={showPassword ? 'text' : 'password'}
+                  required
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 pr-10 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((v) => !v)}
+                  tabIndex={-1}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-ink-400 hover:text-ink-600"
+                >
+                  {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                </button>
+              </div>
             </div>
             <label className="flex items-center gap-2 text-sm text-ink-600">
               <input
@@ -147,12 +177,16 @@ export default function LoginPage() {
             </button>
           </form>
 
-          <div className="my-5 flex items-center gap-3">
-            <div className="h-px flex-1 bg-ink-100" />
-            <span className="text-xs font-semibold text-ink-400">Or continue with</span>
-            <div className="h-px flex-1 bg-ink-100" />
-          </div>
-          <SocialLoginButtons role="organizer" />
+          {SOCIAL_LOGIN_ENABLED && (
+            <>
+              <div className="my-5 flex items-center gap-3">
+                <div className="h-px flex-1 bg-ink-100" />
+                <span className="text-xs font-semibold text-ink-400">Or continue with</span>
+                <div className="h-px flex-1 bg-ink-100" />
+              </div>
+              <SocialLoginButtons role="organizer" />
+            </>
+          )}
 
           <p className="mt-5 text-center text-sm text-ink-500">
             New organizer?{' '}

@@ -13,3 +13,10 @@ export function formatDuration(mins) {
   const m = mins % 60;
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
+
+export function formatDateRange(start, end, fallback = 'Dates TBD') {
+  if (!start && !end) return fallback;
+  const fmt = (d) => new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  if (start && end && start !== end) return `${fmt(start)} – ${fmt(end)}`;
+  return fmt(start || end);
+}

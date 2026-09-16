@@ -3,7 +3,7 @@ import { supabase } from '../lib/supabaseClient';
 export async function listMyRegistrations(playerId) {
   const { data, error } = await supabase
     .from('registrations')
-    .select('*, events(name, slug, status), categories(name)')
+    .select('*, events(name, slug, status, visibility, share_token, start_date, end_date, location_address), categories(name)')
     .eq('player_id', playerId)
     .order('created_at', { ascending: false });
   if (error) throw error;

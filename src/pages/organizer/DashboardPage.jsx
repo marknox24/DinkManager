@@ -5,17 +5,12 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { createEvent, getEventMediaUrl, getOnboardingProgress, listMyEvents, listStaffedEvents } from '../../data/eventsApi';
 import { EVENT_PERMISSIONS } from '../../data/permissions';
+import { formatDateRange } from '../../utils/format';
 import OrganizerLayout from '../../components/organizer/OrganizerLayout';
 import StatusBadge from '../../components/organizer/StatusBadge';
 import GettingStartedChecklist from '../../components/organizer/GettingStartedChecklist';
 import WelcomeOnboardingModal from '../../components/organizer/WelcomeOnboardingModal';
-
-function formatDateRange(start, end) {
-  if (!start && !end) return 'Dates TBD';
-  const fmt = (d) => new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-  if (start && end && start !== end) return `${fmt(start)} – ${fmt(end)}`;
-  return fmt(start || end);
-}
+import AccountTypeCard from '../../components/ui/AccountTypeCard';
 
 // Where a staffer's event card should link to — their first granted nav
 // page, since assuming /overview would 404 into the "no access" panel for
@@ -25,7 +20,7 @@ function firstAllowedNavId(staff) {
 }
 
 export default function DashboardPage() {
-  const { user, profile } = useAuth();
+  const { user, profile, accountType } = useAuth();
   const { pushToast } = useToast();
   const navigate = useNavigate();
   const [events, setEvents] = useState(null);
@@ -38,22 +33,34 @@ export default function DashboardPage() {
   const atEventLimit = maxEvents != null && (events?.length ?? 0) >= maxEvents;
 
   useEffect(() => {
-    listMyEvents(user.id)
-      .then((list) => {
-        setEvents(list);
+    // An invited/temp-login account (added as event_staff by another
+    // organizer — see TeamPage.jsx's "Invite a helper") owns zero events of
+    // its own, same as a brand-new solo organizer — but it's already staffed
+    // on at least one event. That's the existing signal reused here to tell
+    // the two apart, rather than a new "onboardingCompleted" field: someone
+    // invited to help with someone else's event should never see "create
+    // your tournament" onboarding, whether it's the one-time welcome modal
+    // (gated on owning AND staffing nothing at all) or the getting-started
+    // checklist (gated on staff-only, since an organizer who owns an event
+    // but hasn't finished setting it up should still see it regardless of
+    // whether they also help staff someone else's event).
+    Promise.all([listMyEvents(user.id), listStaffedEvents(user.id)])
+      .then(([myEvents, staffed]) => {
+        setEvents(myEvents);
+        setStaffedEvents(staffed);
+        const isStaffOnly = myEvents.length === 0 && staffed.length > 0;
         const seenKey = `dm_welcome_seen_${user.id}`;
-        if (list.length === 0 && !localStorage.getItem(seenKey)) {
+        if (myEvents.length === 0 && staffed.length === 0 && !localStorage.getItem(seenKey)) {
           setShowWelcome(true);
           localStorage.setItem(seenKey, '1');
         }
+        if (!isStaffOnly) {
+          getOnboardingProgress(user.id)
+            .then(setProgress)
+            .catch(() => {});
+        }
       })
       .catch((e) => pushToast(e.message, 'error'));
-    listStaffedEvents(user.id)
-      .then(setStaffedEvents)
-      .catch(() => {});
-    getOnboardingProgress(user.id)
-      .then(setProgress)
-      .catch(() => {});
   }, [user.id, pushToast]);
 
   const handleCreate = async () => {
@@ -70,6 +77,9 @@ export default function DashboardPage() {
 
   return (
     <OrganizerLayout>
+      <div className="mb-4">
+        <AccountTypeCard accountType={accountType} />
+      </div>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-bold text-ink-900">Your tournaments</h1>

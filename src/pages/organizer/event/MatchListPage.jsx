@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ChevronDown, Lock, ListOrdered, Pencil, Radio, Sparkles, Timer, Trash2, Trophy } from 'lucide-react';
+import { ChevronDown, FileText, Lock, ListOrdered, Pencil, Printer, Radio, Sparkles, Timer, Trash2, Trophy } from 'lucide-react';
 import { getEventById, listCategories, listUmpires } from '../../../data/eventsApi';
 import {
   cancelLiveMatch,
@@ -26,6 +26,10 @@ import LiveMatchCard from '../../../components/organizer/LiveMatchCard';
 import LogScoreModal from '../../../components/organizer/LogScoreModal';
 import StartMatchModal from '../../../components/organizer/StartMatchModal';
 import PlayoffCrossoverConfirmModal from '../../../components/organizer/PlayoffCrossoverConfirmModal';
+import RoundRobinSheetsModal from '../../../components/organizer/RoundRobinSheetsModal';
+import RoundRobinScoreSheets from '../../../components/organizer/RoundRobinScoreSheets';
+import BlankScoreSheetsModal from '../../../components/organizer/BlankScoreSheetsModal';
+import BlankScoreSheets from '../../../components/organizer/BlankScoreSheets';
 import { useNow } from '../../../hooks/useNow';
 import { formatDuration } from '../../../utils/format';
 import { liveElapsedSeconds, teamLabel } from '../../../utils/match';
@@ -60,6 +64,10 @@ export default function MatchListPage() {
   const [confirmingLevel, setConfirmingLevel] = useState(null);
   const [loggingMatch, setLoggingMatch] = useState(null);
   const [startingMatch, setStartingMatch] = useState(null);
+  const [sheetsPreviewOpen, setSheetsPreviewOpen] = useState(false);
+  const [printingSheets, setPrintingSheets] = useState(false);
+  const [blankPreviewOpen, setBlankPreviewOpen] = useState(false);
+  const [printingBlankCount, setPrintingBlankCount] = useState(null);
   // Rounds where every match is completed default to collapsed so the page
   // stays scannable as a tournament progresses; { [roundNumber]: boolean }
   // overrides that default once the organizer manually opens/closes one.
@@ -170,6 +178,14 @@ export default function MatchListPage() {
     });
     return [...grouped.entries()].sort((a, b) => a[0] - b[0]);
   }, [matches]);
+
+  // Score sheets are Round Robin pool play only (see RoundRobinScoreSheet.jsx)
+  // — never the knockout/playoff stage — and `matches` already carries both,
+  // so this is the one filter every sheet consumer (preview, print) shares.
+  // `matches` is already in the exact order this page displays (round, then
+  // bracket, then match code — see listMatchesForCategory), so no re-sort.
+  const poolMatches = useMemo(() => matches.filter((m) => !m.playoff_stage), [matches]);
+  const canPrintSheets = !!activeCategory && isRoundRobinFormat(activeCategory.format) && poolMatches.length > 0;
 
   const availableCourts = useMemo(() => {
     const occupied = new Set(liveMatches.map((m) => m.court).filter(Boolean));
@@ -315,9 +331,31 @@ export default function MatchListPage() {
 
   return (
     <EventWorkspaceLayout eventName={event?.name}>
-      <div className="mb-5">
-        <h1 className="font-display text-2xl font-bold text-ink-900">Match List</h1>
-        <p className="text-sm text-ink-500">Auto-generate the match schedule for round robin and single elimination categories — and any playoff levels set up after pool play</p>
+      <div className="mb-5 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="font-display text-2xl font-bold text-ink-900">Match List</h1>
+          <p className="text-sm text-ink-500">Auto-generate the match schedule for round robin and single elimination categories — and any playoff levels set up after pool play</p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {canPrintSheets && (
+            <button
+              onClick={() => setSheetsPreviewOpen(true)}
+              title="Preview, print, or download Round Robin score sheets for this category"
+              className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-2 text-xs font-bold text-ink-600 transition hover:bg-ink-100"
+            >
+              <Printer size={14} /> Score Sheets
+            </button>
+          )}
+          {activeCategory?.playoff_enabled && (
+            <button
+              onClick={() => setBlankPreviewOpen(true)}
+              title="Download a blank score sheet template for Quarterfinals, Semifinals, and Finals"
+              className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-2 text-xs font-bold text-ink-600 transition hover:bg-ink-100"
+            >
+              <FileText size={14} /> Blank Template
+            </button>
+          )}
+        </div>
       </div>
 
       {liveMatches.length > 0 && (
@@ -622,6 +660,31 @@ export default function MatchListPage() {
           onConfirm={handleConfirmCrossover}
           onClose={() => setConfirmingLevel(null)}
         />
+      )}
+
+      {sheetsPreviewOpen && (
+        <RoundRobinSheetsModal
+          category={activeCategory}
+          matches={poolMatches}
+          onPrint={() => setPrintingSheets(true)}
+          onClose={() => setSheetsPreviewOpen(false)}
+        />
+      )}
+
+      {printingSheets && (
+        <RoundRobinScoreSheets category={activeCategory} matches={poolMatches} onDone={() => setPrintingSheets(false)} />
+      )}
+
+      {blankPreviewOpen && (
+        <BlankScoreSheetsModal
+          category={activeCategory}
+          onPrint={(count) => setPrintingBlankCount(count)}
+          onClose={() => setBlankPreviewOpen(false)}
+        />
+      )}
+
+      {printingBlankCount != null && (
+        <BlankScoreSheets category={activeCategory} count={printingBlankCount} onDone={() => setPrintingBlankCount(null)} />
       )}
     </EventWorkspaceLayout>
   );

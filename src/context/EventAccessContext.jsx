@@ -48,10 +48,15 @@ export function EventAccessProvider({ eventId, children }) {
   const value = useMemo(() => {
     const isOwner = Boolean(organizerId && organizerId === user.id);
     const isStaff = Boolean(staffRow);
+    // Mirrors has_event_permission()'s expiry gate in schema.sql — checked
+    // client-side too so the nav/UI degrades with a clear message instead
+    // of silently failing every request once the database starts rejecting
+    // them (a temporary login's whole point is that this actually happens).
+    const accessExpired = Boolean(staffRow?.access_expires_at && new Date(staffRow.access_expires_at) <= new Date());
 
     const can = (key) => {
       if (isOwner) return true;
-      if (!key || !staffRow) return false;
+      if (!key || !staffRow || accessExpired) return false;
       const perm = EVENT_PERMISSIONS.find((p) => p.key === key);
       if (!perm) return false;
       return Boolean(staffRow[perm.column]);
@@ -60,7 +65,7 @@ export function EventAccessProvider({ eventId, children }) {
     const allowedNavIds = EVENT_PERMISSIONS.filter((p) => p.navId && can(p.key)).map((p) => p.navId);
     const firstAllowedNavId = isOwner ? 'overview' : allowedNavIds[0] || null;
 
-    return { loading, isOwner, isStaff, staffRow, can, allowedNavIds, firstAllowedNavId };
+    return { loading, isOwner, isStaff, staffRow, can, allowedNavIds, firstAllowedNavId, accessExpired };
   }, [loading, organizerId, staffRow, user.id]);
 
   return <EventAccessContext.Provider value={value}>{children}</EventAccessContext.Provider>;

@@ -1,28 +1,227 @@
 import { useEffect, useState } from 'react';
-import { Check, Copy, KeyRound, MailCheck, Pencil, RefreshCw, Trash2, UserCheck, UserPlus } from 'lucide-react';
+import { Check, Copy, CreditCard, ImageIcon, KeyRound, MailCheck, Pencil, QrCode, RefreshCw, Trash2, UserCheck, UserPlus, XCircle } from 'lucide-react';
 import OrganizerLayout from '../../components/organizer/OrganizerLayout';
 import Modal from '../../components/ui/Modal';
-import FormField, { inputClass } from '../../components/ui/FormField';
+import AccountTypeCard from '../../components/ui/AccountTypeCard';
+import ImageDropzone from '../../components/ui/ImageDropzone';
+import FormField, { inputClass, textareaClass } from '../../components/ui/FormField';
 import { useAuth } from '../../context/AuthContext';
 import { useConfirm } from '../../context/ConfirmContext';
 import { useToast } from '../../context/ToastContext';
 import { supabase } from '../../lib/supabaseClient';
+import { daysLeftLabel, generatePassword } from '../../utils/tempAccess';
+import {
+  getAppSettings,
+  getEventMediaUrl,
+  getSubscriptionProofUrl,
+  listSubscriptionRequests,
+  rejectSubscriptionRequest,
+  uploadPaymentQr,
+} from '../../data/eventsApi';
+import { PLAN_LIMITS } from '../../data/plans';
 
-function daysLeftLabel(expiresAt) {
-  if (!expiresAt) return null;
-  const ms = new Date(expiresAt).getTime() - Date.now();
-  if (ms <= 0) return { text: 'Expired', tone: 'text-rose-600 bg-rose-50' };
-  const days = Math.ceil(ms / (24 * 60 * 60 * 1000));
-  return { text: `${days} day${days === 1 ? '' : 's'} left`, tone: 'text-brand-700 bg-brand-50' };
+function PaymentQrCard() {
+  const { pushToast } = useToast();
+  const [settings, setSettings] = useState(null);
+  const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    getAppSettings()
+      .then(setSettings)
+      .catch((e) => pushToast(e.message, 'error'));
+  }, [pushToast]);
+
+  const handleUpload = async (file) => {
+    if (!file) return;
+    setUploading(true);
+    try {
+      const updated = await uploadPaymentQr(file);
+      setSettings(updated);
+      pushToast('Payment QR updated', 'success');
+    } catch (e) {
+      pushToast(e.message, 'error');
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex items-center gap-2.5">
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+          <QrCode size={17} strokeWidth={2.3} />
+        </span>
+        <div>
+          <h2 className="font-display text-base font-bold text-ink-900">Payment QR</h2>
+          <p className="text-xs text-ink-500">Shown to customers on the /subscribe page — scan-to-pay for manual plan subscriptions.</p>
+        </div>
+      </div>
+      {settings && (
+        <ImageDropzone
+          imagePath={settings.payment_qr_path}
+          getUrl={getEventMediaUrl}
+          onUpload={handleUpload}
+          uploading={uploading}
+          className="h-40 w-40"
+          emptyIcon={ImageIcon}
+          emptyLabel="Upload QR"
+        />
+      )}
+    </div>
+  );
 }
 
-// Not security-sensitive on its own — the admin hands this to the customer
-// as a starting password, same as any temporary/trial credential.
-function generatePassword() {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
-  let out = '';
-  for (let i = 0; i < 12; i++) out += chars[Math.floor(Math.random() * chars.length)];
-  return out;
+const SUBSCRIPTION_STATUS_STYLES = {
+  pending: 'bg-amber-100 text-amber-800',
+  approved: 'bg-brand-100 text-brand-700',
+  rejected: 'bg-rose-100 text-rose-600',
+};
+
+function RejectRequestModal({ request, onClose, onRejected }) {
+  const { pushToast } = useToast();
+  const [note, setNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      const updated = await rejectSubscriptionRequest(request.id, note.trim() || null);
+      onRejected(updated);
+    } catch (err) {
+      pushToast(err.message, 'error');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal open onClose={onClose} title="Reject request" icon={XCircle}>
+      <p className="mb-4 text-sm text-ink-500">
+        <strong className="text-ink-800">{request.email}</strong> — {PLAN_LIMITS[request.plan]?.label ?? request.plan}
+      </p>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        <FormField label="Note to yourself" hint="Optional — e.g. why the screenshot didn't match.">
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} className={textareaClass} />
+        </FormField>
+        <button
+          type="submit"
+          disabled={submitting}
+          className="rounded-xl bg-rose-600 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-rose-700 disabled:opacity-60"
+        >
+          {submitting ? 'Rejecting…' : 'Reject request'}
+        </button>
+      </form>
+    </Modal>
+  );
+}
+
+function SubscriptionRequestsList() {
+  const { approveSubscriptionRequest } = useAuth();
+  const { pushToast } = useToast();
+  const [requests, setRequests] = useState(null);
+  const [approvingId, setApprovingId] = useState(null);
+  const [rejecting, setRejecting] = useState(null);
+
+  const reload = () => {
+    listSubscriptionRequests()
+      .then(setRequests)
+      .catch((e) => pushToast(e.message, 'error'));
+  };
+
+  useEffect(reload, []);
+
+  const handleViewScreenshot = async (request) => {
+    try {
+      const url = await getSubscriptionProofUrl(request.screenshot_path);
+      window.open(url, '_blank', 'noopener');
+    } catch (e) {
+      pushToast(e.message, 'error');
+    }
+  };
+
+  const handleApprove = async (request) => {
+    setApprovingId(request.id);
+    try {
+      const data = await approveSubscriptionRequest(request.id);
+      pushToast(`${data.email} now has ${data.maxEvents} event credit${data.maxEvents === 1 ? '' : 's'}${data.isNewAccount ? ' — invite email sent' : ''}`, 'success');
+      reload();
+    } catch (e) {
+      pushToast(e.message, 'error');
+    } finally {
+      setApprovingId(null);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex items-center gap-2.5">
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+          <CreditCard size={17} strokeWidth={2.3} />
+        </span>
+        <div>
+          <h2 className="font-display text-base font-bold text-ink-900">Subscription requests</h2>
+          <p className="text-xs text-ink-500">Manual QR payments — review the screenshot, then approve or reject.</p>
+        </div>
+      </div>
+      {requests === null && <p className="text-sm text-ink-400">Loading…</p>}
+      {requests && requests.length === 0 && <p className="text-sm text-ink-400">No subscription requests yet.</p>}
+      {requests && requests.length > 0 && (
+        <div className="flex flex-col divide-y divide-ink-100">
+          {requests.map((r) => (
+            <div key={r.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <p className="text-sm font-semibold text-ink-900">{r.email}</p>
+                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${SUBSCRIPTION_STATUS_STYLES[r.status]}`}>{r.status}</span>
+                </div>
+                <p className="text-xs text-ink-500">
+                  {PLAN_LIMITS[r.plan]?.label ?? r.plan} · submitted {new Date(r.created_at).toLocaleDateString()}
+                  {r.admin_note ? ` · "${r.admin_note}"` : ''}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => handleViewScreenshot(r)}
+                  className="flex items-center gap-1.5 rounded-full border border-ink-200 px-3 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-50"
+                >
+                  <ImageIcon size={13} /> View screenshot
+                </button>
+                {r.status === 'pending' && (
+                  <>
+                    <button
+                      onClick={() => handleApprove(r)}
+                      disabled={approvingId === r.id}
+                      className="flex items-center gap-1.5 rounded-full bg-brand-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-brand-700 disabled:opacity-60"
+                    >
+                      <Check size={13} /> {approvingId === r.id ? 'Approving…' : 'Approve'}
+                    </button>
+                    <button
+                      onClick={() => setRejecting(r)}
+                      className="flex items-center gap-1.5 rounded-full border border-rose-200 px-3 py-1.5 text-xs font-bold text-rose-600 transition hover:bg-rose-50"
+                    >
+                      <XCircle size={13} /> Reject
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {rejecting && (
+        <RejectRequestModal
+          request={rejecting}
+          onClose={() => setRejecting(null)}
+          onRejected={(updated) => {
+            setRequests((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+            setRejecting(null);
+          }}
+        />
+      )}
+    </div>
+  );
 }
 
 function CreateTrialCard({ onCreated }) {
@@ -341,15 +540,21 @@ function CustomersList({ refreshKey }) {
 }
 
 export default function AdminCustomersPage() {
+  const { accountType } = useAuth();
   const [refreshKey, setRefreshKey] = useState(0);
 
   return (
     <OrganizerLayout>
+      <div className="mb-4">
+        <AccountTypeCard accountType={accountType} />
+      </div>
       <div className="mb-6">
         <h1 className="font-display text-2xl font-bold text-ink-900">Customer logins</h1>
         <p className="text-sm text-ink-500">Issue temporary trial access for customers testing DinkManager.</p>
       </div>
       <div className="flex flex-col gap-5">
+        <PaymentQrCard />
+        <SubscriptionRequestsList />
         <CreateTrialCard onCreated={() => setRefreshKey((k) => k + 1)} />
         <CustomersList refreshKey={refreshKey} />
       </div>

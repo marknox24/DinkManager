@@ -34,6 +34,8 @@ import AccountingPage from './pages/organizer/event/AccountingPage';
 import PublicEventPage from './pages/public/PublicEventPage';
 import RegisterPage from './pages/public/RegisterPage';
 import CheckInPage from './pages/public/CheckInPage';
+import DiscoverTournamentsPage from './pages/public/DiscoverTournamentsPage';
+import SubscribePage from './pages/public/SubscribePage';
 import DinkManagerDemoPage from './pages/legacy/DinkManagerDemoPage';
 
 function RequireSupabase({ children }) {
@@ -93,6 +95,12 @@ function AppRoutes() {
       <Route path="/e/:slug" element={<RequireSupabase><PublicEventPage /></RequireSupabase>} />
       <Route path="/e/:slug/register" element={<RequireSupabase><RegisterPage /></RequireSupabase>} />
       <Route path="/e/:slug/checkin" element={<RequireSupabase><CheckInPage /></RequireSupabase>} />
+      {/* Private events' secret share link — mirrors the /e/:slug pair above
+          but resolves via share_token instead of slug. */}
+      <Route path="/t/:token" element={<RequireSupabase><PublicEventPage /></RequireSupabase>} />
+      <Route path="/t/:token/register" element={<RequireSupabase><RegisterPage /></RequireSupabase>} />
+      <Route path="/tournaments" element={<RequireSupabase><DiscoverTournamentsPage /></RequireSupabase>} />
+      <Route path="/subscribe/:plan" element={<RequireSupabase><SubscribePage /></RequireSupabase>} />
 
       <Route path="/demo/dinkmanager" element={<DinkManagerDemoPage />} />
 

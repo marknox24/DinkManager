@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { CheckCircle2, ChevronLeft, ChevronRight, Loader2, UploadCloud, Users } from 'lucide-react';
 import {
   getEventMediaUrl,
+  getPublicEventByShareToken,
   getPublicEventBySlug,
   listCategories,
   listRegistrationFields,
@@ -14,11 +15,12 @@ import { useToast } from '../../context/ToastContext';
 import FormField, { inputClass, textareaClass } from '../../components/ui/FormField';
 
 export default function RegisterPage() {
-  const { slug } = useParams();
+  const { slug, token } = useParams();
   const [searchParams] = useSearchParams();
   const { pushToast } = useToast();
   const { user, profile } = useAuth();
   const isPlayer = profile?.role === 'player';
+  const linkBase = token ? `/t/${token}` : `/e/${slug}`;
 
   const [event, setEvent] = useState(undefined);
   const [categories, setCategories] = useState([]);
@@ -41,7 +43,8 @@ export default function RegisterPage() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   useEffect(() => {
-    getPublicEventBySlug(slug)
+    const load = token ? getPublicEventByShareToken(token) : getPublicEventBySlug(slug);
+    load
       .then(async (ev) => {
         setEvent(ev);
         const [cats, flds] = await Promise.all([listCategories(ev.id), listRegistrationFields(ev.id)]);
@@ -49,7 +52,7 @@ export default function RegisterPage() {
         setFields(flds);
       })
       .catch(() => setEvent(null));
-  }, [slug]);
+  }, [slug, token]);
 
   useEffect(() => {
     if (isPlayer && user?.email && !email) setEmail(user.email);
@@ -152,7 +155,7 @@ export default function RegisterPage() {
           </p>
           <span className="mt-3 inline-block rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">Status: Pending</span>
           <p className="mt-3 text-xs text-ink-400">The organizer will review your registration and confirm your spot.</p>
-          <Link to={`/e/${slug}`} className="mt-5 inline-block text-sm font-semibold text-brand-600">
+          <Link to={linkBase} className="mt-5 inline-block text-sm font-semibold text-brand-600">
             ← Back to event page
           </Link>
           {!isPlayer && (
@@ -178,7 +181,7 @@ export default function RegisterPage() {
   return (
     <div className="min-h-screen bg-[#f3f6f8] px-4 py-8 sm:px-6">
       <div className="mx-auto max-w-lg">
-        <Link to={`/e/${slug}`} className="mb-4 inline-block text-xs font-semibold text-ink-500 hover:text-ink-800">
+        <Link to={linkBase} className="mb-4 inline-block text-xs font-semibold text-ink-500 hover:text-ink-800">
           ← {event.name}
         </Link>
 

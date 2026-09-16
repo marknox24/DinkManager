@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { Award, ImagePlus, Loader2 } from 'lucide-react';
+import { Award, ImagePlus } from 'lucide-react';
 import Modal from '../ui/Modal';
 import FormField, { inputClass } from '../ui/FormField';
 import Select from '../ui/Select';
+import ImageDropzone from '../ui/ImageDropzone';
 import { SPONSOR_TIERS } from '../../data/constants';
 import { getEventMediaUrl, uploadEventMedia } from '../../data/eventsApi';
 import { useToast } from '../../context/ToastContext';
@@ -78,22 +79,15 @@ export default function SponsorFormModal({ eventId, sponsor, onSave, onClose }) 
         </div>
 
         <FormField label="Logo" hint="Optional — shown on the Preview Screen sponsor strip">
-          {logoPath ? (
-            <div className="flex items-center gap-3 rounded-xl border border-ink-200 bg-ink-50/60 px-3.5 py-2.5">
-              <img src={getEventMediaUrl(logoPath)} alt="" className="h-9 w-9 rounded-lg border border-ink-200 bg-white object-contain p-1" />
-              <span className="text-xs font-semibold text-ink-600">Logo attached</span>
-              <label className="ml-auto cursor-pointer text-xs font-semibold text-brand-600 hover:text-brand-700">
-                Replace
-                <input type="file" accept="image/*" onChange={(e) => handleLogoUpload(e.target.files?.[0])} className="hidden" />
-              </label>
-            </div>
-          ) : (
-            <label className="flex cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed border-ink-300 px-3.5 py-3 text-xs font-bold text-ink-500 transition hover:bg-ink-50">
-              {uploadingLogo ? <Loader2 size={14} className="animate-spin" /> : <ImagePlus size={14} />}
-              {uploadingLogo ? 'Uploading…' : 'Upload logo'}
-              <input type="file" accept="image/*" onChange={(e) => handleLogoUpload(e.target.files?.[0])} className="hidden" />
-            </label>
-          )}
+          <ImageDropzone
+            imagePath={logoPath}
+            getUrl={getEventMediaUrl}
+            onUpload={handleLogoUpload}
+            uploading={uploadingLogo}
+            className="h-16 w-16"
+            emptyIcon={ImagePlus}
+            emptyLabel="Upload logo"
+          />
         </FormField>
 
         <div className="mt-1 flex justify-end gap-2.5">

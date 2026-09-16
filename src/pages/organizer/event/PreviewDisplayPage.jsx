@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Clock, Crown, Radio, Timer, Trophy } from 'lucide-react';
-import { getEventById, listCategories, listSponsors } from '../../../data/eventsApi';
+import { Award, Clock, Crown, Radio, Timer, Trophy } from 'lucide-react';
+import { getEventById, getEventMediaUrl, listCategories, listSponsors } from '../../../data/eventsApi';
+import { SPONSOR_TIERS } from '../../../data/constants';
 import {
   getBracketProgressForCategory,
   listBracketsForCategory,
@@ -97,6 +98,19 @@ export default function PreviewDisplayPage() {
     [matches]
   );
 
+  // Gold/Silver get a dedicated card next to the standings — one slide per
+  // tier ("Gold Sponsors" then "Silver Sponsors"), auto-advancing via the
+  // same AutoCarousel used for Next Matches/Recent Winners — rather than
+  // buried in the scrolling credits strip everything else still uses.
+  const sponsorGroups = useMemo(
+    () =>
+      ['gold', 'silver']
+        .map((tier) => ({ tier, sponsors: sponsors.filter((s) => s.tier === tier) }))
+        .filter((g) => g.sponsors.length > 0),
+    [sponsors]
+  );
+  const otherSponsors = useMemo(() => sponsors.filter((s) => s.tier !== 'gold' && s.tier !== 'silver'), [sponsors]);
+
   const numCourts = event?.num_courts ?? 4;
   const courtsInPlay = liveMatches.length;
   const courtNumbers = useMemo(() => Array.from({ length: numCourts }, (_, i) => i + 1), [numCourts]);
@@ -115,11 +129,16 @@ export default function PreviewDisplayPage() {
   }, [bracketProgress, category, event, numCourts]);
 
   if (!loaded) {
-    return <div className="flex h-dvh items-center justify-center bg-[#f0f1f4] text-sm font-medium text-ink-400">Loading preview…</div>;
+    return <div className="flex h-screen items-center justify-center bg-[#f0f1f4] text-sm font-medium text-ink-400">Loading preview…</div>;
   }
 
   return (
-    <div className="flex h-dvh w-screen flex-col overflow-hidden bg-gradient-to-br from-[#f5f5f7] to-[#e7e8ec] p-3 sm:p-5 lg:p-6 print:hidden">
+    // h-screen (100vh), not h-dvh — dvh is a newer CSS unit that some Smart
+    // TV / kiosk browsers don't support, and when it's ignored this
+    // container gets no height at all, so it grows with content instead of
+    // clamping to the screen — the whole point of this page needing zero
+    // scrolling on a display nobody can scroll.
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-gradient-to-br from-[#f5f5f7] to-[#e7e8ec] p-3 sm:p-5 lg:p-6 print:hidden">
       {/* Pinned frame top: never scrolls, whatever the screen size — the
           standings/sidebar area below is the only part that can, and only
           if a bracket genuinely has more teams than the screen can show. */}
@@ -231,7 +250,10 @@ export default function PreviewDisplayPage() {
                                 {t.rank}
                               </span>
                             </td>
-                            <td className="px-2 py-2.5 font-semibold text-ink-800">{teamLabel(t)}</td>
+                            <td className="px-2 py-2.5 font-semibold text-ink-800">
+                              <div>{teamLabel(t)}</div>
+                              {t.club_name && <div className="text-[10px] font-normal text-ink-400">{t.club_name}</div>}
+                            </td>
                             <td className="px-2 py-2.5 text-center font-mono">{t.wins}</td>
                             <td className="px-2 py-2.5 text-center font-mono">{t.losses}</td>
                             <td className={`px-4 py-2.5 text-center font-mono font-bold ${t.diff >= 0 ? 'text-brand-600' : 'text-rose-600'}`}>
@@ -305,11 +327,52 @@ export default function PreviewDisplayPage() {
               }}
             />
           </div>
+
+          {sponsorGroups.length > 0 && (
+            <div className="flex min-h-0 flex-1 flex-col rounded-3xl border border-white/60 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.05)] backdrop-blur-xl">
+              {/* flex-1 + centered content: this card grows to fill whatever
+                  space is left in the sidebar (rather than sitting shrink-0
+                  at its old small content height with dead space below it),
+                  and the bigger logos below scale up to actually use it. */}
+              <div className="flex flex-1 items-center justify-center">
+                <AutoCarousel
+                  items={sponsorGroups}
+                  intervalMs={SLIDE_MS}
+                  emptyMessage="No sponsors yet"
+                  renderItem={(group) => (
+                    <div className="flex flex-col items-center gap-4 text-center">
+                      <span
+                        className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold ${SPONSOR_TIERS[group.tier]?.badge || 'bg-ink-100 text-ink-600'}`}
+                      >
+                        <Award size={11} /> {SPONSOR_TIERS[group.tier]?.label || group.tier} Sponsors
+                      </span>
+                      <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-5">
+                        {group.sponsors.map((s) => (
+                          <div key={s.id} className="flex flex-col items-center gap-2">
+                            {s.logo_path ? (
+                              <img src={getEventMediaUrl(s.logo_path)} alt={s.name} className="h-24 w-auto max-w-[200px] object-contain" />
+                            ) : (
+                              <span
+                                className={`flex h-24 w-24 items-center justify-center rounded-full text-xl font-extrabold ${SPONSOR_TIERS[s.tier]?.badge || 'bg-ink-100 text-ink-500'}`}
+                              >
+                                {s.name.slice(0, 2).toUpperCase()}
+                              </span>
+                            )}
+                            <span className="max-w-[200px] truncate text-xs font-semibold text-ink-500">{s.name}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                />
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
       <div className="mt-3 shrink-0 sm:mt-4">
-        <SponsorMarquee sponsors={sponsors} />
+        <SponsorMarquee sponsors={otherSponsors} />
       </div>
     </div>
   );

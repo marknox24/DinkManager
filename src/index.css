@@ -18,6 +18,9 @@
 
   --color-accent-teal: #17c3b2;
   --color-accent-coral: #ff6b6b;
+  --color-accent-coral-dark: #e6483f;
+  --color-accent-coral-50: #fff1ef;
+  --color-accent-coral-100: #ffe0dc;
   --color-accent-amber: #ffc93c;
 
   --color-ink-50: #f4f7fa;
@@ -35,6 +38,17 @@
 
 :root {
   color-scheme: light;
+}
+
+/* Lenis (marketing page smooth scroll) manages its own easing per scroll
+   event — native `scroll-behavior: smooth` would double up on top of it
+   and fight the animation, so it's disabled while Lenis is active. */
+html.lenis,
+html.lenis body {
+  height: auto;
+}
+html.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
 }
 
 * {
@@ -166,4 +180,55 @@ body {
 }
 .animate-marquee:hover {
   animation-play-state: paused;
+}
+
+/* Marketing site: scroll-triggered reveal. Starts offset+transparent,
+   settles in on [data-visible] (set by useReveal's IntersectionObserver).
+   A transition (not a keyframe) so fast scrolling that re-triggers a
+   reveal mid-flight retargets smoothly instead of restarting from zero. */
+[data-reveal] {
+  opacity: 0;
+  transform: translateY(20px);
+  transition: opacity 0.6s cubic-bezier(0.23, 1, 0.32, 1), transform 0.6s cubic-bezier(0.23, 1, 0.32, 1);
+  transition-delay: var(--reveal-delay, 0ms);
+}
+[data-reveal='left'] {
+  transform: translateX(-24px);
+}
+[data-reveal='right'] {
+  transform: translateX(24px);
+}
+[data-reveal='scale'] {
+  transform: scale(0.96);
+}
+[data-reveal][data-visible='true'] {
+  opacity: 1;
+  transform: translate(0, 0) scale(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-reveal] {
+    transition-duration: 0.01ms !important;
+    transform: none !important;
+  }
+  .animate-marquee {
+    animation: none !important;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Sticky product-story panel — the right-side mockup pins for the height of
+   its scroll track while the left-side steps scroll past it. */
+.sticky-story-panel {
+  position: sticky;
+  top: 6rem;
+}
+
+@media (max-width: 1023px) {
+  .sticky-story-panel {
+    position: static;
+  }
 }
