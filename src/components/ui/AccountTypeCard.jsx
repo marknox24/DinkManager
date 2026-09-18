@@ -1,6 +1,6 @@
 import { ShieldCheck } from 'lucide-react';
 
-const STYLES = {
+export const ACCOUNT_TYPE_STYLES = {
   admiral: { label: 'ADMIRAL', tone: 'bg-ink-900 text-white' },
   organizer: { label: 'ORGANIZER', tone: 'bg-brand-100 text-brand-700' },
   player: { label: 'PLAYER', tone: 'bg-sky-100 text-sky-700' },
@@ -10,7 +10,7 @@ const STYLES = {
 // pulls from AuthContext's `accountType` (derived from profile.role +
 // is_admin), never hard-coded, so it's correct for every account.
 export default function AccountTypeCard({ accountType }) {
-  const cfg = STYLES[accountType] || STYLES.organizer;
+  const cfg = ACCOUNT_TYPE_STYLES[accountType] || ACCOUNT_TYPE_STYLES.organizer;
   return (
     <div className="flex items-center gap-2.5 rounded-2xl border border-ink-100 bg-white px-4 py-3 shadow-sm">
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-ink-50 text-ink-500">

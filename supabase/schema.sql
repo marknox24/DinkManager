@@ -90,6 +90,10 @@ create policy "profiles_update_own" on profiles for update
     and is_admin = (select p2.is_admin from profiles p2 where p2.id = profiles.id)
     and access_expires_at is not distinct from (select p2.access_expires_at from profiles p2 where p2.id = profiles.id)
     and max_events is not distinct from (select p2.max_events from profiles p2 where p2.id = profiles.id)
+    -- plan is set only by approve-subscription-request (service role) —
+    -- pinned here for the same reason as the three checks above, so a
+    -- direct client-side update can't self-upgrade an account's tier.
+    and plan = (select p2.plan from profiles p2 where p2.id = profiles.id)
   );
 
 -- Auto-create a profile row whenever someone signs up. Role comes from
@@ -1350,3 +1354,14 @@ as $$
 $$;
 
 grant execute on function public_published_events() to anon, authenticated;
+
+-- ----------------------------------------------------------------------------
+-- ORGANIZER SUBSCRIBED PLAN  (what an organizer is currently subscribed to,
+-- set by approve-subscription-request on approval — see that file). Distinct
+-- from events.plan: this is the account-level "current tier," while
+-- events.plan is a per-event snapshot of this value taken at event-creation
+-- time in src/data/eventsApi.js's createEvent(). Same enum as events.plan.
+-- ----------------------------------------------------------------------------
+alter table profiles add column if not exists plan text not null default 'free';
+alter table profiles drop constraint if exists profiles_plan_check;
+alter table profiles add constraint profiles_plan_check check (plan in ('free', 'starter', 'pro', 'business'));

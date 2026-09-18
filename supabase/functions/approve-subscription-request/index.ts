@@ -121,9 +121,13 @@ Deno.serve(async (req) => {
     if (profileReadErr) return jsonResponse({ error: profileReadErr.message }, 400);
 
     const maxEvents = (currentProfile?.max_events ?? 0) + 1;
+    // plan: subRequest.plan sets the account's current subscribed tier —
+    // src/data/eventsApi.js's createEvent() snapshots this onto every new
+    // event at creation time (see that file's comment for why it's a
+    // snapshot, not a live sync).
     const { error: updateErr } = await admin
       .from('profiles')
-      .update({ max_events: maxEvents, role: 'organizer', email })
+      .update({ max_events: maxEvents, role: 'organizer', email, plan: subRequest.plan })
       .eq('id', userId);
     if (updateErr) return jsonResponse({ error: updateErr.message }, 400);
 

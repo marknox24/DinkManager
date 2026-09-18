@@ -52,7 +52,7 @@ import AccordionItem from '../../components/ui/Accordion';
 import FaqEditor from '../../components/organizer/FaqEditor';
 import { parseFaqItems, serializeFaqItems } from '../../utils/faq';
 import { COURT_TYPES } from '../../data/constants';
-import { PLAN_ORDER, PLAN_LIMITS, planLimit } from '../../data/plans';
+import { PLAN_LIMITS, planLimit } from '../../data/plans';
 
 const STATUS_OPTIONS = ['upcoming', 'ongoing', 'finished', 'cancelled', 'rescheduled'];
 
@@ -411,15 +411,12 @@ export default function EventEditorPage() {
                     ))}
                   </Select>
                 </FormField>
-                <FormField label="Plan" hint="Caps this event's categories, players per category, and courts.">
-                  <Select value={event.plan || 'free'} onChange={(e) => saveField({ plan: e.target.value })} className={inputClass}>
-                    {PLAN_ORDER.map((p) => (
-                      <option key={p} value={p}>
-                        {PLAN_LIMITS[p].label} — up to {PLAN_LIMITS[p].categories ?? 'unlimited'} categories, {PLAN_LIMITS[p].playersPerCategory}{' '}
-                        players/cat, {PLAN_LIMITS[p].courts} courts
-                      </option>
-                    ))}
-                  </Select>
+                <FormField label="Plan" hint="Set by your subscription — approve a new plan from the pricing page to raise these caps.">
+                  <div className={`${inputClass} cursor-not-allowed bg-ink-50 text-ink-600`} aria-readonly="true">
+                    {(PLAN_LIMITS[event.plan] ?? PLAN_LIMITS.free).label} — up to {(PLAN_LIMITS[event.plan] ?? PLAN_LIMITS.free).categories ?? 'unlimited'}{' '}
+                    categories, {(PLAN_LIMITS[event.plan] ?? PLAN_LIMITS.free).playersPerCategory} players/cat,{' '}
+                    {(PLAN_LIMITS[event.plan] ?? PLAN_LIMITS.free).courts} courts
+                  </div>
                 </FormField>
                 <FormField label="Location / address">
                   <input

@@ -27,11 +27,15 @@ export async function generateUniqueSlug(name) {
 // ---------------------------------------------------------------------------
 // EVENTS
 // ---------------------------------------------------------------------------
+// Snapshots the organizer's current subscribed plan onto the new event at
+// creation time (not a live sync — the event keeps this value even if the
+// organizer's plan changes later). Read-only in EventEditorPage.jsx by design.
 export async function createEvent(organizerId, payload) {
   const slug = await generateUniqueSlug(payload.name || 'event');
+  const { data: profile } = await supabase.from('profiles').select('plan').eq('id', organizerId).maybeSingle();
   const { data, error } = await supabase
     .from('events')
-    .insert({ ...payload, organizer_id: organizerId, slug })
+    .insert({ plan: profile?.plan || 'free', ...payload, organizer_id: organizerId, slug })
     .select()
     .single();
   if (error) throw error;

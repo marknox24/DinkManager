@@ -3,6 +3,7 @@ import { LayoutGrid, LogOut, ShieldCheck, Trophy } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import Logo from '../ui/Logo';
+import { ACCOUNT_TYPE_STYLES } from '../ui/AccountTypeCard';
 
 // Deliberately minimal — no organizer/tournament-management nav. Players
 // never render OrganizerLayout at all (separate component, separate route
@@ -16,7 +17,7 @@ const NAV_ITEMS = [
 ];
 
 export default function PlayerLayout({ children }) {
-  const { user, signOut } = useAuth();
+  const { user, signOut, accountType } = useAuth();
   const { pushToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -34,6 +35,15 @@ export default function PlayerLayout({ children }) {
           <Link to="/player/dashboard" className="flex items-center gap-2">
             <Logo size={30} />
             <span className="font-display text-sm font-bold text-ink-900">DinkManager</span>
+            {accountType && (
+              <span
+                className={`hidden rounded-full px-2 py-0.5 font-display text-[10px] font-extrabold tracking-wide sm:inline-block ${
+                  (ACCOUNT_TYPE_STYLES[accountType] || ACCOUNT_TYPE_STYLES.player).tone
+                }`}
+              >
+                {(ACCOUNT_TYPE_STYLES[accountType] || ACCOUNT_TYPE_STYLES.player).label}
+              </span>
+            )}
           </Link>
           <div className="flex items-center gap-3">
             <span className="hidden text-xs text-ink-500 sm:inline">{user?.email}</span>

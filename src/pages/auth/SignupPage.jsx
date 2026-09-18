@@ -7,6 +7,7 @@ import { useToast } from '../../context/ToastContext';
 import AuthSplitLayout from '../../components/auth/AuthSplitLayout';
 import RoleToggle from '../../components/auth/RoleToggle';
 import SocialLoginButtons, { SOCIAL_LOGIN_ENABLED } from '../../components/auth/SocialLoginButtons';
+import { isDuplicateEmailError, isDuplicateSignupResponse } from '../../utils/authErrors';
 
 export default function SignupPage() {
   const { signUp } = useAuth();
@@ -16,6 +17,18 @@ export default function SignupPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  const pushDuplicateEmailToast = () =>
+    pushToast(
+      <>
+        This email already has an account —{' '}
+        <Link to="/login" className="underline">
+          log in instead
+        </Link>
+        .
+      </>,
+      'error'
+    );
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -27,7 +40,19 @@ export default function SignupPage() {
     const { data, error } = await signUp(email, password, name);
     setSubmitting(false);
     if (error) {
-      pushToast(error.message, 'error');
+      if (isDuplicateEmailError(error)) {
+        pushDuplicateEmailToast();
+      } else {
+        pushToast(error.message, 'error');
+      }
+      return;
+    }
+    // signUp for an already-registered email returns success with no error
+    // (see isDuplicateSignupResponse) — without this check it would fall
+    // through to the generic "check your email" message below, which is
+    // wrong: no confirmation email is actually sent in this case.
+    if (isDuplicateSignupResponse(data)) {
+      pushDuplicateEmailToast();
       return;
     }
     if (!data.session) {
