@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Award, Clock, Crown, Radio, Timer, Trophy } from 'lucide-react';
-import { getEventById, getEventMediaUrl, listCategories, listSponsors } from '../../../data/eventsApi';
-import { SPONSOR_TIERS } from '../../../data/constants';
+import { Clock, Crown, Radio, Timer, Trophy } from 'lucide-react';
+import { getEventById, listCategories, listSponsors } from '../../../data/eventsApi';
 import {
   getBracketProgressForCategory,
   listBracketsForCategory,
@@ -11,6 +10,7 @@ import {
   listTeamsForCategory,
 } from '../../../data/bracketsApi';
 import AutoCarousel from '../../../components/organizer/AutoCarousel';
+import SponsorBox from '../../../components/organizer/SponsorBox';
 import SponsorMarquee from '../../../components/organizer/SponsorMarquee';
 import { usePagedItems } from '../../../hooks/usePagedItems';
 import { formatDuration } from '../../../utils/format';
@@ -98,17 +98,12 @@ export default function PreviewDisplayPage() {
     [matches]
   );
 
-  // Gold/Silver get a dedicated card next to the standings — one slide per
-  // tier ("Gold Sponsors" then "Silver Sponsors"), auto-advancing via the
-  // same AutoCarousel used for Next Matches/Recent Winners — rather than
-  // buried in the scrolling credits strip everything else still uses.
-  const sponsorGroups = useMemo(
-    () =>
-      ['gold', 'silver']
-        .map((tier) => ({ tier, sponsors: sponsors.filter((s) => s.tier === tier) }))
-        .filter((g) => g.sponsors.length > 0),
-    [sponsors]
-  );
+  // Gold/Silver each get their own dedicated box directly below Recent
+  // Winners (see SponsorBox) — one logo visible at a time, sliding
+  // horizontally, rather than buried in the scrolling credits strip
+  // everything else still uses.
+  const goldSponsors = useMemo(() => sponsors.filter((s) => s.tier === 'gold'), [sponsors]);
+  const silverSponsors = useMemo(() => sponsors.filter((s) => s.tier === 'silver'), [sponsors]);
   const otherSponsors = useMemo(() => sponsors.filter((s) => s.tier !== 'gold' && s.tier !== 'silver'), [sponsors]);
 
   const numCourts = event?.num_courts ?? 4;
@@ -328,44 +323,13 @@ export default function PreviewDisplayPage() {
             />
           </div>
 
-          {sponsorGroups.length > 0 && (
-            <div className="flex min-h-0 flex-1 flex-col rounded-3xl border border-white/60 bg-white/80 p-5 shadow-[0_8px_30px_rgb(0,0,0,0.05)] backdrop-blur-xl">
-              {/* flex-1 + centered content: this card grows to fill whatever
-                  space is left in the sidebar (rather than sitting shrink-0
-                  at its old small content height with dead space below it),
-                  and the bigger logos below scale up to actually use it. */}
-              <div className="flex flex-1 items-center justify-center">
-                <AutoCarousel
-                  items={sponsorGroups}
-                  intervalMs={SLIDE_MS}
-                  emptyMessage="No sponsors yet"
-                  renderItem={(group) => (
-                    <div className="flex flex-col items-center gap-4 text-center">
-                      <span
-                        className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-bold ${SPONSOR_TIERS[group.tier]?.badge || 'bg-ink-100 text-ink-600'}`}
-                      >
-                        <Award size={11} /> {SPONSOR_TIERS[group.tier]?.label || group.tier} Sponsors
-                      </span>
-                      <div className="flex flex-wrap items-center justify-center gap-x-8 gap-y-5">
-                        {group.sponsors.map((s) => (
-                          <div key={s.id} className="flex flex-col items-center gap-2">
-                            {s.logo_path ? (
-                              <img src={getEventMediaUrl(s.logo_path)} alt={s.name} className="h-24 w-auto max-w-[200px] object-contain" />
-                            ) : (
-                              <span
-                                className={`flex h-24 w-24 items-center justify-center rounded-full text-xl font-extrabold ${SPONSOR_TIERS[s.tier]?.badge || 'bg-ink-100 text-ink-500'}`}
-                              >
-                                {s.name.slice(0, 2).toUpperCase()}
-                              </span>
-                            )}
-                            <span className="max-w-[200px] truncate text-xs font-semibold text-ink-500">{s.name}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                />
-              </div>
+          {(goldSponsors.length > 0 || silverSponsors.length > 0) && (
+            // Only span two columns once both tiers actually have a sponsor
+            // to show — with just one tier populated, that box fills the
+            // full width instead of sitting next to dead grid space.
+            <div className={`grid shrink-0 grid-cols-1 gap-3 ${goldSponsors.length > 0 && silverSponsors.length > 0 ? 'sm:grid-cols-2' : ''}`}>
+              {goldSponsors.length > 0 && <SponsorBox tier="gold" sponsors={goldSponsors} />}
+              {silverSponsors.length > 0 && <SponsorBox tier="silver" sponsors={silverSponsors} />}
             </div>
           )}
         </div>

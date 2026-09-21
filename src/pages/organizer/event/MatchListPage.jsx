@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ChevronDown, FileText, Lock, ListOrdered, Pencil, Printer, Radio, Sparkles, Timer, Trash2, Trophy } from 'lucide-react';
 import { getEventById, listCategories, listUmpires } from '../../../data/eventsApi';
@@ -26,10 +26,15 @@ import LiveMatchCard from '../../../components/organizer/LiveMatchCard';
 import LogScoreModal from '../../../components/organizer/LogScoreModal';
 import StartMatchModal from '../../../components/organizer/StartMatchModal';
 import PlayoffCrossoverConfirmModal from '../../../components/organizer/PlayoffCrossoverConfirmModal';
-import RoundRobinSheetsModal from '../../../components/organizer/RoundRobinSheetsModal';
 import RoundRobinScoreSheets from '../../../components/organizer/RoundRobinScoreSheets';
-import BlankScoreSheetsModal from '../../../components/organizer/BlankScoreSheetsModal';
 import BlankScoreSheets from '../../../components/organizer/BlankScoreSheets';
+
+// Lazy: both pull in jspdf/html-to-image via utils/pdf.js's
+// downloadGroupedNodesAsPdf — deferred until the organizer actually opens a
+// print-preview modal. (RoundRobinScoreSheets/BlankScoreSheets above are the
+// plain printable markup, no pdf lib, so they stay eager.)
+const RoundRobinSheetsModal = lazy(() => import('../../../components/organizer/RoundRobinSheetsModal'));
+const BlankScoreSheetsModal = lazy(() => import('../../../components/organizer/BlankScoreSheetsModal'));
 import { useNow } from '../../../hooks/useNow';
 import { formatDuration } from '../../../utils/format';
 import { liveElapsedSeconds, teamLabel } from '../../../utils/match';
@@ -663,12 +668,14 @@ export default function MatchListPage() {
       )}
 
       {sheetsPreviewOpen && (
-        <RoundRobinSheetsModal
-          category={activeCategory}
-          matches={poolMatches}
-          onPrint={() => setPrintingSheets(true)}
-          onClose={() => setSheetsPreviewOpen(false)}
-        />
+        <Suspense fallback={null}>
+          <RoundRobinSheetsModal
+            category={activeCategory}
+            matches={poolMatches}
+            onPrint={() => setPrintingSheets(true)}
+            onClose={() => setSheetsPreviewOpen(false)}
+          />
+        </Suspense>
       )}
 
       {printingSheets && (
@@ -676,11 +683,13 @@ export default function MatchListPage() {
       )}
 
       {blankPreviewOpen && (
-        <BlankScoreSheetsModal
-          category={activeCategory}
-          onPrint={(count) => setPrintingBlankCount(count)}
-          onClose={() => setBlankPreviewOpen(false)}
-        />
+        <Suspense fallback={null}>
+          <BlankScoreSheetsModal
+            category={activeCategory}
+            onPrint={(count) => setPrintingBlankCount(count)}
+            onClose={() => setBlankPreviewOpen(false)}
+          />
+        </Suspense>
       )}
 
       {printingBlankCount != null && (

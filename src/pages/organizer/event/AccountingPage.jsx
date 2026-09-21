@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Award, Download, FileText, Pencil, Plus, Sparkles, TrendingDown, TrendingUp, Trash2, Wallet } from 'lucide-react';
 import {
@@ -15,15 +15,17 @@ import {
   updateEvent,
   updateExpense,
 } from '../../../data/eventsApi';
-import { exportAccountingToExcel } from '../../../utils/excel';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import ExpenseFormModal from '../../../components/organizer/ExpenseFormModal';
 import EarningFormModal from '../../../components/organizer/EarningFormModal';
 import ReceiptThumbnail from '../../../components/organizer/ReceiptThumbnail';
-import AccountingReportModal from '../../../components/organizer/AccountingReportModal';
 import Switch from '../../../components/ui/Switch';
+
+// Lazy: both pull in xlsx/jspdf, several hundred KB neither of which should
+// load until the organizer actually asks to export something.
+const AccountingReportModal = lazy(() => import('../../../components/organizer/AccountingReportModal'));
 
 // Intl handles the symbol/placement for whatever ISO code the event's
 // currency setting holds (₱, €, ¥, etc.) — falls back to a plain $-prefixed
@@ -166,7 +168,8 @@ export default function AccountingPage() {
     }
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
+    const { exportAccountingToExcel } = await import('../../../utils/excel');
     exportAccountingToExcel({
       eventName: event?.name,
       expenses: expenses || [],
@@ -497,17 +500,19 @@ export default function AccountingPage() {
         <EarningFormModal earning={earningModal === 'new' ? null : earningModal.earning} onSave={saveEarning} onClose={() => setEarningModal(null)} />
       )}
       {reportOpen && (
-        <AccountingReportModal
-          event={event}
-          expenses={expenses || []}
-          earnings={earnings || []}
-          registrationEarnings={registrationEarnings}
-          sponsors={sponsors}
-          includeSponsors={includeSponsors}
-          totals={{ earnings: totalEarnings, expenses: totalExpenses, net }}
-          money={money}
-          onClose={() => setReportOpen(false)}
-        />
+        <Suspense fallback={null}>
+          <AccountingReportModal
+            event={event}
+            expenses={expenses || []}
+            earnings={earnings || []}
+            registrationEarnings={registrationEarnings}
+            sponsors={sponsors}
+            includeSponsors={includeSponsors}
+            totals={{ earnings: totalEarnings, expenses: totalExpenses, net }}
+            money={money}
+            onClose={() => setReportOpen(false)}
+          />
+        </Suspense>
       )}
     </EventWorkspaceLayout>
   );

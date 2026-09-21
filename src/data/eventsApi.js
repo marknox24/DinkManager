@@ -32,7 +32,8 @@ export async function generateUniqueSlug(name) {
 // organizer's plan changes later). Read-only in EventEditorPage.jsx by design.
 export async function createEvent(organizerId, payload) {
   const slug = await generateUniqueSlug(payload.name || 'event');
-  const { data: profile } = await supabase.from('profiles').select('plan').eq('id', organizerId).maybeSingle();
+  const { data: profile, error: profileErr } = await supabase.from('profiles').select('plan').eq('id', organizerId).maybeSingle();
+  if (profileErr) throw profileErr;
   const { data, error } = await supabase
     .from('events')
     .insert({ plan: profile?.plan || 'free', ...payload, organizer_id: organizerId, slug })

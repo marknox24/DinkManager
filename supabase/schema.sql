@@ -346,13 +346,23 @@ create policy "events_insert_owner" on events for insert
 -- the same UPDATE and trivially satisfy that check, hijacking ownership of
 -- the event. No feature transfers ownership today, so organizer_id is simply
 -- immutable via this policy — even for the real owner.
+--
+-- plan is pinned the same way, for the same class of reason as
+-- profiles_update_own's plan check above: EventEditorPage.jsx's Plan field
+-- is read-only in the UI now (it's a snapshot of the organizer's
+-- subscription, set at event-creation time), but without this pin nothing
+-- in the database stopped a raw client call from setting events.plan
+-- directly to self-upgrade this event's category/court/player caps.
 drop policy if exists "events_update_owner" on events;
 create policy "events_update_owner" on events for update
   using (auth.uid() = organizer_id or has_event_permission(id, 'settings') or has_event_permission(id, 'edit_event'))
   -- e2.id = events.id (not the bare "id") — see the identical note on
   -- profiles_update_own above; the unqualified form made this subquery
   -- return every row in the events table and broke every event update.
-  with check (organizer_id = (select e2.organizer_id from events e2 where e2.id = events.id));
+  with check (
+    organizer_id = (select e2.organizer_id from events e2 where e2.id = events.id)
+    and plan = (select e2.plan from events e2 where e2.id = events.id)
+  );
 
 drop policy if exists "events_delete_owner" on events;
 create policy "events_delete_owner" on events for delete

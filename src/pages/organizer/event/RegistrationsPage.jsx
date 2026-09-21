@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Activity, CheckCircle2, Download, FileSpreadsheet, ImageIcon, Pencil, QrCode, Shuffle, Trash2, Trophy, UserPlus, XCircle } from 'lucide-react';
 import {
@@ -19,9 +19,13 @@ import { useConfirm } from '../../../context/ConfirmContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import EditRegistrationModal from '../../../components/organizer/EditRegistrationModal';
 import AddPlayerModal from '../../../components/organizer/AddPlayerModal';
-import ImportPlayersModal from '../../../components/organizer/ImportPlayersModal';
-import DownloadRegistrationsModal from '../../../components/organizer/DownloadRegistrationsModal';
 import { PLAN_LIMITS, planLimit } from '../../../data/plans';
+
+// Lazy: both pull in xlsx/jspdf (via utils/excel.js and utils/pdf.js), which
+// together are several hundred KB — no reason to fetch that until the
+// organizer actually opens one of these modals.
+const ImportPlayersModal = lazy(() => import('../../../components/organizer/ImportPlayersModal'));
+const DownloadRegistrationsModal = lazy(() => import('../../../components/organizer/DownloadRegistrationsModal'));
 
 const STATUS_STYLES = {
   pending: 'bg-amber-100 text-amber-800',
@@ -339,16 +343,20 @@ export default function RegistrationsPage() {
       )}
 
       {importModalOpen && (
-        <ImportPlayersModal categories={categories} onImport={handleImportPlayers} onClose={() => setImportModalOpen(false)} />
+        <Suspense fallback={null}>
+          <ImportPlayersModal categories={categories} onImport={handleImportPlayers} onClose={() => setImportModalOpen(false)} />
+        </Suspense>
       )}
 
       {downloadModalOpen && (
-        <DownloadRegistrationsModal
-          event={event}
-          categories={categories}
-          registrations={registrations}
-          onClose={() => setDownloadModalOpen(false)}
-        />
+        <Suspense fallback={null}>
+          <DownloadRegistrationsModal
+            event={event}
+            categories={categories}
+            registrations={registrations}
+            onClose={() => setDownloadModalOpen(false)}
+          />
+        </Suspense>
       )}
     </EventWorkspaceLayout>
   );
