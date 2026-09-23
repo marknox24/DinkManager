@@ -3,6 +3,7 @@ import { Link, useParams } from 'react-router-dom';
 import { CheckCircle2, Loader2, UploadCloud } from 'lucide-react';
 import { getAppSettings, getEventMediaUrl, submitSubscriptionRequest, uploadSubscriptionProof } from '../../data/eventsApi';
 import { PAID_PLAN_ORDER, PLAN_LIMITS } from '../../data/plans';
+import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import Logo from '../../components/ui/Logo';
 import FormField, { inputClass } from '../../components/ui/FormField';
@@ -10,12 +11,18 @@ import FormField, { inputClass } from '../../components/ui/FormField';
 // Manual/QR payment flow: no account needed to submit, same anonymous-
 // upload pattern RegisterPage.jsx already uses for registration proof
 // photos. Scan the QR, pay, tell us your email, upload your receipt — an
-// admin reviews it from /admin/customers and approves/rejects.
+// admin reviews it from /admin/customers. One approval activates it: a new
+// event on this plan is created for that email's account (invited if it
+// has none) — see the approve-subscription-request edge function.
 export default function SubscribePage() {
   const { plan } = useParams();
   const { pushToast } = useToast();
+  const { user } = useAuth();
   const [qrUrl, setQrUrl] = useState(undefined);
-  const [email, setEmail] = useState('');
+  // null until typed in, so a signed-in organizer's own email shows by
+  // default (the new event is created on the account with this email).
+  const [emailInput, setEmailInput] = useState(null);
+  const email = emailInput ?? user?.email ?? '';
   const [screenshotPath, setScreenshotPath] = useState(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -78,7 +85,8 @@ export default function SubscribePage() {
           </span>
           <h1 className="mt-4 font-display text-xl font-bold text-ink-900">Thanks — we'll review it</h1>
           <p className="mt-2 text-sm text-ink-600">
-            We'll confirm your {planInfo.label} payment and email <strong>{email}</strong> once it's approved, with a link to set your password.
+            Once your payment is approved, your {planInfo.label} event is created automatically and we'll email <strong>{email}</strong> a link
+            to sign in (or to set your password, if you're new).
           </p>
           <Link to="/" className="mt-5 inline-block text-sm font-semibold text-brand-600">
             ← Back to home
@@ -115,7 +123,7 @@ export default function SubscribePage() {
 
           <form onSubmit={handleSubmit} className="mt-6 flex flex-col gap-4">
             <FormField label="Your email" hint="We'll send your login link here once approved.">
-              <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className={inputClass} />
+              <input type="email" required value={email} onChange={(e) => setEmailInput(e.target.value)} className={inputClass} />
             </FormField>
             <FormField label="Payment screenshot">
               <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-ink-300 px-3.5 py-3 text-xs font-semibold text-ink-500 transition hover:border-brand-400">

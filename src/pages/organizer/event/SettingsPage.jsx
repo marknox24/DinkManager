@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, Check, Coins, Copy, Files, LayoutGrid, Lock, RefreshCw, Shuffle, Sparkles, Trash2 } from 'lucide-react';
 import { deleteEvent, duplicateEvent, getEventById, getPendingPlanRequestForEvent, regenerateShareToken, setEventVisibility, updateEvent } from '../../../data/eventsApi';
 import { CURRENCIES, COURT_TYPES } from '../../../data/constants';
 import { PLAN_LIMITS } from '../../../data/plans';
 import { usableCourts } from '../../../utils/courts';
+import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
 import { useEventAccess } from '../../../context/EventAccessContext';
@@ -20,6 +21,7 @@ export default function SettingsPage() {
   const { pushToast } = useToast();
   const confirm = useConfirm();
   const { isOwner } = useEventAccess();
+  const { profile } = useAuth();
   const [event, setEvent] = useState(null);
   const [numCourts, setNumCourts] = useState('');
   const [duration, setDuration] = useState('');
@@ -30,6 +32,10 @@ export default function SettingsPage() {
   const [duplicating, setDuplicating] = useState(false);
 
   const isLocked = event?.status === 'finished';
+  // Duplicating creates a Free Trial event — only one per account (the
+  // database refuses the rest), so once it's used the way to run this
+  // event again is a new plan purchase.
+  const trialUsed = Boolean(profile?.free_trial_used_at);
 
   const reloadPendingRequest = () => getPendingPlanRequestForEvent(eventId).then(setPendingRequest);
 
@@ -210,7 +216,14 @@ export default function SettingsPage() {
                   )}
                 </div>
               </div>
-              {isLocked ? (
+              {isLocked && trialUsed ? (
+                <Link
+                  to="/#pricing"
+                  className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-brand-700"
+                >
+                  <Sparkles size={13} /> Get a plan for a new event
+                </Link>
+              ) : isLocked ? (
                 <button
                   onClick={handleDuplicate}
                   disabled={duplicating}

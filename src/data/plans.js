@@ -3,12 +3,11 @@
 // stored on its row (events.entitlement_*), copied from here at the moment
 // that plan was activated for that event, so a later edit to these numbers
 // never retroactively changes an event that already purchased a tier.
-// Postgres and the approve-subscription-request edge function can't import
-// this file, so the same values are hand-duplicated in supabase/schema.sql
-// (events_force_free_entitlements trigger + the backfill) and in that edge
-// function's ENTITLEMENTS map — keep all three in sync when changing a tier.
-// Prices are likewise duplicated in that edge function's PLAN_PRICES (the
-// amount recorded on approval, which the Admiral Dashboard sums as revenue).
+// Postgres can't import this file, so the database keeps its own copy in
+// the plan_catalog table (supabase/schema.sql) — that copy is what actually
+// gets snapshotted onto events (Free Trial on creation, a paid plan by
+// activate_purchase() on approval) and recorded as the amount paid. Keep
+// the two in sync when changing a tier or a price.
 export const PLAN_ORDER = ['free', 'starter', 'pro', 'business'];
 
 export const PLAN_LIMITS = {

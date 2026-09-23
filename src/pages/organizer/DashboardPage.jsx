@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { CalendarDays, Files, HandHelping, Image as ImageIcon, MapPin, Plus, Settings2, Users } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
+import { CalendarDays, Files, HandHelping, Image as ImageIcon, MapPin, Plus, Settings2, Sparkles, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { createEvent, duplicateEvent, getEventMediaUrl, getOnboardingProgress, listMyEvents, listStaffedEvents } from '../../data/eventsApi';
@@ -33,6 +33,11 @@ export default function DashboardPage() {
 
   const maxEvents = profile?.max_events ?? null;
   const atEventLimit = maxEvents != null && (events?.length ?? 0) >= maxEvents;
+  // One Free Trial event per account (enforced by the database — see
+  // events_force_free_entitlements). The profile is loaded once at sign-in,
+  // so an event this session just created counts too.
+  const trialUsed = Boolean(profile?.free_trial_used_at) || Boolean(events?.some((e) => e.origin === 'trial'));
+  const autoTrialStarted = useRef(false);
 
   useEffect(() => {
     // An invited/temp-login account (added as event_staff by another
@@ -50,6 +55,21 @@ export default function DashboardPage() {
       .then(([myEvents, staffed]) => {
         setEvents(myEvents);
         setStaffedEvents(staffed);
+        // A brand-new organizer (not a helper staffed on someone else's
+        // event) starts with their Free Trial event already created — no
+        // "create your first event" step. The ref keeps StrictMode's double
+        // effect from trying twice; the database would refuse the second
+        // anyway.
+        if (myEvents.length === 0 && staffed.length === 0 && !profile?.free_trial_used_at && !autoTrialStarted.current) {
+          autoTrialStarted.current = true;
+          createEvent(user.id, { name: 'Untitled Tournament', status: 'upcoming', is_published: false })
+            .then((event) => {
+              pushToast('Your Free Trial event is ready — set it up here', 'success');
+              navigate(`/events/${event.id}/edit`);
+            })
+            .catch((e) => pushToast(e.message, 'error'));
+          return;
+        }
         const isStaffOnly = myEvents.length === 0 && staffed.length > 0;
         const seenKey = `dm_welcome_seen_${user.id}`;
         if (myEvents.length === 0 && staffed.length === 0 && !localStorage.getItem(seenKey)) {
@@ -63,6 +83,7 @@ export default function DashboardPage() {
         }
       })
       .catch((e) => pushToast(e.message, 'error'));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.id, pushToast]);
 
   const handleCreate = async () => {
@@ -103,7 +124,15 @@ export default function DashboardPage() {
           <h1 className="font-display text-2xl font-bold text-ink-900">Your tournaments</h1>
           <p className="text-sm text-ink-500">Create and manage your pickleball events</p>
         </div>
-        {atEventLimit ? (
+        {trialUsed ? (
+          <Link
+            to="/#pricing"
+            title="Your Free Trial event is used — each new event comes with its own plan"
+            className="press-scale flex items-center gap-1.5 rounded-full bg-brand-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700"
+          >
+            <Sparkles size={16} /> Get a plan for a new event
+          </Link>
+        ) : atEventLimit ? (
           <span
             title={`Your trial allows up to ${maxEvents} event${maxEvents === 1 ? '' : 's'}`}
             className="rounded-full border border-ink-200 bg-ink-50 px-4 py-2.5 text-sm font-bold text-ink-400"
@@ -130,10 +159,16 @@ export default function DashboardPage() {
       {events && events.length === 0 && (
         <div className="rounded-3xl border border-dashed border-ink-200 bg-white py-16 text-center">
           <p className="text-sm text-ink-500">No tournaments yet.</p>
-          {!atEventLimit && (
-            <button onClick={handleCreate} className="mt-3 text-sm font-semibold text-brand-600">
-              Create your first event →
-            </button>
+          {trialUsed ? (
+            <Link to="/#pricing" className="mt-3 inline-block text-sm font-semibold text-brand-600">
+              Get a plan to create an event →
+            </Link>
+          ) : (
+            !atEventLimit && (
+              <button onClick={handleCreate} className="mt-3 text-sm font-semibold text-brand-600">
+                Create your first event →
+              </button>
+            )
           )}
         </div>
       )}
@@ -186,15 +221,19 @@ export default function DashboardPage() {
                     {event.status === 'finished' ? '🔒 Completed' : event.is_published ? 'Published' : 'Draft'}
                   </span>
                   {event.status === 'finished' ? (
-                    <span
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        if (duplicatingId !== event.id) handleDuplicate(event.id);
-                      }}
-                      className="flex items-center gap-1 text-[11px] font-semibold text-ink-500 hover:text-ink-800"
-                    >
-                      <Files size={12} /> {duplicatingId === event.id ? 'Duplicating…' : 'Duplicate'}
-                    </span>
+                    // Duplicating creates a Free Trial event, so it's only
+                    // offered while the account's trial is unused.
+                    !trialUsed && (
+                      <span
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (duplicatingId !== event.id) handleDuplicate(event.id);
+                        }}
+                        className="flex items-center gap-1 text-[11px] font-semibold text-ink-500 hover:text-ink-800"
+                      >
+                        <Files size={12} /> {duplicatingId === event.id ? 'Duplicating…' : 'Duplicate'}
+                      </span>
+                    )
                   ) : (
                     <span
                       onClick={(e) => {

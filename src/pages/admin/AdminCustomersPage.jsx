@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { Check, Copy, CreditCard, ImageIcon, KeyRound, MailCheck, Pencil, QrCode, RefreshCw, Trash2, UserCheck, UserPlus, XCircle } from 'lucide-react';
+import { AlertTriangle, Check, CheckCircle2, Copy, CreditCard, ImageIcon, KeyRound, MailCheck, Pencil, QrCode, RefreshCw, RotateCcw, Trash2, UserCheck, UserPlus, XCircle } from 'lucide-react';
 import OrganizerLayout from '../../components/organizer/OrganizerLayout';
 import Modal from '../../components/ui/Modal';
 import AccountTypeCard from '../../components/ui/AccountTypeCard';
@@ -12,11 +12,13 @@ import { useToast } from '../../context/ToastContext';
 import { supabase } from '../../lib/supabaseClient';
 import { daysLeftLabel, generatePassword } from '../../utils/tempAccess';
 import {
+  deleteSubscriptionRequest,
   getAppSettings,
   getEventMediaUrl,
   getSubscriptionProofUrl,
   listSubscriptionRequests,
   rejectSubscriptionRequest,
+  reopenSubscriptionRequest,
   uploadPaymentQr,
 } from '../../data/eventsApi';
 import { PLAN_LIMITS } from '../../data/plans';
@@ -72,6 +74,45 @@ function PaymentQrCard() {
   );
 }
 
+// What approving (or having approved) a request does, in one line. A
+// website purchase (no event yet) creates a new event on its plan; an
+// in-app upgrade targets the organizer's existing event. Once approved,
+// every request is linked to the event it activated. Approvals from before
+// automatic activation only granted an event slot and have no event.
+function requestTarget(r) {
+  if (r.event) return r.status === 'approved' ? `→ "${r.event.name}"` : `upgrades "${r.event.name}"`;
+  if (r.status === 'approved') return 'event slot only (approved before automatic activation)';
+  return `creates a new ${PLAN_LIMITS[r.plan]?.label ?? r.plan} event`;
+}
+
+// The approve-subscription-request response, spelled out step by step.
+function ActivationChecklist({ result }) {
+  const planLabel = PLAN_LIMITS[result.plan]?.label ?? result.plan;
+  const access =
+    result.scope === 'upgrade'
+      ? { ok: true, text: 'Organizer already has access' }
+      : result.notified === 'invite'
+        ? { ok: true, text: 'Organizer access granted — invite email sent' }
+        : result.notified === 'sign_in_link'
+          ? { ok: true, text: 'Organizer access granted — sign-in link emailed' }
+          : { ok: false, text: 'Access granted, but the email could not be sent — share the login manually' };
+  const steps = [
+    { ok: true, text: 'Payment approved' },
+    { ok: true, text: result.eventCreated ? `Event created ("${result.eventName}")` : `Event upgraded ("${result.eventName}")` },
+    { ok: true, text: `${planLabel} activated` },
+    access,
+  ];
+  return (
+    <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1">
+      {steps.map((step) => (
+        <li key={step.text} className={`flex items-center gap-1 text-xs font-semibold ${step.ok ? 'text-brand-700' : 'text-amber-700'}`}>
+          {step.ok ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />} {step.text}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 const SUBSCRIPTION_STATUS_STYLES = {
   pending: 'bg-amber-100 text-amber-800',
   approved: 'bg-brand-100 text-brand-700',
@@ -121,8 +162,11 @@ function SubscriptionRequestsList() {
   const location = useLocation();
   const { approveSubscriptionRequest } = useAuth();
   const { pushToast } = useToast();
+  const confirm = useConfirm();
   const [requests, setRequests] = useState(null);
   const [approvingId, setApprovingId] = useState(null);
+  const [busyId, setBusyId] = useState(null);
+  const [activations, setActivations] = useState({});
   const [rejecting, setRejecting] = useState(null);
 
   const reload = () => {
@@ -155,17 +199,45 @@ function SubscriptionRequestsList() {
     setApprovingId(request.id);
     try {
       const data = await approveSubscriptionRequest(request.id);
-      pushToast(
-        data.scope === 'event'
-          ? `${PLAN_LIMITS[data.plan]?.label ?? data.plan} activated for this event`
-          : `${data.email} now has ${data.maxEvents} event credit${data.maxEvents === 1 ? '' : 's'}${data.isNewAccount ? ' — invite email sent' : ''}`,
-        'success'
-      );
+      setActivations((prev) => ({ ...prev, [request.id]: data }));
+      pushToast(`${PLAN_LIMITS[data.plan]?.label ?? data.plan} activated for ${data.email}`, 'success');
       reload();
     } catch (e) {
       pushToast(e.message, 'error');
     } finally {
       setApprovingId(null);
+    }
+  };
+
+  const handleReopen = async (request) => {
+    setBusyId(request.id);
+    try {
+      const updated = await reopenSubscriptionRequest(request.id);
+      setRequests((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+      pushToast('Request reopened — it can be approved now', 'success');
+    } catch (e) {
+      pushToast(e.message, 'error');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleDelete = async (request) => {
+    const ok = await confirm({
+      title: `Delete this request from ${request.email}?`,
+      confirmLabel: 'Delete',
+      message: 'The request and its payment screenshot are permanently removed. This cannot be undone.',
+    });
+    if (!ok) return;
+    setBusyId(request.id);
+    try {
+      await deleteSubscriptionRequest(request);
+      setRequests((prev) => prev.filter((r) => r.id !== request.id));
+      pushToast('Request deleted', 'success');
+    } catch (e) {
+      pushToast(e.message, 'error');
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -186,16 +258,19 @@ function SubscriptionRequestsList() {
         <div className="flex flex-col divide-y divide-ink-100">
           {requests.map((r) => (
             <div key={r.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
-              <div>
+              <div className="min-w-0">
                 <div className="flex items-center gap-1.5">
                   <p className="text-sm font-semibold text-ink-900">{r.email}</p>
                   <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${SUBSCRIPTION_STATUS_STYLES[r.status]}`}>{r.status}</span>
                 </div>
                 <p className="text-xs text-ink-500">
-                  {PLAN_LIMITS[r.plan]?.label ?? r.plan} · {r.event ? `for "${r.event.name}"` : '(account credit — no event)'} · submitted{' '}
-                  {new Date(r.created_at).toLocaleDateString()}
+                  <strong className="font-semibold text-ink-700">
+                    {PLAN_LIMITS[r.plan]?.label ?? r.plan} · ₱{Number(r.amount ?? PLAN_LIMITS[r.plan]?.price ?? 0).toLocaleString('en-PH')}
+                  </strong>{' '}
+                  · {requestTarget(r)} · submitted {new Date(r.created_at).toLocaleDateString()}
                   {r.admin_note ? ` · "${r.admin_note}"` : ''}
                 </p>
+                {activations[r.id] && <ActivationChecklist result={activations[r.id]} />}
               </div>
               <div className="flex items-center gap-2">
                 <button
@@ -220,6 +295,27 @@ function SubscriptionRequestsList() {
                       <XCircle size={13} /> Reject
                     </button>
                   </>
+                )}
+                {r.status === 'rejected' && (
+                  <button
+                    onClick={() => handleReopen(r)}
+                    disabled={busyId === r.id}
+                    title="Move back to pending so it can be approved"
+                    className="flex items-center gap-1.5 rounded-full border border-ink-200 px-3 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-50 disabled:opacity-60"
+                  >
+                    <RotateCcw size={13} /> Reopen
+                  </button>
+                )}
+                {r.status !== 'approved' && (
+                  <button
+                    onClick={() => handleDelete(r)}
+                    disabled={busyId === r.id}
+                    title="Delete request"
+                    aria-label="Delete request"
+                    className="flex h-8 w-8 items-center justify-center rounded-full border border-ink-200 text-rose-500 transition hover:bg-rose-50 disabled:opacity-60"
+                  >
+                    <Trash2 size={13} />
+                  </button>
                 )}
               </div>
             </div>

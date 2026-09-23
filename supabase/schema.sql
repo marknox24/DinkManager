@@ -1715,13 +1715,23 @@ drop policy if exists "subscription_requests_select_admin" on subscription_reque
 create policy "subscription_requests_select_admin" on subscription_requests for select
   using (is_admin_user());
 
--- Covers the Reject action (a plain client-side update); Approve goes
--- through the service-role edge function instead since it also has to touch
--- auth.users/profiles/events, which this policy alone can't do.
+-- Covers Reject and Reopen (plain client-side updates: pending -> rejected,
+-- rejected -> pending); Approve goes through the service-role edge function
+-- instead since it also has to touch auth.users/profiles/events, which this
+-- policy alone can't do. An approved row is final from the client's side:
+-- reopening one would let it be approved — and its plan/credit granted —
+-- a second time.
 drop policy if exists "subscription_requests_update_admin" on subscription_requests;
 create policy "subscription_requests_update_admin" on subscription_requests for update
-  using (is_admin_user())
-  with check (is_admin_user());
+  using (is_admin_user() and status <> 'approved')
+  with check (is_admin_user() and status <> 'approved');
+
+-- Admin clean-up of pending/rejected requests (spam, duplicates, test
+-- submissions). Approved rows stay: they're the record of what was paid —
+-- the Admiral Dashboard's revenue, and the upgraded event's plan_payment_id.
+drop policy if exists "subscription_requests_delete_admin" on subscription_requests;
+create policy "subscription_requests_delete_admin" on subscription_requests for delete
+  using (is_admin_user() and status <> 'approved');
 
 -- ----------------------------------------------------------------------------
 -- EVENT PLAN ENTITLEMENTS  (events.entitlement_*/plan_payment_id columns
@@ -1736,27 +1746,105 @@ create policy "subscription_requests_update_admin" on subscription_requests for 
 alter table events drop constraint if exists events_plan_payment_id_fkey;
 alter table events add constraint events_plan_payment_id_fkey foreign key (plan_payment_id) references subscription_requests(id) on delete set null;
 
--- Every new event starts on Free Trial, and the database — not the client —
--- decides what that snapshot contains. Without this, events_insert_owner's
--- plan = 'free' pin still let a raw client insert choose its own
--- entitlement_* values (e.g. plan 'free' with 9999 players per category),
--- since nothing checked those columns on insert. RLS WITH CHECK runs after
--- BEFORE triggers, so the row this produces is also what satisfies the
--- plan = 'free' pin. The only path to a paid snapshot is
--- approve-subscription-request's service-role UPDATE. Values mirror
--- PLAN_LIMITS.free in src/data/plans.js.
+-- The one database-side list of what each plan includes and costs. Read by
+-- events_force_free_entitlements below (Free Trial snapshot) and by
+-- activate_purchase() (a paid event's snapshot + the amount recorded as
+-- paid). src/data/plans.js mirrors these values for the UI — keep the two in
+-- sync. Readable by anyone (the numbers are public on the pricing page);
+-- no client write policy.
+create table if not exists plan_catalog (
+  plan text primary key check (plan in ('free', 'starter', 'pro', 'business')),
+  label text not null,
+  price numeric(10, 2) not null,
+  categories integer, -- null = unlimited
+  players_per_category integer not null,
+  courts integer not null,
+  csv_import boolean not null
+);
+
+insert into plan_catalog (plan, label, price, categories, players_per_category, courts, csv_import) values
+  ('free', 'Free Trial', 0, 1, 10, 1, false),
+  ('starter', 'Starter', 699, 5, 30, 4, true),
+  ('pro', 'Pro', 899, 10, 64, 8, true),
+  ('business', 'Business', 1099, null, 128, 16, true)
+on conflict (plan) do update set
+  label = excluded.label, price = excluded.price, categories = excluded.categories,
+  players_per_category = excluded.players_per_category, courts = excluded.courts, csv_import = excluded.csv_import;
+
+alter table plan_catalog enable row level security;
+
+drop policy if exists "plan_catalog_select_public" on plan_catalog;
+create policy "plan_catalog_select_public" on plan_catalog for select using (true);
+
+-- One Free Trial event per account, ever. Set the first time an account
+-- creates an event from the app; deleting that event doesn't give the
+-- trial back. Backfilled from each organizer's first event — every event
+-- that existed before this was created from the app, i.e. as a trial.
+alter table profiles add column if not exists free_trial_used_at timestamptz;
+
+update profiles p
+set free_trial_used_at = first_event.created_at
+from (select organizer_id, min(created_at) as created_at from events group by organizer_id) first_event
+where first_event.organizer_id = p.id and p.free_trial_used_at is null;
+
+-- 'trial' = created from the app (Create event / Duplicate) as the account's
+-- Free Trial; 'purchase' = created by activate_purchase() for an approved
+-- website purchase, already on the plan that was paid for.
+alter table events add column if not exists origin text not null default 'trial';
+alter table events drop constraint if exists events_origin_check;
+alter table events add constraint events_origin_check check (origin in ('trial', 'purchase'));
+
+-- Decides what a new event's plan snapshot is — never the client.
+--   - App inserts (auth.role() authenticated/anon — createEvent,
+--     duplicateEvent, or a raw client call): always Free Trial, and only if
+--     the account hasn't used its one Free Trial yet. Without this, a client
+--     insert could pick its own entitlement_* values (events_insert_owner
+--     only pins plan = 'free'), and Create/Duplicate could mint unlimited
+--     free events. RLS WITH CHECK runs after BEFORE triggers, so the row
+--     this produces is also what satisfies the plan = 'free' pin.
+--   - Trusted server inserts (service role / SQL editor): an insert carrying
+--     plan_payment_id is activate_purchase() creating a paid event, and its
+--     values stand. Anything else still gets the Free snapshot, just without
+--     the trial check.
+-- Security definer so it can read-lock and stamp profiles regardless of
+-- the caller's RLS; auth.role() still reports the original caller.
 create or replace function events_force_free_entitlements()
 returns trigger
 language plpgsql
+security definer
+set search_path = public
 as $$
+declare
+  v_is_client boolean := coalesce(auth.role(), '') in ('authenticated', 'anon');
+  v_free plan_catalog%rowtype;
+  v_trial_used timestamptz;
 begin
+  if not v_is_client and new.plan_payment_id is not null then
+    new.origin := 'purchase';
+    return new;
+  end if;
+
+  select * into v_free from plan_catalog where plan = 'free';
   new.plan := 'free';
-  new.entitlement_categories := 1;
-  new.entitlement_players_per_category := 10;
-  new.entitlement_courts := 1;
-  new.entitlement_csv_import := false;
+  new.entitlement_categories := v_free.categories;
+  new.entitlement_players_per_category := v_free.players_per_category;
+  new.entitlement_courts := v_free.courts;
+  new.entitlement_csv_import := v_free.csv_import;
   new.plan_activated_at := now();
   new.plan_payment_id := null;
+  new.origin := 'trial';
+
+  if v_is_client then
+    -- for update: serializes two concurrent creates (a double click, React
+    -- StrictMode's double effect) so only one of them can use the trial.
+    select free_trial_used_at into v_trial_used from profiles where id = new.organizer_id for update;
+    if v_trial_used is not null then
+      raise exception 'Free Trial already used — each account gets one Free Trial event. Choose a plan to create another event.'
+        using errcode = 'check_violation';
+    end if;
+    update profiles set free_trial_used_at = now() where id = new.organizer_id;
+  end if;
+
   -- Court cap at creation; the UPDATE-side equivalent is
   -- events_enforce_court_entitlement below.
   if new.num_courts is not null and new.num_courts > new.entitlement_courts then
@@ -2032,11 +2120,19 @@ alter table events add column if not exists duplicated_from uuid references even
 -- Written only by the security-definer triggers below — no insert policy.
 create table if not exists admin_activity (
   id uuid primary key default gen_random_uuid(),
-  kind text not null check (kind in ('payment_received', 'plan_upgraded', 'credit_granted', 'event_duplicated', 'player_added', 'event_completed')),
+  kind text not null,
   event_id uuid references events(id) on delete set null,
   message text not null,
   created_at timestamptz not null default now()
 );
+
+-- credit_granted: pre-activate_purchase approvals of website purchases
+-- (kept for those old rows); purchase_activated replaces it.
+alter table admin_activity drop constraint if exists admin_activity_kind_check;
+alter table admin_activity add constraint admin_activity_kind_check check (kind in (
+  'payment_received', 'plan_upgraded', 'credit_granted', 'purchase_activated',
+  'event_duplicated', 'player_added', 'event_completed'
+));
 
 create index if not exists admin_activity_created_at_idx on admin_activity (created_at desc);
 
@@ -2062,7 +2158,12 @@ begin
       'Payment submitted: ' || v_plan_label ||
       coalesce(' for "' || v_event_name || '"', ' (account credit)') || ' by ' || new.email);
   elsif new.status = 'approved' and old.status is distinct from 'approved' then
-    if new.event_id is not null then
+    if old.event_id is null and new.event_id is not null then
+      -- A website purchase: activate_purchase() created this event and
+      -- linked it to the request in the same update.
+      insert into admin_activity (kind, event_id, message)
+      values ('purchase_activated', new.event_id, 'New ' || v_plan_label || ' event created for ' || new.email);
+    elsif new.event_id is not null then
       insert into admin_activity (kind, event_id, message)
       values ('plan_upgraded', new.event_id, coalesce('"' || v_event_name || '"', 'An event') || ' upgraded to ' || v_plan_label);
     else
@@ -2266,3 +2367,91 @@ $$;
 
 revoke execute on function admin_dashboard() from public, anon;
 grant execute on function admin_dashboard() to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- PURCHASE ACTIVATION  (one purchase -> one approval -> one event -> one
+-- plan). The single place a paid plan is ever activated, for every plan
+-- tier; called only by the approve-subscription-request edge function
+-- (service role), after it has invited or linked the organizer's account.
+--   - Website purchase (request.event_id null): creates a NEW event for
+--     p_organizer_id, already on the purchased plan with that plan's
+--     entitlement snapshot, and links the request to it. It doesn't use up
+--     a slot on an account with an event limit (max_events + 1, unless the
+--     account is unlimited).
+--   - In-app "Upgrade event" (request.event_id set): upgrades that event.
+-- Either way the request ends approved with the amount charged, all in one
+-- transaction — a failure leaves the request pending and nothing half-done.
+-- ----------------------------------------------------------------------------
+create or replace function activate_purchase(p_request_id uuid, p_organizer_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_req subscription_requests%rowtype;
+  v_cat plan_catalog%rowtype;
+  v_event_id uuid;
+  v_event_name text;
+  v_slug text;
+  v_created boolean := false;
+begin
+  select * into v_req from subscription_requests where id = p_request_id for update;
+  if not found then
+    raise exception 'Purchase request not found';
+  end if;
+  if v_req.status <> 'pending' then
+    raise exception 'This request is already %', v_req.status;
+  end if;
+
+  select * into v_cat from plan_catalog where plan = v_req.plan;
+  if not found or v_cat.plan = 'free' then
+    raise exception 'Unknown paid plan: %', v_req.plan;
+  end if;
+
+  if v_req.event_id is not null then
+    update events set
+      plan = v_cat.plan,
+      entitlement_categories = v_cat.categories,
+      entitlement_players_per_category = v_cat.players_per_category,
+      entitlement_courts = v_cat.courts,
+      entitlement_csv_import = v_cat.csv_import,
+      plan_activated_at = now(),
+      plan_payment_id = v_req.id
+    where id = v_req.event_id
+    returning id, name into v_event_id, v_event_name;
+    if v_event_id is null then
+      raise exception 'Event not found — it may have been deleted.';
+    end if;
+  else
+    if p_organizer_id is null then
+      raise exception 'No organizer account to create the event for';
+    end if;
+    loop
+      v_slug := 'untitled-tournament-' || substr(md5(random()::text), 1, 6);
+      exit when not exists (select 1 from events where slug = v_slug);
+    end loop;
+    insert into events (
+      organizer_id, name, slug, status, is_published,
+      plan, entitlement_categories, entitlement_players_per_category, entitlement_courts, entitlement_csv_import,
+      plan_activated_at, plan_payment_id
+    ) values (
+      p_organizer_id, 'Untitled Tournament', v_slug, 'upcoming', false,
+      v_cat.plan, v_cat.categories, v_cat.players_per_category, v_cat.courts, v_cat.csv_import,
+      now(), v_req.id
+    )
+    returning id, name into v_event_id, v_event_name;
+    update profiles set max_events = max_events + 1 where id = p_organizer_id and max_events is not null;
+    v_created := true;
+  end if;
+
+  update subscription_requests
+  set status = 'approved', resolved_at = now(), amount = v_cat.price, event_id = v_event_id
+  where id = v_req.id;
+
+  return jsonb_build_object('event_id', v_event_id, 'event_name', v_event_name, 'plan', v_cat.plan, 'created', v_created);
+end;
+$$;
+
+revoke execute on function activate_purchase(uuid, uuid) from public, anon, authenticated;
+grant execute on function activate_purchase(uuid, uuid) to service_role;

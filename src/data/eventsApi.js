@@ -699,10 +699,37 @@ export async function rejectSubscriptionRequest(requestId, adminNote) {
     .from('subscription_requests')
     .update({ status: 'rejected', admin_note: adminNote || null, resolved_at: new Date().toISOString() })
     .eq('id', requestId)
-    .select()
+    .select('*, event:events!subscription_requests_event_id_fkey(id, name, organizer_id)')
     .single();
   if (error) throw error;
   return data;
+}
+
+// Rejected -> pending again (rejected by mistake, or the customer sent a
+// corrected screenshot), so it can be approved normally. The admin_note is
+// kept as a record of why it was rejected. RLS refuses this on approved rows.
+export async function reopenSubscriptionRequest(requestId) {
+  const { data, error } = await supabase
+    .from('subscription_requests')
+    .update({ status: 'pending', resolved_at: null })
+    .eq('id', requestId)
+    .eq('status', 'rejected')
+    .select('*, event:events!subscription_requests_event_id_fkey(id, name, organizer_id)')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+// Pending/rejected only — RLS refuses approved rows, which are the record of
+// what was paid. The screenshot is removed after the row, best-effort: a
+// leftover file in the private bucket is harmless, a leftover row isn't.
+export async function deleteSubscriptionRequest(request) {
+  const { data, error } = await supabase.from('subscription_requests').delete().eq('id', request.id).select('id');
+  if (error) throw error;
+  if (!data?.length) throw new Error('This request could not be deleted — approved requests are kept as a payment record.');
+  if (request.screenshot_path) {
+    await supabase.storage.from('subscription-proofs').remove([request.screenshot_path]);
+  }
 }
 
 // ---------------------------------------------------------------------------
