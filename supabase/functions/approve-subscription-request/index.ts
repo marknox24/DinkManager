@@ -77,6 +77,13 @@ Deno.serve(async (req) => {
     // Guards against double-approving from two open admin tabs.
     if (subRequest.status !== 'pending') return jsonResponse({ error: `This request is already ${subRequest.status}` }, 400);
 
+    // What this approval is recorded as having been paid (₱), for the
+    // Admiral Dashboard's revenue figures — mirrors PLAN_LIMITS[plan].price
+    // in src/data/plans.js.
+    const PLAN_PRICES = { starter: 699, pro: 899, business: 1099 };
+    const amount = PLAN_PRICES[subRequest.plan];
+    if (amount === undefined) return jsonResponse({ error: `Unknown plan: ${subRequest.plan}` }, 400);
+
     // 2b. Event-scoped upgrade — the organizer is already authenticated and
     // owns this event (enforced at request-insert time by
     // subscription_requests_insert_public's RLS), so none of the
@@ -113,7 +120,7 @@ Deno.serve(async (req) => {
 
       const { error: resolveErr } = await admin
         .from('subscription_requests')
-        .update({ status: 'approved', resolved_at: new Date().toISOString() })
+        .update({ status: 'approved', resolved_at: new Date().toISOString(), amount })
         .eq('id', requestId);
       if (resolveErr) return jsonResponse({ error: resolveErr.message }, 400);
 
@@ -185,7 +192,7 @@ Deno.serve(async (req) => {
     // 5. Mark the request resolved.
     const { error: resolveErr } = await admin
       .from('subscription_requests')
-      .update({ status: 'approved', resolved_at: new Date().toISOString() })
+      .update({ status: 'approved', resolved_at: new Date().toISOString(), amount })
       .eq('id', requestId);
     if (resolveErr) return jsonResponse({ error: resolveErr.message }, 400);
 

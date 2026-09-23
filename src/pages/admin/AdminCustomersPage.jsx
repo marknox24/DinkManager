@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { Check, Copy, CreditCard, ImageIcon, KeyRound, MailCheck, Pencil, QrCode, RefreshCw, Trash2, UserCheck, UserPlus, XCircle } from 'lucide-react';
 import OrganizerLayout from '../../components/organizer/OrganizerLayout';
 import Modal from '../../components/ui/Modal';
@@ -117,6 +118,7 @@ function RejectRequestModal({ request, onClose, onRejected }) {
 }
 
 function SubscriptionRequestsList() {
+  const location = useLocation();
   const { approveSubscriptionRequest } = useAuth();
   const { pushToast } = useToast();
   const [requests, setRequests] = useState(null);
@@ -130,6 +132,15 @@ function SubscriptionRequestsList() {
   };
 
   useEffect(reload, []);
+
+  // The Admiral Dashboard links here as #subscription-requests. React Router
+  // doesn't scroll to hashes, and this card only reaches its full height
+  // once the list has loaded — so scroll after that, not on mount.
+  useEffect(() => {
+    if (requests && location.hash === '#subscription-requests') {
+      document.getElementById('subscription-requests')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }, [requests, location.hash]);
 
   const handleViewScreenshot = async (request) => {
     try {
@@ -159,7 +170,7 @@ function SubscriptionRequestsList() {
   };
 
   return (
-    <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+    <div id="subscription-requests" className="scroll-mt-24 rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
       <div className="mb-4 flex items-center gap-2.5">
         <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
           <CreditCard size={17} strokeWidth={2.3} />
@@ -550,7 +561,7 @@ export default function AdminCustomersPage() {
   const [refreshKey, setRefreshKey] = useState(0);
 
   return (
-    <OrganizerLayout>
+    <OrganizerLayout backTo="/admin" backLabel="Dashboard">
       <div className="mb-4">
         <AccountTypeCard accountType={accountType} />
       </div>

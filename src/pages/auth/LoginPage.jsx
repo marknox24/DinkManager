@@ -50,7 +50,7 @@ export default function LoginPage() {
       data: { user },
     } = await supabase.auth.getUser();
     const { data: prof } = await supabase.from('profiles').select('is_admin').eq('id', user.id).maybeSingle();
-    navigate(prof?.is_admin ? '/admin/customers' : '/dashboard', { replace: true });
+    navigate(prof?.is_admin ? '/admin' : '/dashboard', { replace: true });
   };
 
   const handleSubmit = async (e) => {

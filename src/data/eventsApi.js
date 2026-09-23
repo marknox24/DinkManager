@@ -84,6 +84,7 @@ export async function duplicateEvent(eventId) {
       refund_policy: source.refund_policy,
       randomizer_allow_same_club: source.randomizer_allow_same_club,
       match_duration_minutes: source.match_duration_minutes,
+      duplicated_from: source.id,
     })
     .select()
     .single();
@@ -685,7 +686,9 @@ export async function getPendingPlanRequestForEvent(eventId) {
 export async function listSubscriptionRequests() {
   const { data, error } = await supabase
     .from('subscription_requests')
-    .select('*, event:events(id, name, organizer_id)')
+    // FK named explicitly: events.plan_payment_id also links these two
+    // tables, and PostgREST refuses an ambiguous embed.
+    .select('*, event:events!subscription_requests_event_id_fkey(id, name, organizer_id)')
     .order('created_at', { ascending: false });
   if (error) throw error;
   return data;

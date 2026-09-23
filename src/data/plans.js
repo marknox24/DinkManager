@@ -7,6 +7,8 @@
 // this file, so the same values are hand-duplicated in supabase/schema.sql
 // (events_force_free_entitlements trigger + the backfill) and in that edge
 // function's ENTITLEMENTS map — keep all three in sync when changing a tier.
+// Prices are likewise duplicated in that edge function's PLAN_PRICES (the
+// amount recorded on approval, which the Admiral Dashboard sums as revenue).
 export const PLAN_ORDER = ['free', 'starter', 'pro', 'business'];
 
 export const PLAN_LIMITS = {

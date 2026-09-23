@@ -2006,3 +2006,263 @@ grant execute on function public_published_events() to anon, authenticated;
 alter table profiles add column if not exists plan text not null default 'free';
 alter table profiles drop constraint if exists profiles_plan_check;
 alter table profiles add constraint profiles_plan_check check (plan in ('free', 'starter', 'pro', 'business'));
+
+-- ----------------------------------------------------------------------------
+-- ADMIRAL DASHBOARD  (/admin — the platform owner's business overview; see
+-- src/pages/admin/AdminDashboardPage.jsx). Everything the page shows comes
+-- from the one admin_dashboard() RPC at the bottom of this section.
+-- ----------------------------------------------------------------------------
+
+-- What was actually charged, snapshotted by approve-subscription-request at
+-- approval time (null while pending/rejected), so revenue doesn't drift if
+-- plan prices change later. The backfill covers requests approved before
+-- this column existed, at the prices in effect then.
+alter table subscription_requests add column if not exists amount numeric(10, 2);
+
+update subscription_requests
+set amount = case plan when 'starter' then 699 when 'pro' then 899 when 'business' then 1099 end
+where status = 'approved' and amount is null;
+
+-- Set by duplicateEvent() in src/data/eventsApi.js. Only used for the
+-- activity feed below.
+alter table events add column if not exists duplicated_from uuid references events(id) on delete set null;
+
+-- Platform-wide activity feed. Distinct from activity_log (per event,
+-- organizer-facing): this one spans every organizer and is admin-only.
+-- Written only by the security-definer triggers below — no insert policy.
+create table if not exists admin_activity (
+  id uuid primary key default gen_random_uuid(),
+  kind text not null check (kind in ('payment_received', 'plan_upgraded', 'credit_granted', 'event_duplicated', 'player_added', 'event_completed')),
+  event_id uuid references events(id) on delete set null,
+  message text not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists admin_activity_created_at_idx on admin_activity (created_at desc);
+
+alter table admin_activity enable row level security;
+
+drop policy if exists "admin_activity_select_admin" on admin_activity;
+create policy "admin_activity_select_admin" on admin_activity for select
+  using (is_admin_user());
+
+create or replace function log_admin_subscription_activity()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  v_event_name text;
+  v_plan_label text := initcap(new.plan);
+begin
+  select name into v_event_name from events where id = new.event_id;
+  if tg_op = 'INSERT' then
+    insert into admin_activity (kind, event_id, message)
+    values ('payment_received', new.event_id,
+      'Payment submitted: ' || v_plan_label ||
+      coalesce(' for "' || v_event_name || '"', ' (account credit)') || ' by ' || new.email);
+  elsif new.status = 'approved' and old.status is distinct from 'approved' then
+    if new.event_id is not null then
+      insert into admin_activity (kind, event_id, message)
+      values ('plan_upgraded', new.event_id, coalesce('"' || v_event_name || '"', 'An event') || ' upgraded to ' || v_plan_label);
+    else
+      insert into admin_activity (kind, event_id, message)
+      values ('credit_granted', null, new.email || ' granted an event credit (' || v_plan_label || ')');
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_subscription_request_admin_activity on subscription_requests;
+create trigger on_subscription_request_admin_activity
+  after insert or update on subscription_requests
+  for each row execute function log_admin_subscription_activity();
+
+create or replace function log_admin_event_activity()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  v_source_name text;
+begin
+  if tg_op = 'INSERT' then
+    if new.duplicated_from is not null then
+      select name into v_source_name from events where id = new.duplicated_from;
+      insert into admin_activity (kind, event_id, message)
+      values ('event_duplicated', new.id, '"' || new.name || '" duplicated from "' || coalesce(v_source_name, 'a deleted event') || '"');
+    end if;
+  elsif new.status = 'finished' and old.status is distinct from 'finished' then
+    insert into admin_activity (kind, event_id, message)
+    values ('event_completed', new.id, '"' || new.name || '" completed');
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_event_admin_activity on events;
+create trigger on_event_admin_activity
+  after insert or update on events
+  for each row execute function log_admin_event_activity();
+
+-- Organizer-entered players (Add player / Excel import) are inserted
+-- already approved; public self-registrations arrive pending.
+create or replace function log_admin_registration_activity()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  v_event_name text;
+begin
+  select name into v_event_name from events where id = new.event_id;
+  insert into admin_activity (kind, event_id, message)
+  values ('player_added', new.event_id,
+    new.player_name || case when new.status = 'approved' then ' added to "' else ' registered for "' end ||
+    coalesce(v_event_name, 'an event') || '"');
+  return new;
+end;
+$$;
+
+drop trigger if exists on_registration_admin_activity on registrations;
+create trigger on_registration_admin_activity
+  after insert on registrations
+  for each row execute function log_admin_registration_activity();
+
+-- One-time seed so the feed isn't empty on day one: the last 30 days of
+-- payments and registrations. Guarded on the table being empty, so re-running
+-- this file never duplicates it.
+do $$
+begin
+  if not exists (select 1 from admin_activity) then
+    insert into admin_activity (kind, event_id, message, created_at)
+    select 'payment_received', sr.event_id,
+      'Payment submitted: ' || initcap(sr.plan) || coalesce(' for "' || e.name || '"', ' (account credit)') || ' by ' || sr.email,
+      sr.created_at
+    from subscription_requests sr left join events e on e.id = sr.event_id
+    where sr.created_at > now() - interval '30 days';
+
+    insert into admin_activity (kind, event_id, message, created_at)
+    select case when sr.event_id is not null then 'plan_upgraded' else 'credit_granted' end, sr.event_id,
+      case when sr.event_id is not null
+        then coalesce('"' || e.name || '"', 'An event') || ' upgraded to ' || initcap(sr.plan)
+        else sr.email || ' granted an event credit (' || initcap(sr.plan) || ')' end,
+      sr.resolved_at
+    from subscription_requests sr left join events e on e.id = sr.event_id
+    where sr.status = 'approved' and sr.resolved_at > now() - interval '30 days';
+
+    insert into admin_activity (kind, event_id, message, created_at)
+    select 'player_added', r.event_id,
+      r.player_name || case when r.status = 'approved' then ' added to "' else ' registered for "' end || e.name || '"',
+      r.created_at
+    from registrations r join events e on e.id = r.event_id
+    where r.created_at > now() - interval '30 days';
+  end if;
+end $$;
+
+-- Everything /admin shows, in one round trip. Security definer because the
+-- admin can't read other organizers' registrations etc. under RLS — the
+-- is_admin_user() check on the first line is the gate instead. All "today"
+-- and "this month" boundaries are Philippine time.
+create or replace function admin_dashboard()
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+stable
+as $$
+declare
+  v_today date := (now() at time zone 'Asia/Manila')::date;
+  v_result jsonb;
+begin
+  if not is_admin_user() then
+    raise exception 'Not authorized' using errcode = '42501';
+  end if;
+
+  select jsonb_build_object(
+    'revenue_today', (
+      select coalesce(sum(amount), 0) from subscription_requests
+      where status = 'approved' and (resolved_at at time zone 'Asia/Manila')::date = v_today),
+    'revenue_mtd', (
+      select coalesce(sum(amount), 0) from subscription_requests
+      where status = 'approved' and (resolved_at at time zone 'Asia/Manila')::date >= date_trunc('month', v_today::timestamp)::date),
+    'paid_events', (select count(*) from events where plan <> 'free'),
+    'active_events', (
+      select count(*) from events
+      where is_published and status in ('upcoming', 'ongoing', 'rescheduled')),
+    'attention', jsonb_build_object(
+      'payment_approvals', (
+        select count(*) from subscription_requests sr left join events e on e.id = sr.event_id
+        where sr.status = 'pending' and (sr.event_id is null or e.plan = 'free')),
+      'upgrade_requests', (
+        select count(*) from subscription_requests sr join events e on e.id = sr.event_id
+        where sr.status = 'pending' and e.plan <> 'free'),
+      'upcoming_events', (
+        select count(*) from events
+        where status not in ('cancelled', 'finished') and start_date between v_today and v_today + 7)
+    ),
+    'recent_purchases', coalesce((
+      select jsonb_agg(row_to_json(x) order by x.created_at desc) from (
+        select sr.id, sr.plan, sr.status, sr.amount, sr.created_at, sr.email,
+          e.name as event_name,
+          coalesce(nullif(p.display_name, ''), nullif(e.organizer_name, ''), sr.email) as organizer
+        from subscription_requests sr
+        left join events e on e.id = sr.event_id
+        left join profiles p on p.id = coalesce(e.organizer_id, (select id from profiles where email = sr.email limit 1))
+        order by sr.created_at desc
+        limit 5
+      ) x), '[]'::jsonb),
+    'upcoming_events', coalesce((
+      select jsonb_agg(row_to_json(x) order by x.start_date) from (
+        select e.id, e.name, e.slug, e.is_published, e.status, e.start_date, e.plan,
+          coalesce(nullif(p.display_name, ''), nullif(e.organizer_name, ''), p.email) as organizer
+        from events e
+        left join profiles p on p.id = e.organizer_id
+        where e.status not in ('cancelled', 'finished') and e.start_date >= v_today
+        order by e.start_date
+        limit 5
+      ) x), '[]'::jsonb),
+    'revenue_trend', (
+      select jsonb_agg(jsonb_build_object('month', to_char(m, 'YYYY-MM'), 'total', coalesce(t.total, 0)) order by m)
+      from generate_series(date_trunc('month', v_today::timestamp) - interval '5 months', date_trunc('month', v_today::timestamp), interval '1 month') m
+      left join (
+        select date_trunc('month', resolved_at at time zone 'Asia/Manila') as month, sum(amount) as total
+        from subscription_requests
+        where status = 'approved'
+        group by 1
+      ) t on t.month = m),
+    -- A bulk Excel import writes one player_added row per player, which
+    -- would fill the feed. Each consecutive run of player_added rows for the
+    -- same event and verb (added vs self-registered) is folded into one item
+    -- carrying a count (gaps-and-islands: the two row_numbers differ by a
+    -- constant within a run). Every other kind stays one item per row.
+    'recent_activity', coalesce((
+      select jsonb_agg(row_to_json(x) order by x.created_at desc) from (
+        select min(r.id::text) as id, r.kind, r.event_id, max(r.event_name) as event_name, r.verb,
+          (array_agg(r.message order by r.created_at desc))[1] as message,
+          max(r.created_at) as created_at, count(*) as count
+        from (
+          select a.id, a.kind, a.event_id, e.name as event_name, a.message, a.created_at,
+            case when a.kind <> 'player_added' then null
+                 when a.message like '% registered for "%' then 'registered for'
+                 else 'added to' end as verb,
+            row_number() over (order by a.created_at desc, a.id)
+              - row_number() over (
+                  partition by a.kind, a.event_id, a.message like '% registered for "%'
+                  order by a.created_at desc, a.id) as island
+          from (select * from admin_activity order by created_at desc limit 1000) a
+          left join events e on e.id = a.event_id
+        ) r
+        group by r.kind, r.event_id, r.verb, r.island, case when r.kind = 'player_added' then null else r.id end
+        order by max(r.created_at) desc
+        limit 10
+      ) x), '[]'::jsonb)
+  ) into v_result;
+
+  return v_result;
+end;
+$$;
+
+revoke execute on function admin_dashboard() from public, anon;
+grant execute on function admin_dashboard() to authenticated;

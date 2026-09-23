@@ -45,8 +45,8 @@ export default function OrganizerLayout({ children, backTo, backLabel }) {
             <span className="hidden text-xs text-ink-500 sm:inline">{user?.email}</span>
             {isAdmin && (
               <Link
-                to="/admin/customers"
-                title="Customer logins"
+                to="/admin"
+                title="Admiral Dashboard"
                 className="flex items-center gap-1.5 rounded-full border border-ink-200 px-3 py-1.5 text-xs font-semibold text-ink-600 transition hover:bg-ink-100"
               >
                 <Users size={13} /> <span className="hidden sm:inline">Admin</span>

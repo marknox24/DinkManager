@@ -28,6 +28,7 @@ const PlayerSignupPage = lazy(() => import('./pages/player/PlayerSignupPage'));
 const PlayerDashboardPage = lazy(() => import('./pages/player/PlayerDashboardPage'));
 const AccountSettingsPage = lazy(() => import('./pages/account/AccountSettingsPage'));
 const AdminCustomersPage = lazy(() => import('./pages/admin/AdminCustomersPage'));
+const AdminDashboardPage = lazy(() => import('./pages/admin/AdminDashboardPage'));
 const DashboardPage = lazy(() => import('./pages/organizer/DashboardPage'));
 const EventEditorPage = lazy(() => import('./pages/organizer/EventEditorPage'));
 const OverviewPage = lazy(() => import('./pages/organizer/event/OverviewPage'));
@@ -84,6 +85,14 @@ function AppRoutes() {
         <Route path="/player/dashboard" element={<Protected role="player"><PlayerDashboardPage /></Protected>} />
 
         <Route path="/account" element={<Protected role="any"><AccountSettingsPage /></Protected>} />
+        <Route
+          path="/admin"
+          element={
+            <Protected requireAdmin>
+              <AdminDashboardPage />
+            </Protected>
+          }
+        />
         <Route
           path="/admin/customers"
           element={
