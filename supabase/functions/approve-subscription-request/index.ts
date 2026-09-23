@@ -3,14 +3,22 @@
 // SUPABASE_URL / SUPABASE_ANON_KEY / SUPABASE_SERVICE_ROLE_KEY are injected
 // automatically for every Edge Function in this project.
 //
-// Approves a manual/QR subscription_requests row: invites the email (or
-// grants directly onto an existing account, same branch as
-// create-trial-account) and grants +1 event credit by INCREMENTING
-// profiles.max_events — this is "pay per event," not a time-boxed trial, so
-// access_expires_at is deliberately never touched here. Only callable by an
-// authenticated admin account (profiles.is_admin = true) — admin.auth.admin
-// calls need the service-role key, which must never reach the browser, so
-// this check has to happen server-side.
+// Approves a manual/QR subscription_requests row. Two distinct flows share
+// this one function, told apart by subRequest.event_id (see schema.sql's
+// "SUBSCRIPTION REQUESTS" comment):
+//   - event_id set: an already-authenticated organizer upgrading ONE event
+//     they own. Writes the purchased plan + entitlement_* snapshot onto
+//     THAT event alone — never onto profiles, never onto any other event
+//     (one payment = one event = one plan entitlement).
+//   - event_id null: the legacy anonymous pre-signup lead flow — invites
+//     the email (or grants directly onto an existing account) and grants
+//     +1 event credit by INCREMENTING profiles.max_events. This no longer
+//     writes profiles.plan at all — every event, including that account's
+//     first, still starts on 'free' and needs its own separate event-scoped
+//     upgrade request to become a paid tier.
+// Only callable by an authenticated admin account (profiles.is_admin =
+// true) — admin.auth.admin calls need the service-role key, which must
+// never reach the browser, so this check has to happen server-side.
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
 const corsHeaders = {
@@ -57,9 +65,7 @@ Deno.serve(async (req) => {
     // 2. Validate input and load the request.
     const body = await req.json().catch(() => ({}));
     const requestId = String(body.requestId || '').trim();
-    const origin = String(body.origin || '').trim();
     if (!requestId) return jsonResponse({ error: 'Missing requestId' }, 400);
-    if (!origin || !/^https?:\/\//.test(origin)) return jsonResponse({ error: 'Missing origin' }, 400);
 
     const { data: subRequest, error: reqErr } = await admin
       .from('subscription_requests')
@@ -70,6 +76,54 @@ Deno.serve(async (req) => {
     if (!subRequest) return jsonResponse({ error: 'Request not found' }, 404);
     // Guards against double-approving from two open admin tabs.
     if (subRequest.status !== 'pending') return jsonResponse({ error: `This request is already ${subRequest.status}` }, 400);
+
+    // 2b. Event-scoped upgrade — the organizer is already authenticated and
+    // owns this event (enforced at request-insert time by
+    // subscription_requests_insert_public's RLS), so none of the
+    // invite/account-lookup logic below applies at all. Numbers mirror
+    // src/data/plans.js's PLAN_LIMITS — Deno edge functions can't import a
+    // frontend JS module, so keep them hand-synced (see plans.js's header
+    // for every place these numbers are duplicated).
+    if (subRequest.event_id) {
+      const { data: event, error: eventErr } = await admin.from('events').select('id, organizer_id').eq('id', subRequest.event_id).maybeSingle();
+      if (eventErr) return jsonResponse({ error: eventErr.message }, 400);
+      if (!event) return jsonResponse({ error: 'Event not found — it may have been deleted.' }, 404);
+
+      const ENTITLEMENTS = {
+        starter: { categories: 5, playersPerCategory: 30, courts: 4, csvImport: true },
+        pro: { categories: 10, playersPerCategory: 64, courts: 8, csvImport: true },
+        business: { categories: null, playersPerCategory: 128, courts: 16, csvImport: true },
+      };
+      const limits = ENTITLEMENTS[subRequest.plan];
+      if (!limits) return jsonResponse({ error: `Unknown plan: ${subRequest.plan}` }, 400);
+
+      const { error: eventUpdateErr } = await admin
+        .from('events')
+        .update({
+          plan: subRequest.plan,
+          entitlement_categories: limits.categories,
+          entitlement_players_per_category: limits.playersPerCategory,
+          entitlement_courts: limits.courts,
+          entitlement_csv_import: limits.csvImport,
+          plan_activated_at: new Date().toISOString(),
+          plan_payment_id: requestId,
+        })
+        .eq('id', event.id);
+      if (eventUpdateErr) return jsonResponse({ error: eventUpdateErr.message }, 400);
+
+      const { error: resolveErr } = await admin
+        .from('subscription_requests')
+        .update({ status: 'approved', resolved_at: new Date().toISOString() })
+        .eq('id', requestId);
+      if (resolveErr) return jsonResponse({ error: resolveErr.message }, 400);
+
+      return jsonResponse({ email: subRequest.email, plan: subRequest.plan, eventId: event.id, scope: 'event' });
+    }
+
+    // 2c. Legacy anonymous pre-signup lead — needs an account, so an origin
+    // to redirect the invite email to.
+    const origin = String(body.origin || '').trim();
+    if (!origin || !/^https?:\/\//.test(origin)) return jsonResponse({ error: 'Missing origin' }, 400);
 
     const email = subRequest.email;
 
@@ -121,14 +175,11 @@ Deno.serve(async (req) => {
     if (profileReadErr) return jsonResponse({ error: profileReadErr.message }, 400);
 
     const maxEvents = (currentProfile?.max_events ?? 0) + 1;
-    // plan: subRequest.plan sets the account's current subscribed tier —
-    // src/data/eventsApi.js's createEvent() snapshots this onto every new
-    // event at creation time (see that file's comment for why it's a
-    // snapshot, not a live sync).
-    const { error: updateErr } = await admin
-      .from('profiles')
-      .update({ max_events: maxEvents, role: 'organizer', email, plan: subRequest.plan })
-      .eq('id', userId);
+    // profiles.plan is never written here (or anywhere else, per the
+    // event-scoped model above) — this only ever grants event-creation
+    // room. Every event this account creates still starts on 'free' and
+    // needs its own separate event-scoped upgrade request to become paid.
+    const { error: updateErr } = await admin.from('profiles').update({ max_events: maxEvents, role: 'organizer', email }).eq('id', userId);
     if (updateErr) return jsonResponse({ error: updateErr.message }, 400);
 
     // 5. Mark the request resolved.
@@ -138,7 +189,7 @@ Deno.serve(async (req) => {
       .eq('id', requestId);
     if (resolveErr) return jsonResponse({ error: resolveErr.message }, 400);
 
-    return jsonResponse({ email, plan: subRequest.plan, maxEvents, isNewAccount });
+    return jsonResponse({ email, plan: subRequest.plan, maxEvents, isNewAccount, scope: 'account' });
   } catch (e) {
     return jsonResponse({ error: e?.message || 'Unexpected error' }, 500);
   }

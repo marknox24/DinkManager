@@ -117,7 +117,7 @@ export default function CheckInManagePage() {
   }, [categories, players, q, filter]);
 
   return (
-    <EventWorkspaceLayout eventName={event?.name}>
+    <EventWorkspaceLayout event={event}>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-bold text-ink-900">Check-in</h1>

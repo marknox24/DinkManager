@@ -25,23 +25,55 @@ export function EventAccessProvider({ eventId, children }) {
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    Promise.all([getEventById(eventId), getMyStaffRow(eventId, user.id)])
-      .then(([event, staff]) => {
-        if (cancelled) return;
-        setOrganizerId(event.organizer_id);
-        setStaffRow(staff);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setOrganizerId(null);
-        setStaffRow(null);
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
+    const cacheKey = `dm_cached_access:${eventId}:${user.id}`;
+
+    function fetchAccess() {
+      setLoading(true);
+      Promise.all([getEventById(eventId), getMyStaffRow(eventId, user.id)])
+        .then(([event, staff]) => {
+          if (cancelled) return;
+          setOrganizerId(event.organizer_id);
+          setStaffRow(staff);
+          try {
+            localStorage.setItem(cacheKey, JSON.stringify({ organizerId: event.organizer_id, staffRow: staff, cachedAt: Date.now() }));
+          } catch {
+            // Storage full/unavailable — the in-memory access state is still correct.
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          // Offline or network error: a stale-but-real permission set is
+          // always safer than a false "no access" redirect (EventRoute
+          // sends anyone without owner/staff access to /dashboard), so
+          // restore the last-known-good access from cache instead of
+          // nulling it out — only null when there's truly no prior cache
+          // (first-ever visit with genuinely no access).
+          try {
+            const cached = localStorage.getItem(cacheKey);
+            if (cached) {
+              const { organizerId: cachedOrganizerId, staffRow: cachedStaffRow } = JSON.parse(cached);
+              setOrganizerId(cachedOrganizerId);
+              setStaffRow(cachedStaffRow);
+              return;
+            }
+          } catch {
+            // Malformed/unavailable storage — fall through to nulling below.
+          }
+          setOrganizerId(null);
+          setStaffRow(null);
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false);
+        });
+    }
+
+    fetchAccess();
+    // Self-corrects a stale cached permission set as soon as connectivity
+    // returns, rather than waiting for the next remount of this provider.
+    window.addEventListener('online', fetchAccess);
     return () => {
       cancelled = true;
+      window.removeEventListener('online', fetchAccess);
     };
   }, [eventId, user.id]);
 

@@ -65,7 +65,7 @@ export default function OverviewPage() {
   const approvedCount = registrations.filter((r) => r.status === 'approved').length;
 
   return (
-    <EventWorkspaceLayout eventName={event?.name}>
+    <EventWorkspaceLayout event={event}>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-bold text-ink-900">Overview</h1>

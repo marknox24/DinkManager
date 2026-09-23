@@ -1,19 +1,22 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import { AlertTriangle, Check, Coins, Copy, LayoutGrid, Lock, RefreshCw, Shuffle, Trash2 } from 'lucide-react';
-import { deleteEvent, getEventById, regenerateShareToken, setEventVisibility, updateEvent } from '../../../data/eventsApi';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { AlertTriangle, Check, Coins, Copy, Files, LayoutGrid, Lock, RefreshCw, Shuffle, Sparkles, Trash2 } from 'lucide-react';
+import { deleteEvent, duplicateEvent, getEventById, getPendingPlanRequestForEvent, regenerateShareToken, setEventVisibility, updateEvent } from '../../../data/eventsApi';
 import { CURRENCIES, COURT_TYPES } from '../../../data/constants';
-import { PLAN_LIMITS, planLimit } from '../../../data/plans';
+import { PLAN_LIMITS } from '../../../data/plans';
+import { usableCourts } from '../../../utils/courts';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
 import { useEventAccess } from '../../../context/EventAccessContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
+import UpgradeEventModal from '../../../components/organizer/UpgradeEventModal';
 import Select from '../../../components/ui/Select';
 import Switch from '../../../components/ui/Switch';
 
 export default function SettingsPage() {
   const { eventId } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { pushToast } = useToast();
   const confirm = useConfirm();
   const { isOwner } = useEventAccess();
@@ -22,26 +25,54 @@ export default function SettingsPage() {
   const [duration, setDuration] = useState('');
   const [courtType, setCourtType] = useState('');
   const [copied, setCopied] = useState(false);
+  const [pendingRequest, setPendingRequest] = useState(null);
+  const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
+  const [duplicating, setDuplicating] = useState(false);
+
+  const isLocked = event?.status === 'finished';
+
+  const reloadPendingRequest = () => getPendingPlanRequestForEvent(eventId).then(setPendingRequest);
 
   useEffect(() => {
-    getEventById(eventId)
-      .then((ev) => {
+    Promise.all([getEventById(eventId), getPendingPlanRequestForEvent(eventId)])
+      .then(([ev, pending]) => {
         setEvent(ev);
-        setNumCourts(ev.num_courts ?? 4);
+        setNumCourts(usableCourts(ev));
         setDuration(ev.match_duration_minutes ?? 18);
         setCourtType(ev.court_type || '');
+        setPendingRequest(pending);
       })
       .catch((e) => pushToast(e.message, 'error'));
   }, [eventId, pushToast]);
+
+  // ?upgrade=1 is how EventEditorPage.jsx/RegistrationsPage.jsx's plan-limit
+  // dialogs land here already pointed at the Upgrade Plan modal, instead of
+  // dropping the organizer on a page they then have to hunt around on.
+  useEffect(() => {
+    if (searchParams.get('upgrade') === '1' && event && !isLocked) {
+      setUpgradeModalOpen(true);
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete('upgrade');
+        return next;
+      }, { replace: true });
+    }
+  }, [searchParams, setSearchParams, event, isLocked]);
 
   const save = async () => {
     let n = parseInt(numCourts, 10);
     let d = parseInt(duration, 10);
     if (Number.isNaN(n) || n < 1) n = 1;
     if (Number.isNaN(d) || d < 1) d = 1;
-    const limit = planLimit(event.plan, 'courts');
+    const limit = event.entitlement_courts;
     if (limit != null && n > limit) {
-      pushToast(`Your ${PLAN_LIMITS[event.plan].label} plan allows up to ${limit} courts — raise this event's plan (on the Edit event page) to add more.`, 'error');
+      const go = await confirm({
+        title: 'Court limit reached',
+        message: `Your ${PLAN_LIMITS[event.plan].label} plan allows up to ${limit} courts for this event.`,
+        confirmLabel: 'Upgrade Event',
+        danger: false,
+      });
+      if (go) setUpgradeModalOpen(true);
       return;
     }
     try {
@@ -50,6 +81,18 @@ export default function SettingsPage() {
       pushToast('Court settings updated', 'success');
     } catch (e) {
       pushToast(e.message, 'error');
+    }
+  };
+
+  const handleDuplicate = async () => {
+    setDuplicating(true);
+    try {
+      const created = await duplicateEvent(eventId);
+      pushToast('Duplicated — pick a plan to get started', 'success');
+      navigate(`/events/${created.id}/edit`);
+    } catch (e) {
+      pushToast(e.message, 'error');
+      setDuplicating(false);
     }
   };
 
@@ -123,7 +166,7 @@ export default function SettingsPage() {
   };
 
   return (
-    <EventWorkspaceLayout eventName={event?.name}>
+    <EventWorkspaceLayout event={event}>
       <div className="mb-6">
         <h1 className="font-display text-2xl font-bold text-ink-900">Settings</h1>
         <p className="text-sm text-ink-500">Court capacity, match timing and danger zone</p>
@@ -133,6 +176,60 @@ export default function SettingsPage() {
         <div className="py-16 text-center text-sm text-ink-400">Loading…</div>
       ) : (
         <div className="mx-auto flex max-w-2xl flex-col gap-5">
+          <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex items-center gap-2.5">
+              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                <Sparkles size={17} strokeWidth={2.3} />
+              </span>
+              <div>
+                <h2 className="font-display text-base font-bold text-ink-900">Event plan</h2>
+                <p className="text-xs text-ink-500">
+                  {isLocked ? 'This event is finished — its plan and entitlements are preserved for the record.' : 'Applies only to this event — every other event you own keeps its own plan.'}
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl bg-ink-50 px-4 py-3.5">
+              <div>
+                <div className="text-sm font-bold text-ink-800">
+                  {PLAN_LIMITS[event.plan]?.label ?? 'Free Trial'}
+                  {event.plan !== 'free' && <span className="ml-1.5 font-normal text-ink-500">₱{PLAN_LIMITS[event.plan].price}</span>}
+                </div>
+                <div className="mt-0.5 text-xs text-ink-500">
+                  {event.entitlement_categories ?? 'Unlimited'} categories · {event.entitlement_players_per_category} players/cat · {event.entitlement_courts} courts ·{' '}
+                  {event.entitlement_csv_import ? 'Excel import' : 'No Excel import'}
+                </div>
+                <div className="mt-1.5 text-xs font-semibold">
+                  {pendingRequest ? (
+                    <span className="text-amber-600">
+                      {PLAN_LIMITS[pendingRequest.plan]?.label} upgrade pending review
+                    </span>
+                  ) : event.plan === 'free' ? (
+                    <span className="text-ink-500">Free Trial — no payment required</span>
+                  ) : (
+                    <span className="text-brand-600">Active · paid</span>
+                  )}
+                </div>
+              </div>
+              {isLocked ? (
+                <button
+                  onClick={handleDuplicate}
+                  disabled={duplicating}
+                  className="flex shrink-0 items-center gap-1.5 rounded-full border border-ink-200 bg-white px-4 py-2 text-xs font-bold text-ink-700 shadow-sm transition hover:bg-ink-100 disabled:opacity-50"
+                >
+                  <Files size={13} /> {duplicating ? 'Duplicating…' : 'Duplicate Event'}
+                </button>
+              ) : (
+                <button
+                  onClick={() => setUpgradeModalOpen(true)}
+                  disabled={!!pendingRequest}
+                  className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  <Sparkles size={13} /> {pendingRequest ? 'Upgrade pending review' : 'Upgrade Plan'}
+                </button>
+              )}
+            </div>
+          </div>
+
           <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center gap-2.5">
               <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
@@ -146,12 +243,12 @@ export default function SettingsPage() {
             <div className="flex flex-col gap-5">
               <div>
                 <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-ink-500">
-                  Number of courts available <span className="font-normal normal-case text-ink-400">— {PLAN_LIMITS[event.plan]?.label ?? 'Free Trial'} plan allows up to {planLimit(event.plan, 'courts')}</span>
+                  Number of courts available <span className="font-normal normal-case text-ink-400">— {PLAN_LIMITS[event.plan]?.label ?? 'Free Trial'} plan allows up to {event.entitlement_courts} for this event</span>
                 </label>
                 <input
                   type="number"
                   min={1}
-                  max={planLimit(event.plan, 'courts') ?? 30}
+                  max={event.entitlement_courts ?? 30}
                   value={numCourts}
                   onChange={(e) => setNumCourts(e.target.value)}
                   className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 sm:max-w-xs"
@@ -298,6 +395,16 @@ export default function SettingsPage() {
             </div>
           )}
         </div>
+      )}
+
+      {upgradeModalOpen && event && (
+        <UpgradeEventModal
+          event={event}
+          onClose={() => {
+            setUpgradeModalOpen(false);
+            reloadPendingRequest();
+          }}
+        />
       )}
     </EventWorkspaceLayout>
   );

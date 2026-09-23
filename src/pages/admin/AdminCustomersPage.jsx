@@ -144,7 +144,12 @@ function SubscriptionRequestsList() {
     setApprovingId(request.id);
     try {
       const data = await approveSubscriptionRequest(request.id);
-      pushToast(`${data.email} now has ${data.maxEvents} event credit${data.maxEvents === 1 ? '' : 's'}${data.isNewAccount ? ' — invite email sent' : ''}`, 'success');
+      pushToast(
+        data.scope === 'event'
+          ? `${PLAN_LIMITS[data.plan]?.label ?? data.plan} activated for this event`
+          : `${data.email} now has ${data.maxEvents} event credit${data.maxEvents === 1 ? '' : 's'}${data.isNewAccount ? ' — invite email sent' : ''}`,
+        'success'
+      );
       reload();
     } catch (e) {
       pushToast(e.message, 'error');
@@ -176,7 +181,8 @@ function SubscriptionRequestsList() {
                   <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${SUBSCRIPTION_STATUS_STYLES[r.status]}`}>{r.status}</span>
                 </div>
                 <p className="text-xs text-ink-500">
-                  {PLAN_LIMITS[r.plan]?.label ?? r.plan} · submitted {new Date(r.created_at).toLocaleDateString()}
+                  {PLAN_LIMITS[r.plan]?.label ?? r.plan} · {r.event ? `for "${r.event.name}"` : '(account credit — no event)'} · submitted{' '}
+                  {new Date(r.created_at).toLocaleDateString()}
                   {r.admin_note ? ` · "${r.admin_note}"` : ''}
                 </p>
               </div>

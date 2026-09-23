@@ -68,8 +68,8 @@ const PLANS = [
     tagline: 'For large tournament organizations.',
     features: [
       'Unlimited categories',
-      `Up to ${PLAN_LIMITS.business.playersPerCategory}+ players/pairs per category`,
-      `Up to ${PLAN_LIMITS.business.courts}+ courts`,
+      `Up to ${PLAN_LIMITS.business.playersPerCategory} players/pairs per category`,
+      `Up to ${PLAN_LIMITS.business.courts} courts`,
       'Everything in Pro',
       'Advanced analytics',
       'Organization branding',

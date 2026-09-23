@@ -50,7 +50,7 @@ export default function PreviewSetupPage() {
   };
 
   return (
-    <EventWorkspaceLayout eventName={event?.name}>
+    <EventWorkspaceLayout event={event}>
       <div className="mb-6">
         <h1 className="font-display text-2xl font-bold text-ink-900">Preview Screen</h1>
         <p className="text-sm text-ink-500">Open a big-screen display for spectators — live courts, standings, and upcoming matches</p>

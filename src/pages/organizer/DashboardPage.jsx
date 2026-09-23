@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { CalendarDays, HandHelping, Image as ImageIcon, MapPin, Plus, Settings2, Users } from 'lucide-react';
+import { CalendarDays, Files, HandHelping, Image as ImageIcon, MapPin, Plus, Settings2, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { createEvent, getEventMediaUrl, getOnboardingProgress, listMyEvents, listStaffedEvents } from '../../data/eventsApi';
+import { createEvent, duplicateEvent, getEventMediaUrl, getOnboardingProgress, listMyEvents, listStaffedEvents } from '../../data/eventsApi';
+import { PLAN_LIMITS } from '../../data/plans';
 import { EVENT_PERMISSIONS } from '../../data/permissions';
 import { formatDateRange } from '../../utils/format';
 import OrganizerLayout from '../../components/organizer/OrganizerLayout';
@@ -26,6 +27,7 @@ export default function DashboardPage() {
   const [events, setEvents] = useState(null);
   const [staffedEvents, setStaffedEvents] = useState(null);
   const [creating, setCreating] = useState(false);
+  const [duplicatingId, setDuplicatingId] = useState(null);
   const [progress, setProgress] = useState(null);
   const [showWelcome, setShowWelcome] = useState(false);
 
@@ -72,6 +74,22 @@ export default function DashboardPage() {
       pushToast(e.message, 'error');
     } finally {
       setCreating(false);
+    }
+  };
+
+  // Copies only the source event's template/setup fields — never its plan,
+  // payment, entitlements, or tournament data (categories/brackets/teams/
+  // registrations/matches). The duplicate always starts fresh on Free Trial
+  // and needs its own plan purchase — see eventsApi.js's duplicateEvent.
+  const handleDuplicate = async (eventId) => {
+    setDuplicatingId(eventId);
+    try {
+      const created = await duplicateEvent(eventId);
+      pushToast('Duplicated — pick a plan to get started', 'success');
+      navigate(`/events/${created.id}/edit`);
+    } catch (e) {
+      pushToast(e.message, 'error');
+      setDuplicatingId(null);
     }
   };
 
@@ -152,19 +170,42 @@ export default function DashboardPage() {
                 <div className="mt-1 flex items-center gap-1.5 text-xs text-ink-500">
                   <Users size={13} /> {event.player_count ?? 0} {event.player_count === 1 ? 'player' : 'players'}
                 </div>
+                <div className="mt-1.5 text-[11px] font-semibold">
+                  {event.pending_plan_request ? (
+                    <span className="text-amber-600">{PLAN_LIMITS[event.pending_plan_request.plan]?.label ?? event.pending_plan_request.plan} • Payment Pending</span>
+                  ) : event.plan === 'free' ? (
+                    <span className="text-ink-400">Free Trial</span>
+                  ) : (
+                    <span className="text-brand-600">
+                      {PLAN_LIMITS[event.plan]?.label ?? event.plan} • ₱{PLAN_LIMITS[event.plan]?.price} · Paid
+                    </span>
+                  )}
+                </div>
                 <div className="mt-4 flex items-center justify-between border-t border-ink-100 pt-3">
-                  <span className={`text-[11px] font-semibold ${event.is_published ? 'text-brand-600' : 'text-ink-400'}`}>
-                    {event.is_published ? 'Published' : 'Draft'}
+                  <span className={`text-[11px] font-semibold ${event.status === 'finished' ? 'text-ink-500' : event.is_published ? 'text-brand-600' : 'text-ink-400'}`}>
+                    {event.status === 'finished' ? '🔒 Completed' : event.is_published ? 'Published' : 'Draft'}
                   </span>
-                  <span
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      navigate(`/events/${event.id}/edit`);
-                    }}
-                    className="flex items-center gap-1 text-[11px] font-semibold text-ink-500 hover:text-ink-800"
-                  >
-                    <Settings2 size={12} /> Edit
-                  </span>
+                  {event.status === 'finished' ? (
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (duplicatingId !== event.id) handleDuplicate(event.id);
+                      }}
+                      className="flex items-center gap-1 text-[11px] font-semibold text-ink-500 hover:text-ink-800"
+                    >
+                      <Files size={12} /> {duplicatingId === event.id ? 'Duplicating…' : 'Duplicate'}
+                    </span>
+                  ) : (
+                    <span
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/events/${event.id}/edit`);
+                      }}
+                      className="flex items-center gap-1 text-[11px] font-semibold text-ink-500 hover:text-ink-800"
+                    >
+                      <Settings2 size={12} /> Edit
+                    </span>
+                  )}
                 </div>
               </div>
             </button>

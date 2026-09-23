@@ -183,7 +183,7 @@ export default function AccountingPage() {
   const loading = expenses === null || earnings === null;
 
   return (
-    <EventWorkspaceLayout eventName={event?.name}>
+    <EventWorkspaceLayout event={event}>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-bold text-ink-900">Accounting</h1>

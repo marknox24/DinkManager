@@ -4,10 +4,9 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import Logo from '../ui/Logo';
 import { ACCOUNT_TYPE_STYLES } from '../ui/AccountTypeCard';
-import { PLAN_LIMITS } from '../../data/plans';
 
 export default function OrganizerLayout({ children, backTo, backLabel }) {
-  const { user, signOut, isAdmin, accountType, profile } = useAuth();
+  const { user, signOut, isAdmin, accountType } = useAuth();
   const { pushToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -34,11 +33,6 @@ export default function OrganizerLayout({ children, backTo, backLabel }) {
                 }`}
               >
                 {(ACCOUNT_TYPE_STYLES[accountType] || ACCOUNT_TYPE_STYLES.organizer).label}
-              </span>
-            )}
-            {accountType === 'organizer' && (
-              <span className="hidden rounded-full bg-ink-50 px-2 py-0.5 font-display text-[10px] font-extrabold tracking-wide text-ink-500 sm:inline-block">
-                {(PLAN_LIMITS[profile?.plan] ?? PLAN_LIMITS.free).label.toUpperCase()}
               </span>
             )}
             {backTo && (

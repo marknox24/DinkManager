@@ -34,6 +34,9 @@ export default function AddPlayerModal({ categories, defaultCategoryId, onAdd, o
       setPlayer1('');
       setPlayer2('');
       setClubName('');
+    } catch {
+      // The parent already surfaced why (toast or upgrade prompt); leaving
+      // the fields filled lets the organizer retry without retyping.
     } finally {
       setSaving(false);
     }

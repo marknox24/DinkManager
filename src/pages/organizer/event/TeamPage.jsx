@@ -258,7 +258,7 @@ export default function TeamPage() {
   }, [reload]);
 
   return (
-    <EventWorkspaceLayout eventName={event?.name}>
+    <EventWorkspaceLayout event={event}>
       <div className="mb-6">
         <h1 className="font-display text-2xl font-bold text-ink-900">Team</h1>
         <p className="text-sm text-ink-500">Appoint people to help run this event, with exactly the pages and features they need.</p>

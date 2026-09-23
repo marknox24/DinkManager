@@ -52,7 +52,7 @@ import AccordionItem from '../../components/ui/Accordion';
 import FaqEditor from '../../components/organizer/FaqEditor';
 import { parseFaqItems, serializeFaqItems } from '../../utils/faq';
 import { COURT_TYPES } from '../../data/constants';
-import { PLAN_LIMITS, planLimit } from '../../data/plans';
+import { PLAN_LIMITS } from '../../data/plans';
 
 const STATUS_OPTIONS = ['upcoming', 'ongoing', 'finished', 'cancelled', 'rescheduled'];
 
@@ -110,6 +110,16 @@ export default function EventEditorPage() {
   const [uploadingCover, setUploadingCover] = useState(false);
   const [uploadingQr, setUploadingQr] = useState(false);
 
+  // Shared by every plan-limit block point in this page (categories, courts)
+  // — offers "Upgrade Event" (navigates to this event's Settings page and
+  // opens its Upgrade Plan modal, via the ?upgrade=1 query param) or
+  // "Cancel", instead of a dead-end toast the organizer has no next step
+  // from.
+  const promptUpgrade = async (title, message) => {
+    const go = await confirm({ title, message, confirmLabel: 'Upgrade Event', danger: false });
+    if (go) navigate(`/events/${eventId}/settings?upgrade=1`);
+  };
+
   useEffect(() => {
     Promise.all([getEventById(eventId), listCategories(eventId), listRegistrationFields(eventId), listUmpires(eventId)])
       .then(([ev, cats, flds, umps]) => {
@@ -154,12 +164,13 @@ export default function EventEditorPage() {
   };
 
   const addCategory = async () => {
-    const limit = planLimit(event.plan, 'categories');
+    if (event.status === 'finished') {
+      pushToast('This event is finished and locked — categories can no longer be edited.', 'error');
+      return;
+    }
+    const limit = event.entitlement_categories;
     if (limit != null && categories.length >= limit) {
-      pushToast(
-        `Your ${PLAN_LIMITS[event.plan].label} plan allows up to ${limit} categor${limit === 1 ? 'y' : 'ies'} per event — raise this event's plan to add more.`,
-        'error'
-      );
+      await promptUpgrade('Category limit reached', `Your ${PLAN_LIMITS[event.plan].label} plan allows up to ${limit} categor${limit === 1 ? 'y' : 'ies'} for this event.`);
       return;
     }
     try {
@@ -176,6 +187,10 @@ export default function EventEditorPage() {
   };
 
   const saveCategory = async (cat) => {
+    if (event.status === 'finished') {
+      pushToast('This event is finished and locked — categories can no longer be edited.', 'error');
+      return;
+    }
     try {
       await updateCategory(cat.id, {
         name: cat.name,
@@ -203,6 +218,10 @@ export default function EventEditorPage() {
   };
 
   const removeCategory = async (cat) => {
+    if (event.status === 'finished') {
+      pushToast('This event is finished and locked — categories can no longer be edited.', 'error');
+      return;
+    }
     const ok = await confirm({ title: `Delete "${cat.name}"?`, message: 'This also removes any registrations already made for this category.', confirmLabel: 'Delete category' });
     if (!ok) return;
     try {
@@ -411,11 +430,11 @@ export default function EventEditorPage() {
                     ))}
                   </Select>
                 </FormField>
-                <FormField label="Plan" hint="Set by your subscription — approve a new plan from the pricing page to raise these caps.">
+                <FormField label="Plan" hint="Set per event — use Settings → Upgrade Plan to raise this event's caps.">
                   <div className={`${inputClass} cursor-not-allowed bg-ink-50 text-ink-600`} aria-readonly="true">
-                    {(PLAN_LIMITS[event.plan] ?? PLAN_LIMITS.free).label} — up to {(PLAN_LIMITS[event.plan] ?? PLAN_LIMITS.free).categories ?? 'unlimited'}{' '}
-                    categories, {(PLAN_LIMITS[event.plan] ?? PLAN_LIMITS.free).playersPerCategory} players/cat,{' '}
-                    {(PLAN_LIMITS[event.plan] ?? PLAN_LIMITS.free).courts} courts
+                    {(PLAN_LIMITS[event.plan] ?? PLAN_LIMITS.free).label} — up to {event.entitlement_categories ?? 'unlimited'}{' '}
+                    categories, {event.entitlement_players_per_category} players/cat,{' '}
+                    {event.entitlement_courts} courts
                   </div>
                 </FormField>
                 <FormField label="Location / address">
@@ -613,20 +632,22 @@ export default function EventEditorPage() {
                   </div>
                 )}
                 {(() => {
-                  const limit = planLimit(event.plan, 'categories');
+                  const limit = event.entitlement_categories;
                   const atLimit = limit != null && categories.length >= limit;
                   return (
                     <>
+                      {/* Not disabled at the limit — clicking still works, it just
+                          routes through addCategory's own promptUpgrade dialog
+                          instead of silently doing nothing. */}
                       <button
                         onClick={addCategory}
-                        disabled={atLimit}
-                        className="flex w-fit items-center gap-1.5 rounded-full bg-brand-50 px-4 py-2 text-xs font-bold text-brand-700 transition hover:bg-brand-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        className="flex w-fit items-center gap-1.5 rounded-full bg-brand-50 px-4 py-2 text-xs font-bold text-brand-700 transition hover:bg-brand-100"
                       >
                         <Plus size={13} /> Add category
                       </button>
                       {atLimit && (
                         <p className="text-xs text-ink-400">
-                          {PLAN_LIMITS[event.plan].label} plan limit of {limit} categor{limit === 1 ? 'y' : 'ies'} reached — raise this event's plan on the Basics step to add more.
+                          {PLAN_LIMITS[event.plan].label} plan limit of {limit} categor{limit === 1 ? 'y' : 'ies'} reached for this event.
                         </p>
                       )}
                     </>
@@ -645,27 +666,24 @@ export default function EventEditorPage() {
                     <MapPin size={12} /> Venue & courts
                   </div>
                   <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <FormField label="Available courts" hint={`Your ${PLAN_LIMITS[event.plan]?.label ?? 'Free Trial'} plan allows up to ${planLimit(event.plan, 'courts')}.`}>
+                    <FormField label="Available courts" hint={`Your ${PLAN_LIMITS[event.plan]?.label ?? 'Free Trial'} plan allows up to ${event.entitlement_courts} for this event.`}>
                       <input
                         type="number"
                         min={0}
-                        max={planLimit(event.plan, 'courts') ?? undefined}
+                        max={event.entitlement_courts ?? undefined}
                         defaultValue={event.num_courts ?? ''}
-                        onBlur={(e) => {
+                        onBlur={async (e) => {
                           const n = e.target.value === '' ? null : parseInt(e.target.value, 10);
-                          const limit = planLimit(event.plan, 'courts');
+                          const limit = event.entitlement_courts;
                           if (n != null && limit != null && n > limit) {
-                            pushToast(`Your ${PLAN_LIMITS[event.plan].label} plan allows up to ${limit} courts — raise this event's plan to add more.`, 'error');
                             e.target.value = event.num_courts ?? '';
+                            await promptUpgrade('Court limit reached', `Your ${PLAN_LIMITS[event.plan].label} plan allows up to ${limit} courts for this event.`);
                             return;
                           }
                           saveField({ num_courts: n });
                         }}
                         className={inputClass}
                       />
-                    </FormField>
-                    <FormField label="Your club name" hint="Used later to keep players from the same club apart when brackets are drawn.">
-                      <input defaultValue={event.club_name || ''} onBlur={(e) => saveField({ club_name: e.target.value })} className={inputClass} />
                     </FormField>
                     <FormField label="Court type" hint="Shown to players on the tournament page.">
                       <Select value={event.court_type || ''} onChange={(e) => saveField({ court_type: e.target.value || null })} className={inputClass}>

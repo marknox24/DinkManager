@@ -1,5 +1,50 @@
 import { supabase } from '../lib/supabaseClient';
-import { generateRoundRobinRounds } from '../utils/scheduling';
+import { generateRoundRobinRounds, computeMissingPairs } from '../utils/scheduling';
+import { getDeviceId } from '../lib/deviceId';
+
+// ---------------------------------------------------------------------------
+// OFFLINE-SYNC-AWARE MATCH WRITES
+// ---------------------------------------------------------------------------
+// startScheduledMatch/recordScheduledMatchResult/pauseMatch/resumeMatch/
+// cancelLiveMatch/finishMatch/deleteMatch below all route through the
+// sync_* RPCs (see schema.sql) instead of raw .update()/.delete() calls, so
+// the exact same call can either apply immediately (this file's normal
+// online use, from both this page and BracketsPage.jsx) or be replayed
+// later from OfflineSyncContext's queue after reconnecting — one code path
+// for both. The optional trailing `opts` is how a queued replay passes back
+// the operation_id/client_ts it was originally queued with (so the RPC's
+// dedup check treats a retry as the same operation, not a new one);
+// omitted, as every existing online caller does, a fresh id pair is
+// generated here exactly as before this change.
+function newOperation(opts = {}) {
+  return {
+    operationId: opts.operationId || crypto.randomUUID(),
+    clientTs: opts.clientTs || new Date().toISOString(),
+    deviceId: getDeviceId(),
+  };
+}
+
+// The RPCs return the match's current row plus a status: 'applied' (this
+// call's write took effect), 'noop_replay' (this operation_id was already
+// applied by an earlier attempt — nothing to do), 'rejected_stale' (a newer
+// result from another device already won — see sync_log_score/
+// sync_finish_match in schema.sql), or 'rejected_invalid_state' (the
+// match's state moved on since this write was queued, e.g. someone else
+// already started/canceled it). The latter two throw so callers/the sync
+// queue can surface them distinctly from a plain network failure.
+function unwrapSyncResult(data) {
+  if (data?.status === 'rejected_stale') {
+    const err = new Error(data.reason || 'A newer result from another device was kept');
+    err.code = 'sync_rejected_stale';
+    throw err;
+  }
+  if (data?.status === 'rejected_invalid_state') {
+    const err = new Error('This match already changed state on the server — reload to see its current status.');
+    err.code = 'sync_rejected_invalid_state';
+    throw err;
+  }
+  return data?.match ?? null;
+}
 
 // ---------------------------------------------------------------------------
 // BRACKETS
@@ -90,6 +135,47 @@ export async function generateBrackets(categoryId, grouping) {
     if (teamErr) throw teamErr;
   }
   return brackets;
+}
+
+// Single-row equivalent of generateBrackets' bulk insert — used by "Add
+// Player to Bracket" to drop one already-approved registration into an
+// existing bracket without touching anything else (no regeneration, no
+// re-draw of the other teams already in it). `registration` is a row from
+// listRegistrations/eventsApi (player_name/player2_name/club_name), and one
+// row here covers a doubles pair exactly like generateBrackets does — there
+// is no per-player row, ever.
+//
+// Re-checks "not already assigned" against the live table right before
+// inserting (not just whatever the caller's UI last fetched) since this is
+// the one guard that actually matters for data integrity — a stale client
+// list could otherwise let the same registration end up on two different
+// teams.
+export async function addPlayerToBracket(bracketId, registration) {
+  const { data: existing, error: existingErr } = await supabase
+    .from('teams')
+    .select('id, bracket_id, brackets(letter)')
+    .eq('registration_id', registration.id)
+    .maybeSingle();
+  if (existingErr) throw existingErr;
+  if (existing) {
+    const err = new Error(`Player is already assigned to Bracket ${existing.brackets?.letter ?? ''}.`.trim());
+    err.code = 'already_assigned';
+    throw err;
+  }
+
+  const { data, error } = await supabase
+    .from('teams')
+    .insert({
+      bracket_id: bracketId,
+      registration_id: registration.id,
+      player1_name: registration.player_name,
+      player2_name: registration.player2_name || null,
+      club_name: registration.club_name || null,
+    })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,64 +283,72 @@ export async function startMatch({ bracket_id, team_a_id, team_b_id, court, umpi
   return data;
 }
 
-export async function pauseMatch(matchId, accumulatedSeconds) {
-  const { data, error } = await supabase
-    .from('matches')
-    .update({ accumulated_seconds: accumulatedSeconds, running_since: null })
-    .eq('id', matchId)
-    .select()
-    .single();
+export async function pauseMatch(matchId, accumulatedSeconds, opts) {
+  const { operationId, clientTs, deviceId } = newOperation(opts);
+  const { data, error } = await supabase.rpc('sync_pause_match', {
+    p_operation_id: operationId,
+    p_device_id: deviceId,
+    p_match_id: matchId,
+    p_client_ts: clientTs,
+    p_accumulated_seconds: accumulatedSeconds,
+  });
   if (error) throw error;
-  return data;
+  return unwrapSyncResult(data);
 }
 
-export async function resumeMatch(matchId) {
-  const { data, error } = await supabase
-    .from('matches')
-    .update({ running_since: new Date().toISOString() })
-    .eq('id', matchId)
-    .select()
-    .single();
+export async function resumeMatch(matchId, opts) {
+  const { operationId, clientTs, deviceId } = newOperation(opts);
+  const { data, error } = await supabase.rpc('sync_resume_match', {
+    p_operation_id: operationId,
+    p_device_id: deviceId,
+    p_match_id: matchId,
+    p_client_ts: clientTs,
+  });
   if (error) throw error;
-  return data;
+  return unwrapSyncResult(data);
 }
 
 // Reverts a live match back to 'scheduled' rather than deleting it — used
 // when the match originated from a generated match list (has a match_code)
 // so canceling keeps its fixture/code instead of losing that schedule slot.
-export async function cancelLiveMatch(matchId) {
-  const { data, error } = await supabase
-    .from('matches')
-    .update({ status: 'scheduled', started_at: null, running_since: null, accumulated_seconds: 0 })
-    .eq('id', matchId)
-    .select()
-    .single();
+export async function cancelLiveMatch(matchId, opts) {
+  const { operationId, clientTs, deviceId } = newOperation(opts);
+  const { data, error } = await supabase.rpc('sync_cancel_match', {
+    p_operation_id: operationId,
+    p_device_id: deviceId,
+    p_match_id: matchId,
+    p_client_ts: clientTs,
+  });
   if (error) throw error;
-  return data;
+  return unwrapSyncResult(data);
 }
 
-export async function finishMatch(matchId, { score_a, score_b, winner_team_id, duration_minutes }) {
-  const { data, error } = await supabase
-    .from('matches')
-    .update({
-      status: 'completed',
-      score_a,
-      score_b,
-      winner_team_id,
-      duration_minutes,
-      running_since: null,
-      finished_at: new Date().toISOString(),
-    })
-    .eq('id', matchId)
-    .select()
-    .single();
+export async function finishMatch(matchId, { score_a, score_b, winner_team_id, duration_minutes }, opts) {
+  const { operationId, clientTs, deviceId } = newOperation(opts);
+  const { data, error } = await supabase.rpc('sync_finish_match', {
+    p_operation_id: operationId,
+    p_device_id: deviceId,
+    p_match_id: matchId,
+    p_client_ts: clientTs,
+    p_score_a: score_a,
+    p_score_b: score_b,
+    p_winner_team_id: winner_team_id,
+    p_duration_minutes: duration_minutes,
+  });
   if (error) throw error;
-  return data;
+  return unwrapSyncResult(data);
 }
 
-export async function deleteMatch(matchId) {
-  const { error } = await supabase.from('matches').delete().eq('id', matchId);
+export async function deleteMatch(matchId, opts) {
+  const { operationId, clientTs, deviceId } = newOperation(opts);
+  const { data, error } = await supabase.rpc('sync_remove_match', {
+    p_operation_id: operationId,
+    p_device_id: deviceId,
+    p_match_id: matchId,
+    p_client_ts: clientTs,
+  });
   if (error) throw error;
+  return data;
 }
 
 // ---------------------------------------------------------------------------
@@ -372,6 +466,67 @@ export async function generateRoundRobinMatchList(categoryId) {
   return data;
 }
 
+// Adds only the matches a category's existing round-robin schedule is
+// missing — every pair of teams in each pool bracket that doesn't already
+// have its expected number of matches (one meeting, or two for Double Round
+// Robin — see computeMissingPairs). Used after "Add Player to Bracket"
+// drops a new team into a bracket that already has a generated matchlist:
+// the new team's matches get appended as one new round per bracket, and
+// every existing match — scheduled, live, or completed with a recorded
+// score — is left completely untouched. This never deletes or updates a
+// single existing row; it only ever inserts the rows that were missing.
+export async function regenerateMatchListForCategory(categoryId) {
+  const { data: category, error: catErr } = await supabase.from('categories').select('format').eq('id', categoryId).single();
+  if (catErr) throw catErr;
+  if (!/round robin/i.test(category.format || '')) {
+    throw new Error('Regenerating the matchlist to add new teams is only supported for Round Robin categories right now.');
+  }
+  const isDouble = /double round robin/i.test(category.format || '');
+
+  const { data: brackets, error: bracketErr } = await supabase.from('brackets').select('id, letter').eq('category_id', categoryId).eq('kind', 'pool').order('letter');
+  if (bracketErr) throw bracketErr;
+  if (brackets.length === 0) throw new Error('No brackets to regenerate a match list for.');
+  const bracketIds = brackets.map((b) => b.id);
+
+  const [{ data: allTeams, error: teamErr }, { data: existingMatches, error: matchErr }] = await Promise.all([
+    supabase.from('teams').select('id, bracket_id').in('bracket_id', bracketIds),
+    supabase.from('matches').select('id, bracket_id, team_a_id, team_b_id, round_number, match_code').in('bracket_id', bracketIds),
+  ]);
+  if (teamErr) throw teamErr;
+  if (matchErr) throw matchErr;
+
+  const rows = [];
+  for (const bracket of brackets) {
+    const teamIds = allTeams.filter((t) => t.bracket_id === bracket.id).map((t) => t.id);
+    const bracketMatches = existingMatches.filter((m) => m.bracket_id === bracket.id);
+    const missingPairs = computeMissingPairs(teamIds, bracketMatches, isDouble);
+    if (missingPairs.length === 0) continue;
+
+    const maxRound = bracketMatches.reduce((max, m) => Math.max(max, m.round_number || 0), 0);
+    let codeCounter = bracketMatches.reduce((max, m) => {
+      const num = parseInt((m.match_code || '').match(/\d+$/)?.[0] || '0', 10);
+      return Math.max(max, num);
+    }, 0);
+
+    missingPairs.forEach(([teamA, teamB]) => {
+      codeCounter += 1;
+      rows.push({
+        bracket_id: bracket.id,
+        team_a_id: teamA,
+        team_b_id: teamB,
+        status: 'scheduled',
+        round_number: maxRound + 1,
+        match_code: `${bracket.letter}${codeCounter}`,
+      });
+    });
+  }
+
+  if (rows.length === 0) throw new Error('No new matches are needed — every team already has a full schedule.');
+  const { data, error } = await supabase.from('matches').insert(rows).select();
+  if (error) throw error;
+  return data;
+}
+
 // Single elimination Round 1 only: pairs teams sequentially per bracket
 // (1v2, 3v4, ...); an odd leftover team gets a bye (no Round 1 row) rather
 // than an auto-advance record. Round 2+ is played via the existing
@@ -422,26 +577,37 @@ export async function generateSingleEliminationRound1(categoryId) {
 // Flips an existing scheduled match to a running live match (no new row) —
 // so it immediately shows up in the Brackets page's live-match cards and
 // keeps working with the existing pause/resume/finish flow unchanged.
-export async function startScheduledMatch(matchId, { court, umpire_name }) {
-  const now = new Date().toISOString();
-  const { data, error } = await supabase
-    .from('matches')
-    .update({ status: 'in_progress', started_at: now, running_since: now, accumulated_seconds: 0, court, umpire_name })
-    .eq('id', matchId)
-    .select()
-    .single();
+export async function startScheduledMatch(matchId, { court, umpire_name }, opts) {
+  const { operationId, clientTs, deviceId } = newOperation(opts);
+  const { data, error } = await supabase.rpc('sync_start_match', {
+    p_operation_id: operationId,
+    p_device_id: deviceId,
+    p_match_id: matchId,
+    p_client_ts: clientTs,
+    p_court: court ?? null,
+    p_umpire_name: umpire_name ?? null,
+  });
   if (error) throw error;
-  return data;
+  return unwrapSyncResult(data);
 }
 
-// "Log score directly" equivalent for a pre-scheduled match row.
-export async function recordScheduledMatchResult(matchId, { score_a, score_b, winner_team_id, umpire_name }) {
-  const { data, error } = await supabase
-    .from('matches')
-    .update({ status: 'completed', score_a, score_b, winner_team_id, umpire_name, finished_at: new Date().toISOString() })
-    .eq('id', matchId)
-    .select()
-    .single();
+// "Log score directly" equivalent for a pre-scheduled match row — also
+// reused by the Match List "edit score" pencil to correct an already-
+// completed match, so unlike start/pause/resume/cancel this can't rely on a
+// simple status guard; see sync_log_score in schema.sql for the newer-wins
+// conflict handling that covers that case instead.
+export async function recordScheduledMatchResult(matchId, { score_a, score_b, winner_team_id, umpire_name }, opts) {
+  const { operationId, clientTs, deviceId } = newOperation(opts);
+  const { data, error } = await supabase.rpc('sync_log_score', {
+    p_operation_id: operationId,
+    p_device_id: deviceId,
+    p_match_id: matchId,
+    p_client_ts: clientTs,
+    p_score_a: score_a,
+    p_score_b: score_b,
+    p_winner_team_id: winner_team_id,
+    p_umpire_name: umpire_name ?? null,
+  });
   if (error) throw error;
-  return data;
+  return unwrapSyncResult(data);
 }

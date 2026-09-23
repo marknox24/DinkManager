@@ -7,6 +7,7 @@ import { ConfirmProvider } from './components/ui/ConfirmProvider';
 import ToastStack from './components/ui/ToastStack';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import EventRoute from './components/auth/EventRoute';
+import { OfflineSyncProvider } from './context/OfflineSyncContext';
 // SetupRequiredPage stays a static import — it's the fallback RequireSupabase
 // itself renders below, tiny, and needed before any lazy chunk could resolve.
 import SetupRequiredPage from './pages/SetupRequiredPage';
@@ -98,7 +99,16 @@ function AppRoutes() {
         <Route path="/events/:eventId/manage" element={<EventRoute permission="registrations"><RegistrationsPage /></EventRoute>} />
         <Route path="/events/:eventId/checkin" element={<EventRoute permission="checkin"><CheckInManagePage /></EventRoute>} />
         <Route path="/events/:eventId/brackets" element={<EventRoute permission="brackets"><BracketsPage /></EventRoute>} />
-        <Route path="/events/:eventId/matchlist" element={<EventRoute permission="matchlist"><MatchListPage /></EventRoute>} />
+        <Route
+          path="/events/:eventId/matchlist"
+          element={
+            <EventRoute permission="matchlist">
+              <OfflineSyncProvider>
+                <MatchListPage />
+              </OfflineSyncProvider>
+            </EventRoute>
+          }
+        />
         <Route path="/events/:eventId/preview" element={<EventRoute permission="preview"><PreviewSetupPage /></EventRoute>} />
         {/* Public on purpose: players land here straight from the check-in
             flow with no session at all, and it's spectator-facing anyway (no

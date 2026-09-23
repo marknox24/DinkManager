@@ -106,7 +106,7 @@ export default function SponsorsPage() {
   const loading = sponsors === null;
 
   return (
-    <EventWorkspaceLayout eventName={event?.name}>
+    <EventWorkspaceLayout event={event}>
       <div className="mb-6">
         <h1 className="font-display text-2xl font-bold text-ink-900">Sponsors</h1>
         <p className="text-sm text-ink-500">Logos auto-loop at the bottom of the Preview Screen for this event.</p>

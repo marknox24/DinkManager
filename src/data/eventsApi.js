@@ -27,16 +27,64 @@ export async function generateUniqueSlug(name) {
 // ---------------------------------------------------------------------------
 // EVENTS
 // ---------------------------------------------------------------------------
-// Snapshots the organizer's current subscribed plan onto the new event at
-// creation time (not a live sync — the event keeps this value even if the
-// organizer's plan changes later). Read-only in EventEditorPage.jsx by design.
+// Every event starts on Free Trial, full stop — never inherited from the
+// organizer's account or from any other event they own (one payment = one
+// event = one plan entitlement). The database sets that starting plan and
+// entitlement snapshot itself (the events_force_free_entitlements trigger in
+// schema.sql), so nothing here can choose it. A paid tier only ever arrives
+// later, via a specific approved upgrade request for THIS event (see
+// submitEventPlanUpgrade below + supabase/functions/approve-subscription-request).
 export async function createEvent(organizerId, payload) {
   const slug = await generateUniqueSlug(payload.name || 'event');
-  const { data: profile, error: profileErr } = await supabase.from('profiles').select('plan').eq('id', organizerId).maybeSingle();
-  if (profileErr) throw profileErr;
   const { data, error } = await supabase
     .from('events')
-    .insert({ plan: profile?.plan || 'free', ...payload, organizer_id: organizerId, slug })
+    .insert({ ...payload, organizer_id: organizerId, slug })
+    .select()
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+// Copies only the descriptive/template fields of a completed (or any other)
+// event into a brand-new draft — never its plan, payment, entitlements,
+// categories, brackets, teams, registrations, or matches. The duplicate
+// starts exactly like any other new event: Free Trial, unpublished, zero
+// usage, requiring its own separate plan purchase (see rule "duplicating a
+// completed event" — a new event is a new purchase, not a clone of the old
+// one's paid status). num_courts is deliberately reset to null rather than
+// copied — the source event's court count may have come from a paid tier
+// this new (Free Trial) event hasn't purchased yet.
+export async function duplicateEvent(eventId) {
+  const source = await getEventById(eventId);
+  const name = `Copy of ${source.name}`;
+  const slug = await generateUniqueSlug(name);
+  const { data, error } = await supabase
+    .from('events')
+    .insert({
+      organizer_id: source.organizer_id,
+      name,
+      slug,
+      status: 'upcoming',
+      is_published: false,
+      visibility: 'public',
+      share_token: null,
+      location_address: source.location_address,
+      description: source.description,
+      rules: source.rules,
+      venue_guidelines: source.venue_guidelines,
+      schedule: source.schedule,
+      faq: source.faq,
+      court_type: source.court_type,
+      contacts: source.contacts,
+      currency: source.currency,
+      cover_photo_path: source.cover_photo_path,
+      organizer_name: source.organizer_name,
+      prize_pool: source.prize_pool,
+      cancellation_policy: source.cancellation_policy,
+      refund_policy: source.refund_policy,
+      randomizer_allow_same_club: source.randomizer_allow_same_club,
+      match_duration_minutes: source.match_duration_minutes,
+    })
     .select()
     .single();
   if (error) throw error;
@@ -60,8 +108,13 @@ export async function deleteEvent(eventId) {
 }
 
 // Includes a `player_count` per event (pending + approved registrations —
-// same "active" definition as the public_category_counts view) so the
-// dashboard cards can show current registration numbers at a glance.
+// same "active" definition as the public_category_counts view) and a
+// `pending_plan_request` (the event's own unresolved upgrade request, if
+// any) so the dashboard cards can show current registration numbers and
+// "Payment Pending" state at a glance. There's no payment_status column on
+// events (see schema.sql's "EVENT PLAN ENTITLEMENTS" comment) — a pending
+// upgrade is derived purely from whether an unresolved subscription_requests
+// row exists for that event, not stored redundantly on the event itself.
 export async function listMyEvents(organizerId) {
   const { data: events, error } = await supabase
     .from('events')
@@ -71,14 +124,13 @@ export async function listMyEvents(organizerId) {
   if (error) throw error;
   if (events.length === 0) return events;
 
-  const { data: regs, error: regErr } = await supabase
-    .from('registrations')
-    .select('event_id, status')
-    .in(
-      'event_id',
-      events.map((e) => e.id)
-    );
+  const eventIds = events.map((e) => e.id);
+  const [{ data: regs, error: regErr }, { data: pendingRequests, error: pendingErr }] = await Promise.all([
+    supabase.from('registrations').select('event_id, status').in('event_id', eventIds),
+    supabase.from('subscription_requests').select('id, event_id, plan').eq('status', 'pending').in('event_id', eventIds),
+  ]);
   if (regErr) throw regErr;
+  if (pendingErr) throw pendingErr;
 
   const counts = {};
   regs.forEach((r) => {
@@ -86,7 +138,11 @@ export async function listMyEvents(organizerId) {
       counts[r.event_id] = (counts[r.event_id] || 0) + 1;
     }
   });
-  return events.map((e) => ({ ...e, player_count: counts[e.id] || 0 }));
+  const pendingByEvent = {};
+  pendingRequests.forEach((r) => {
+    pendingByEvent[r.event_id] = { id: r.id, plan: r.plan };
+  });
+  return events.map((e) => ({ ...e, player_count: counts[e.id] || 0, pending_plan_request: pendingByEvent[e.id] || null }));
 }
 
 // Events this user is helping with as staff (not the owner). Deliberately
@@ -594,8 +650,43 @@ export async function submitSubscriptionRequest({ email, plan, screenshotPath })
   if (error) throw error;
 }
 
+// Event-scoped upgrade request — the organizer is already authenticated and
+// owns eventId (enforced by subscription_requests_insert_public's RLS), so
+// unlike submitSubscriptionRequest above this never touches account
+// creation/invites. Approving this (see approve-subscription-request)
+// writes the purchased plan onto THIS event alone, never onto the
+// organizer's account or any other event they own. No .select() for the
+// same reason as submitSubscriptionRequest — the caller doesn't need the
+// inserted row back, and a non-admin has no SELECT policy on this table.
+export async function submitEventPlanUpgrade({ eventId, plan, screenshotPath }) {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  const { error } = await supabase
+    .from('subscription_requests')
+    .insert({ email: user?.email ?? '', plan, screenshot_path: screenshotPath, event_id: eventId });
+  if (error) throw error;
+}
+
+// Single-event counterpart to listMyEvents' bulk pending_plan_request lookup
+// — used by SettingsPage.jsx's Event Plan card, which only ever looks at
+// one event at a time.
+export async function getPendingPlanRequestForEvent(eventId) {
+  const { data, error } = await supabase
+    .from('subscription_requests')
+    .select('id, plan')
+    .eq('event_id', eventId)
+    .eq('status', 'pending')
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
 export async function listSubscriptionRequests() {
-  const { data, error } = await supabase.from('subscription_requests').select('*').order('created_at', { ascending: false });
+  const { data, error } = await supabase
+    .from('subscription_requests')
+    .select('*, event:events(id, name, organizer_id)')
+    .order('created_at', { ascending: false });
   if (error) throw error;
   return data;
 }

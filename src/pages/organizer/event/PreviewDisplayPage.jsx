@@ -14,6 +14,7 @@ import SponsorBox from '../../../components/organizer/SponsorBox';
 import SponsorMarquee from '../../../components/organizer/SponsorMarquee';
 import { usePagedItems } from '../../../hooks/usePagedItems';
 import { formatDuration } from '../../../utils/format';
+import { usableCourts } from '../../../utils/courts';
 import { teamLabel } from '../../../utils/match';
 import { rankTeams } from '../../../utils/standings';
 import { matchLevelLabel } from '../../../data/playoffApi';
@@ -106,7 +107,7 @@ export default function PreviewDisplayPage() {
   const silverSponsors = useMemo(() => sponsors.filter((s) => s.tier === 'silver'), [sponsors]);
   const otherSponsors = useMemo(() => sponsors.filter((s) => s.tier !== 'gold' && s.tier !== 'silver'), [sponsors]);
 
-  const numCourts = event?.num_courts ?? 4;
+  const numCourts = usableCourts(event);
   const courtsInPlay = liveMatches.length;
   const courtNumbers = useMemo(() => Array.from({ length: numCourts }, (_, i) => i + 1), [numCourts]);
   const { page: courtsPage, pageIndex: courtPageIndex, totalPages: courtTotalPages } = usePagedItems(courtNumbers, PAGE_SIZE, PAGE_MS);

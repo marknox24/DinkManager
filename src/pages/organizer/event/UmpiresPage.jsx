@@ -92,7 +92,7 @@ export default function UmpiresPage() {
   };
 
   return (
-    <EventWorkspaceLayout eventName={event?.name}>
+    <EventWorkspaceLayout event={event}>
       <div className="mb-6">
         <h1 className="font-display text-2xl font-bold text-ink-900">Umpires</h1>
         <p className="text-sm text-ink-500">Officials available to run matches for this event</p>

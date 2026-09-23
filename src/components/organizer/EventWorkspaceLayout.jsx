@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { Award, Gavel, LayoutGrid, ListOrdered, LogOut, Menu, MonitorPlay, QrCode, Settings, Shuffle, Trophy, UserCog, Users, Wallet, X } from 'lucide-react';
+import { Award, Gavel, LayoutGrid, ListOrdered, Lock, LogOut, Menu, MonitorPlay, QrCode, Settings, Shuffle, Trophy, UserCog, Users, Wallet, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useEventAccess } from '../../context/EventAccessContext';
@@ -36,7 +36,8 @@ function NavButton({ item, active, onClick }) {
   );
 }
 
-export default function EventWorkspaceLayout({ eventName, children }) {
+export default function EventWorkspaceLayout({ event, children }) {
+  const eventName = event?.name;
   const { eventId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
@@ -119,6 +120,11 @@ export default function EventWorkspaceLayout({ eventName, children }) {
           </button>
           <span className="truncate font-display text-sm font-bold text-ink-900">{eventName}</span>
         </header>
+        {event?.status === 'finished' && (
+          <div className="sticky top-0 z-30 flex items-center gap-2 bg-ink-900 px-4 py-2 text-xs font-semibold text-white sm:px-6">
+            <Lock size={13} className="shrink-0" /> This event is finished and locked — data is preserved but no longer editable. View, export, or duplicate it instead.
+          </div>
+        )}
         <main key={location.pathname} className="animate-page-in mx-auto w-full max-w-[1200px] flex-1 px-4 py-6 sm:px-6">
           {children}
         </main>

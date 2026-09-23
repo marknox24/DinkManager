@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Activity, CheckCircle2, Download, FileSpreadsheet, ImageIcon, Pencil, QrCode, Shuffle, Trash2, Trophy, UserPlus, XCircle } from 'lucide-react';
+import { Activity, CheckCircle2, Download, FileSpreadsheet, ImageIcon, Lock, Pencil, QrCode, Shuffle, Trash2, Trophy, UserPlus, XCircle } from 'lucide-react';
 import {
   createRegistration,
   createRegistrationsBulk,
@@ -19,7 +19,7 @@ import { useConfirm } from '../../../context/ConfirmContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import EditRegistrationModal from '../../../components/organizer/EditRegistrationModal';
 import AddPlayerModal from '../../../components/organizer/AddPlayerModal';
-import { PLAN_LIMITS, planLimit } from '../../../data/plans';
+import { PLAN_LIMITS } from '../../../data/plans';
 
 // Lazy: both pull in xlsx/jspdf (via utils/excel.js and utils/pdf.js), which
 // together are several hundred KB — no reason to fetch that until the
@@ -82,17 +82,42 @@ export default function RegistrationsPage() {
     reload();
   }, [reload]);
 
+  const isLocked = event?.status === 'finished';
+  const blockIfLocked = () => {
+    if (!isLocked) return false;
+    pushToast('This event is finished and locked — registrations can no longer be edited.', 'error');
+    return true;
+  };
+
+  // Shared by every plan-limit block on this page — offers "Upgrade Event"
+  // (lands on this event's Settings page with the Upgrade Plan modal open)
+  // or "Cancel", instead of a dead-end error.
+  const promptUpgrade = async (title, message) => {
+    const go = await confirm({ title, message, confirmLabel: 'Upgrade Event', danger: false });
+    if (go) navigate(`/events/${eventId}/settings?upgrade=1`);
+  };
+
+  const playerCap = event?.entitlement_players_per_category;
+  const planLabel = PLAN_LIMITS[event?.plan]?.label ?? 'Free Trial';
+  const playerLimitMessage = `Your ${planLabel} plan allows up to ${playerCap} players/pairs per category for this event.`;
+  const canImport = Boolean(event?.entitlement_csv_import);
+
+  const approvedCount = (categoryId) => registrations.filter((r) => r.category_id === categoryId && r.status === 'approved').length;
+
+  // Approved players/pairs a category can still take under this event's
+  // plan (null = unlimited). Every path that creates an approved
+  // registration — Approve, Add player, Import Excel — must check this:
+  // manual add and import both insert straight as 'approved', so checking
+  // only on the Approve button is what let a Free Trial event reach 33.
+  // The database enforces the same cap (enforce_player_entitlement in
+  // schema.sql); this just stops early with an upgrade prompt instead.
+  const remainingSlots = (categoryId) => (playerCap == null ? null : Math.max(0, playerCap - approvedCount(categoryId)));
+
   const setStatus = async (reg, status) => {
-    if (status === 'approved') {
-      const limit = planLimit(event?.plan, 'playersPerCategory');
-      const approvedInCategory = registrations.filter((r) => r.category_id === reg.category_id && r.status === 'approved').length;
-      if (limit != null && approvedInCategory >= limit) {
-        pushToast(
-          `This category is at its ${PLAN_LIMITS[event.plan].label} plan limit of ${limit} players/pairs — raise this event's plan to approve more.`,
-          'error'
-        );
-        return;
-      }
+    if (blockIfLocked()) return;
+    if (status === 'approved' && remainingSlots(reg.category_id) === 0) {
+      await promptUpgrade('Player limit reached', playerLimitMessage);
+      return;
     }
     try {
       await updateRegistrationStatus(reg.id, status);
@@ -105,6 +130,7 @@ export default function RegistrationsPage() {
   };
 
   const removeRegistration = async (reg) => {
+    if (blockIfLocked()) return;
     const ok = await confirm({ title: `Remove ${reg.player_name}?`, message: 'This permanently deletes their registration — useful for accidental duplicates.', confirmLabel: 'Remove' });
     if (!ok) return;
     try {
@@ -125,6 +151,13 @@ export default function RegistrationsPage() {
   };
 
   const saveEdit = async (patch) => {
+    if (blockIfLocked()) return;
+    // Moving an approved player takes a slot in the destination category.
+    const movingApproved = editingReg.status === 'approved' && patch.category_id !== editingReg.category_id;
+    if (movingApproved && remainingSlots(patch.category_id) === 0) {
+      await promptUpgrade('Player limit reached', `That category is already full. ${playerLimitMessage}`);
+      return;
+    }
     try {
       const moved = patch.category_id !== editingReg.category_id;
       const updated = await updateRegistration(editingReg.id, patch);
@@ -136,7 +169,14 @@ export default function RegistrationsPage() {
     }
   };
 
+  // Throwing (rather than returning) keeps AddPlayerModal open with the
+  // organizer's typed-in names intact if they cancel the upgrade prompt.
   const handleAddPlayer = async (payload) => {
+    if (blockIfLocked()) throw new Error('This event is finished and locked.');
+    if (remainingSlots(payload.category_id) === 0) {
+      await promptUpgrade('Player limit reached', playerLimitMessage);
+      throw new Error('Player limit reached');
+    }
     try {
       await createRegistration({ event_id: eventId, ...payload });
       await reload();
@@ -146,7 +186,24 @@ export default function RegistrationsPage() {
     }
   };
 
+  // All-or-nothing: a file that doesn't fit the category's remaining room is
+  // rejected whole rather than silently importing only the first N rows.
   const handleImportPlayers = async (categoryId, rows) => {
+    if (blockIfLocked()) throw new Error('This event is finished and locked.');
+    if (!canImport) {
+      await promptUpgrade('Excel import not included', `Importing players from Excel isn't included in the ${planLabel} plan.`);
+      throw new Error('Excel import not included');
+    }
+    const remaining = remainingSlots(categoryId);
+    if (remaining != null && rows.length > remaining) {
+      await promptUpgrade(
+        'Player limit reached',
+        remaining === 0
+          ? playerLimitMessage
+          : `This file has ${rows.length} players/pairs, but this category only has room for ${remaining} more — ${playerLimitMessage}`
+      );
+      throw new Error('Player limit reached');
+    }
     try {
       await createRegistrationsBulk(
         rows.map((r) => ({
@@ -168,7 +225,7 @@ export default function RegistrationsPage() {
   };
 
   return (
-    <EventWorkspaceLayout eventName={event?.name}>
+    <EventWorkspaceLayout event={event}>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-bold text-ink-900">Registrations</h1>
@@ -182,12 +239,21 @@ export default function RegistrationsPage() {
           >
             <Download size={14} /> Download
           </button>
+          {/* Not included in Free Trial: shown locked and muted, and clicking
+              offers the upgrade instead of opening the import modal. */}
           <button
-            onClick={() => setImportModalOpen(true)}
+            onClick={() =>
+              canImport
+                ? setImportModalOpen(true)
+                : promptUpgrade('Excel import not included', `Importing players from Excel isn't included in the ${planLabel} plan. Upgrade this event to Starter or above to use it.`)
+            }
             disabled={categories.length === 0}
-            className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-2 text-xs font-bold text-ink-600 transition hover:bg-ink-100 disabled:opacity-50"
+            title={canImport ? undefined : `Not included in ${planLabel}`}
+            className={`flex items-center gap-1.5 rounded-full border border-ink-200 px-3.5 py-2 text-xs font-bold transition disabled:opacity-50 ${
+              canImport ? 'bg-white text-ink-600 hover:bg-ink-100' : 'bg-ink-50 text-ink-400 hover:bg-ink-100'
+            }`}
           >
-            <FileSpreadsheet size={14} /> Import Excel
+            {canImport ? <FileSpreadsheet size={14} /> : <Lock size={14} />} Import Excel
           </button>
           <button
             onClick={() => setAddModalOpen(true)}
@@ -206,15 +272,32 @@ export default function RegistrationsPage() {
           <div className="flex flex-col gap-5">
             {categories.map((cat) => {
               const catRegs = registrations.filter((r) => r.category_id === cat.id);
+              const approved = approvedCount(cat.id);
+              const capTone =
+                playerCap == null
+                  ? ''
+                  : approved > playerCap
+                    ? 'bg-rose-50 text-rose-700 ring-rose-200'
+                    : approved === playerCap
+                      ? 'bg-amber-50 text-amber-700 ring-amber-200'
+                      : 'bg-white text-ink-500 ring-ink-200';
               return (
                 <div key={cat.id} className="overflow-hidden rounded-2xl border border-ink-100 bg-white shadow-sm">
                   <div className="flex items-center justify-between border-b border-ink-100 bg-ink-50/70 px-5 py-3">
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                       <span className="font-display text-sm font-bold text-ink-800">{cat.name}</span>
                       <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-ink-500 ring-1 ring-ink-200">
                         {catRegs.length}
                         {cat.max_slots ? ` / ${cat.max_slots}` : ''}
                       </span>
+                      {playerCap != null && (
+                        <span
+                          title={approved > playerCap ? `Over this event's ${planLabel} limit — added before the limit was enforced` : undefined}
+                          className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${capTone}`}
+                        >
+                          {approved}/{playerCap} approved
+                        </span>
+                      )}
                     </div>
                     <button
                       onClick={() => navigate(`/events/${eventId}/brackets`)}

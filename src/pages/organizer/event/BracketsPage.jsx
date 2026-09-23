@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { ChevronDown, Crown, Radio, Shuffle, Timer } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, Crown, Radio, RefreshCw, Shuffle, Timer, UserPlus } from 'lucide-react';
 import { getEventById, listCategories, listRegistrations } from '../../../data/eventsApi';
 import {
   cancelLiveMatch,
@@ -12,8 +12,10 @@ import {
   listBracketsForCategory,
   listLiveMatchesForEvent,
   listMatchesForBracket,
+  listMatchesForCategory,
   listTeamsForBracket,
   pauseMatch,
+  regenerateMatchListForCategory,
   resumeMatch,
 } from '../../../data/bracketsApi';
 import { useToast } from '../../../context/ToastContext';
@@ -21,10 +23,13 @@ import { useConfirm } from '../../../context/ConfirmContext';
 import { useEventAccess } from '../../../context/EventAccessContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import RandomizerModal from '../../../components/organizer/RandomizerModal';
+import AddPlayerToBracketModal from '../../../components/organizer/AddPlayerToBracketModal';
 import LiveMatchCard from '../../../components/organizer/LiveMatchCard';
 import { useNow } from '../../../hooks/useNow';
+import { usableCourts } from '../../../utils/courts';
 import { formatDuration } from '../../../utils/format';
 import { liveElapsedSeconds, teamLabel } from '../../../utils/match';
+import { computeMissingPairs } from '../../../utils/scheduling';
 import { rankTeams } from '../../../utils/standings';
 
 // One collapsible section per drawn pool — standings + its own recent
@@ -152,7 +157,10 @@ export default function BracketsPage() {
   const [liveMatches, setLiveMatches] = useState([]);
   const [bracketProgress, setBracketProgress] = useState([]);
   const [randomizerOpen, setRandomizerOpen] = useState(false);
+  const [addPlayerOpen, setAddPlayerOpen] = useState(false);
   const [loadingBrackets, setLoadingBrackets] = useState(false);
+  const [categoryMatches, setCategoryMatches] = useState([]);
+  const [regenerating, setRegenerating] = useState(false);
 
   const now = useNow(1000);
 
@@ -250,6 +258,79 @@ export default function BracketsPage() {
     loadAllBracketDetails();
   }, [loadAllBracketDetails]);
 
+  // All-status matches for the active category (unlike bracketData's
+  // per-bracket `matches`, which listMatchesForBracket deliberately scopes
+  // to completed ones only, for the "Recent matches" list) — needed to know
+  // whether every team currently in a bracket already has its full
+  // round-robin schedule, or whether a newly added team is still missing
+  // matches against its bracket-mates.
+  const loadCategoryMatches = useCallback(async () => {
+    if (!activeCategory) {
+      setCategoryMatches([]);
+      return;
+    }
+    try {
+      setCategoryMatches(await listMatchesForCategory(activeCategory.id));
+    } catch (e) {
+      pushToast(e.message, 'error');
+    }
+  }, [activeCategory, pushToast]);
+
+  useEffect(() => {
+    loadCategoryMatches();
+  }, [loadCategoryMatches]);
+
+  // null = nothing to show yet (brackets/teams still loading, or no
+  // matchlist has ever been generated for this category — see the spec's
+  // "no regeneration warning is necessary" case). Once a matchlist exists,
+  // this flags whether every team currently in each pool bracket already
+  // has its full round-robin schedule, and whether any of those matches
+  // already carry a result (started/scored/completed/courted) — used to
+  // pick the confirm dialog's stronger wording.
+  const matchlistStatus = useMemo(() => {
+    if (brackets.length === 0) return null;
+    const allTeamsLoaded = brackets.every((b) => bracketData[b.id]?.teams);
+    if (!allTeamsLoaded) return null;
+    const poolBracketIds = new Set(brackets.map((b) => b.id));
+    const poolMatches = categoryMatches.filter((m) => poolBracketIds.has(m.bracket_id));
+    if (poolMatches.length === 0) return null;
+
+    const isDouble = /double round robin/i.test(activeCategory?.format || '');
+    let missingCount = 0;
+    brackets.forEach((b) => {
+      const teamIds = (bracketData[b.id]?.teams || []).map((t) => t.id);
+      const bracketMatches = poolMatches.filter((m) => m.bracket_id === b.id);
+      missingCount += computeMissingPairs(teamIds, bracketMatches, isDouble).length;
+    });
+    const hasResults = poolMatches.some((m) => m.status !== 'scheduled' || m.score_a != null || m.score_b != null || m.court != null);
+    return { needsUpdate: missingCount > 0, hasResults };
+  }, [brackets, bracketData, categoryMatches, activeCategory]);
+
+  const handleRegenerateMatchlist = async () => {
+    if (blockIfLocked()) return;
+    const strongWarning =
+      'This category already has matches with recorded scores. Regenerating the matchlist may affect existing match results. Please confirm before continuing.';
+    const standardWarning = 'Existing matchups, scores, and match progress for this category may be affected.';
+    const ok = await confirm({
+      title: 'Regenerate Matchlist?',
+      message: `A matchlist has already been generated for this category. Regenerating it will rebuild the matches using the updated bracket assignments, including the newly added player/team. ${
+        matchlistStatus?.hasResults ? strongWarning : standardWarning
+      }`,
+      confirmLabel: 'Regenerate Matchlist',
+    });
+    if (!ok) return;
+    setRegenerating(true);
+    try {
+      await regenerateMatchListForCategory(activeCategory.id);
+      pushToast('Matchlist regenerated', 'success');
+      await Promise.all([loadAllBracketDetails(), loadBracketProgress(), loadCategoryMatches()]);
+    } catch (e) {
+      pushToast(e.message, 'error');
+    } finally {
+      setRegenerating(false);
+    }
+  };
+
   const toggleBracket = (id) => {
     setExpandedIds((prev) => {
       const next = new Set(prev);
@@ -262,7 +343,7 @@ export default function BracketsPage() {
   // Matches run numCourts-at-a-time, not one after another, so the ETA
   // divides the remaining count across all courts before multiplying by
   // the per-match duration.
-  const numCourts = event?.num_courts ?? 4;
+  const numCourts = usableCourts(event);
   const categoryProgress = useMemo(() => {
     const totalMatches = bracketProgress.reduce((sum, b) => sum + b.totalMatches, 0);
     const completed = bracketProgress.reduce((sum, b) => sum + b.completedCount, 0);
@@ -272,7 +353,15 @@ export default function BracketsPage() {
     return { totalMatches, completed, remaining, estimatedMinutes };
   }, [bracketProgress, activeCategory, event, numCourts]);
 
+  const isLocked = event?.status === 'finished';
+  const blockIfLocked = () => {
+    if (!isLocked) return false;
+    pushToast('This event is finished and locked — brackets can no longer be edited.', 'error');
+    return true;
+  };
+
   const handleGenerate = async (grouping) => {
+    if (blockIfLocked()) return;
     try {
       if (brackets.length > 0) {
         await deleteBracketsForCategory(activeCategory.id);
@@ -287,6 +376,7 @@ export default function BracketsPage() {
   };
 
   const handleTogglePause = async (match) => {
+    if (blockIfLocked()) return;
     try {
       if (match.running_since) {
         await pauseMatch(match.id, liveElapsedSeconds(match, Date.now()));
@@ -300,6 +390,7 @@ export default function BracketsPage() {
   };
 
   const handleCancelMatch = async (match) => {
+    if (blockIfLocked()) return;
     // A match with a match_code came from a generated match list — cancel
     // resets it to scheduled so its fixture/code isn't lost. An ad-hoc
     // match (no code) has no schedule slot to preserve, so it's deleted.
@@ -326,6 +417,7 @@ export default function BracketsPage() {
   };
 
   const handleFinishMatch = async (match, sA, sB) => {
+    if (blockIfLocked()) return;
     const elapsedSeconds = liveElapsedSeconds(match, Date.now());
     await finishMatch(match.id, {
       score_a: sA,
@@ -338,6 +430,7 @@ export default function BracketsPage() {
   };
 
   const handleRedrawClick = async () => {
+    if (blockIfLocked()) return;
     const ok = await confirm({
       title: `Redraw ${activeCategory?.name}?`,
       message: 'This category has already been drawn. Redrawing will erase the current brackets, teams and any recorded match results — including any Quarterfinals/Semifinals/Championship matches already generated — then draw fresh brackets.',
@@ -348,10 +441,20 @@ export default function BracketsPage() {
   };
 
   return (
-    <EventWorkspaceLayout eventName={event?.name}>
-      <div className="mb-6">
-        <h1 className="font-display text-2xl font-bold text-ink-900">Brackets</h1>
-        <p className="text-sm text-ink-500">Draw brackets from approved players and track pool standings</p>
+    <EventWorkspaceLayout event={event}>
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="font-display text-2xl font-bold text-ink-900">Brackets</h1>
+          <p className="text-sm text-ink-500">Draw brackets from approved players and track pool standings</p>
+        </div>
+        {canRedraw && (
+          <button
+            onClick={() => (blockIfLocked() ? null : setAddPlayerOpen(true))}
+            className="flex shrink-0 items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-2 text-xs font-bold text-ink-600 transition hover:bg-ink-100"
+          >
+            <UserPlus size={14} /> Add Player
+          </button>
+        )}
       </div>
 
       {!event ? (
@@ -413,14 +516,38 @@ export default function BracketsPage() {
             <>
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <h2 className="text-sm font-bold text-ink-800">Pools</h2>
-                {canRedraw && (
-                  <button
-                    onClick={handleRedrawClick}
-                    className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-100"
-                  >
-                    <Shuffle size={12} /> Redraw
-                  </button>
-                )}
+                <div className="flex flex-wrap items-center gap-2">
+                  {matchlistStatus?.needsUpdate ? (
+                    <>
+                      <span className="flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700 ring-1 ring-amber-200">
+                        <AlertTriangle size={12} /> Matchlist needs update
+                      </span>
+                      {canRedraw && (
+                        <button
+                          onClick={handleRegenerateMatchlist}
+                          disabled={regenerating}
+                          className="flex items-center gap-1.5 rounded-full bg-amber-600 px-3.5 py-1.5 text-xs font-bold text-white transition hover:bg-amber-700 disabled:opacity-50"
+                        >
+                          <RefreshCw size={12} className={regenerating ? 'animate-spin' : ''} /> {regenerating ? 'Regenerating…' : 'Regenerate Matchlist'}
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    matchlistStatus && (
+                      <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200">
+                        <CheckCircle2 size={12} /> Matchlist up to date
+                      </span>
+                    )
+                  )}
+                  {canRedraw && (
+                    <button
+                      onClick={handleRedrawClick}
+                      className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-100"
+                    >
+                      <Shuffle size={12} /> Redraw
+                    </button>
+                  )}
+                </div>
               </div>
 
               {bracketProgress.length > 0 && (
@@ -474,6 +601,19 @@ export default function BracketsPage() {
         />
       )}
 
+      {addPlayerOpen && (
+        <AddPlayerToBracketModal
+          eventId={eventId}
+          categories={categories}
+          // The added player may belong to a different category than the
+          // active tab — refresh everything this page shows rather than
+          // just the active category's own data, so switching to their
+          // category (or already being on it) reflects the new team
+          // immediately either way.
+          onAdded={() => Promise.all([loadBrackets(), loadAllBracketDetails(), loadBracketProgress(), loadCategoryMatches()])}
+          onClose={() => setAddPlayerOpen(false)}
+        />
+      )}
     </EventWorkspaceLayout>
   );
 }

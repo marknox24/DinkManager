@@ -205,6 +205,20 @@ alter table events add column if not exists prize_pool text;
 alter table events add column if not exists cancellation_policy text;
 alter table events add column if not exists refund_policy text;
 alter table events add column if not exists announcements text;
+-- Per-event plan entitlement snapshot — see the "EVENT PLAN ENTITLEMENTS"
+-- comment much further down for the full explanation. Added here (ahead of
+-- events_update_owner below, which pins every one of these) rather than
+-- next to that comment, since that section necessarily comes after
+-- subscription_requests is created (plan_payment_id's FK target) — but the
+-- COLUMNS themselves don't need subscription_requests to exist yet, only
+-- the FK *constraint* does, so the column adds happen here and the FK gets
+-- attached later once its target table exists.
+alter table events add column if not exists entitlement_categories integer;
+alter table events add column if not exists entitlement_players_per_category integer;
+alter table events add column if not exists entitlement_courts integer;
+alter table events add column if not exists entitlement_csv_import boolean;
+alter table events add column if not exists plan_activated_at timestamptz;
+alter table events add column if not exists plan_payment_id uuid;
 
 -- ----------------------------------------------------------------------------
 -- EVENT STAFF  ("table committee" helper accounts, invited by the organizer
@@ -315,19 +329,30 @@ revoke execute on function has_event_permission(uuid, text) from anon;
 
 alter table events enable row level security;
 
+-- is_admin_user() added so the admin panel's subscription-request list can
+-- join through to an event's name (AdminCustomersPage.jsx) regardless of
+-- that event's publish state — an admin reviewing a per-event upgrade
+-- request needs to see which event it's for.
 drop policy if exists "events_select_public_or_owner" on events;
 create policy "events_select_public_or_owner" on events for select
-  using (is_published = true or auth.uid() = organizer_id or has_event_permission(id, 'member'));
+  using (is_published = true or auth.uid() = organizer_id or has_event_permission(id, 'member') or is_admin_user());
 
 -- Trial accounts (profiles.access_expires_at / max_events set by the admin
 -- panel) are blocked from creating events past their expiry, or beyond
 -- their event limit, at the database level — not just in the UI. Regular
 -- accounts have both fields null, so the exists() below always matches for
 -- them (no behavior change).
+--
+-- plan = 'free' pins every insert to the Free Trial tier — the only way an
+-- event ever gets a paid plan is the approve-subscription-request edge
+-- function's service-role update (which bypasses RLS entirely), never a
+-- client-side insert. Without this, nothing stopped a raw client insert
+-- from creating an event with plan: 'business' directly.
 drop policy if exists "events_insert_owner" on events;
 create policy "events_insert_owner" on events for insert
   with check (
     auth.uid() = organizer_id
+    and plan = 'free'
     and exists (
       select 1 from profiles p
       where p.id = auth.uid()
@@ -347,12 +372,18 @@ create policy "events_insert_owner" on events for insert
 -- the event. No feature transfers ownership today, so organizer_id is simply
 -- immutable via this policy — even for the real owner.
 --
--- plan is pinned the same way, for the same class of reason as
+-- plan (and its entitlement_*/plan_activated_at/plan_payment_id snapshot
+-- below) is pinned the same way, for the same class of reason as
 -- profiles_update_own's plan check above: EventEditorPage.jsx's Plan field
--- is read-only in the UI now (it's a snapshot of the organizer's
--- subscription, set at event-creation time), but without this pin nothing
--- in the database stopped a raw client call from setting events.plan
--- directly to self-upgrade this event's category/court/player caps.
+-- and SettingsPage.jsx's Event Plan card are both read-only display — the
+-- only writers of these columns are events_insert_owner (always 'free') and
+-- the approve-subscription-request edge function (service role, bypasses
+-- RLS). Without this pin, nothing in the database stopped a raw client
+-- call from setting events.plan (or inflating entitlement_categories etc.
+-- directly) to self-upgrade this event's category/court/player caps.
+-- "is not distinct from", not "=", since these columns are null pre-
+-- activation-in-progress and "null = null" is null (never true) in SQL —
+-- same reasoning as access_expires_at's check on profiles_update_own.
 drop policy if exists "events_update_owner" on events;
 create policy "events_update_owner" on events for update
   using (auth.uid() = organizer_id or has_event_permission(id, 'settings') or has_event_permission(id, 'edit_event'))
@@ -362,6 +393,12 @@ create policy "events_update_owner" on events for update
   with check (
     organizer_id = (select e2.organizer_id from events e2 where e2.id = events.id)
     and plan = (select e2.plan from events e2 where e2.id = events.id)
+    and entitlement_categories is not distinct from (select e2.entitlement_categories from events e2 where e2.id = events.id)
+    and entitlement_players_per_category is not distinct from (select e2.entitlement_players_per_category from events e2 where e2.id = events.id)
+    and entitlement_courts is not distinct from (select e2.entitlement_courts from events e2 where e2.id = events.id)
+    and entitlement_csv_import is not distinct from (select e2.entitlement_csv_import from events e2 where e2.id = events.id)
+    and plan_activated_at is not distinct from (select e2.plan_activated_at from events e2 where e2.id = events.id)
+    and plan_payment_id is not distinct from (select e2.plan_payment_id from events e2 where e2.id = events.id)
   );
 
 drop policy if exists "events_delete_owner" on events;
@@ -483,10 +520,13 @@ alter table brackets enable row level security;
 -- Match-day scoring doesn't need this policy at all — it only writes to
 -- matches, and the resulting win/loss/points update to teams happens via
 -- apply_match_result()'s security-definer trigger, which bypasses RLS.
+-- status <> 'finished' blocks writes on a locked/completed event (reads
+-- still work — see brackets_select_public_or_owner just below, which is a
+-- separate policy unaffected by this one).
 drop policy if exists "brackets_owner_all" on brackets;
 create policy "brackets_owner_all" on brackets for all
-  using (exists (select 1 from categories c join events e on e.id = c.event_id where c.id = brackets.category_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'redraw_brackets'))))
-  with check (exists (select 1 from categories c join events e on e.id = c.event_id where c.id = brackets.category_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'redraw_brackets'))));
+  using (exists (select 1 from categories c join events e on e.id = c.event_id where c.id = brackets.category_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'redraw_brackets')) and e.status <> 'finished'))
+  with check (exists (select 1 from categories c join events e on e.id = c.event_id where c.id = brackets.category_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'redraw_brackets')) and e.status <> 'finished'));
 
 -- Anyone can read brackets for a published event (players checking their
 -- own bracket assignment) — mirrors categories_select_public_or_owner.
@@ -536,10 +576,12 @@ alter table teams enable row level security;
 -- Same redraw gate as brackets_owner_all above — staff never get direct
 -- write access to teams either way (apply_match_result() writes wins/
 -- losses/points for them via security definer, see matches below).
+-- status <> 'finished' blocks writes on a locked/completed event — reads
+-- still work via teams_select_public_or_owner just below, unaffected.
 drop policy if exists "teams_owner_all" on teams;
 create policy "teams_owner_all" on teams for all
-  using (exists (select 1 from brackets b join categories c on c.id = b.category_id join events e on e.id = c.event_id where b.id = teams.bracket_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'redraw_brackets'))))
-  with check (exists (select 1 from brackets b join categories c on c.id = b.category_id join events e on e.id = c.event_id where b.id = teams.bracket_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'redraw_brackets'))));
+  using (exists (select 1 from brackets b join categories c on c.id = b.category_id join events e on e.id = c.event_id where b.id = teams.bracket_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'redraw_brackets')) and e.status <> 'finished'))
+  with check (exists (select 1 from brackets b join categories c on c.id = b.category_id join events e on e.id = c.event_id where b.id = teams.bracket_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'redraw_brackets')) and e.status <> 'finished'));
 
 -- Anyone can read teams for a published event (players checking their own
 -- W/L record) — mirrors categories_select_public_or_owner.
@@ -605,10 +647,16 @@ alter table matches enable row level security;
 -- only ever writes here, and win/loss/points propagate to teams via the
 -- apply_match_result() security-definer trigger below regardless of the
 -- scorer's own teams RLS grants.
+-- status <> 'finished' blocks writes (scoring/starting/editing matches) on
+-- a locked/completed event. Reads still work via
+-- matches_select_public_or_owner just below, unaffected — deliberately not
+-- splitting this into separate select/write policies just to make that
+-- more explicit, since the existing two-policy split (this one + the
+-- public-read one) already achieves it.
 drop policy if exists "matches_owner_all" on matches;
 create policy "matches_owner_all" on matches for all
-  using (exists (select 1 from brackets b join categories c on c.id = b.category_id join events e on e.id = c.event_id where b.id = matches.bracket_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'brackets') or has_event_permission(e.id, 'matchlist'))))
-  with check (exists (select 1 from brackets b join categories c on c.id = b.category_id join events e on e.id = c.event_id where b.id = matches.bracket_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'brackets') or has_event_permission(e.id, 'matchlist'))));
+  using (exists (select 1 from brackets b join categories c on c.id = b.category_id join events e on e.id = c.event_id where b.id = matches.bracket_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'brackets') or has_event_permission(e.id, 'matchlist')) and e.status <> 'finished'))
+  with check (exists (select 1 from brackets b join categories c on c.id = b.category_id join events e on e.id = c.event_id where b.id = matches.bracket_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'brackets') or has_event_permission(e.id, 'matchlist')) and e.status <> 'finished'));
 
 -- Anyone can read matches for a published event (Preview Screen is a public
 -- spectator display, viewable without signing in) — mirrors
@@ -663,6 +711,370 @@ drop trigger if exists on_match_recorded on matches;
 create trigger on_match_recorded
   after insert or update on matches
   for each row execute function apply_match_result();
+
+-- ----------------------------------------------------------------------------
+-- OFFLINE SYNC  (idempotent match-write RPCs for Match List's offline queue)
+-- ----------------------------------------------------------------------------
+-- A referee scoring matches with no signal queues writes locally and replays
+-- them once back online. apply_match_result() above reverses-then-reapplies
+-- team wins/losses/points on every completed-match write, so replaying the
+-- same write twice (a flaky reconnect resending an unacknowledged sync) would
+-- double-apply it. sync_operations is the dedup ledger that makes each
+-- operation_id take effect at most once; it's revoked from anon/authenticated
+-- entirely — the only way to write to it is through the RPCs below, and it
+-- deliberately has no FK to matches (a cascade delete would wipe the very
+-- dedup record that made the delete itself idempotent).
+create table if not exists sync_operations (
+  operation_id uuid primary key,
+  device_id uuid not null,
+  match_id uuid not null,
+  operation_type text not null,
+  -- Captured on the client the instant the action was taken (not when it
+  -- happens to sync) — this is what lets sync_finish_match/sync_log_score
+  -- below tell a genuinely newer correction from a stale replay when two
+  -- devices score the same match while both were offline.
+  client_ts timestamptz not null,
+  applied_at timestamptz not null default now()
+);
+create index if not exists sync_operations_by_match on sync_operations (match_id, operation_type, client_ts desc);
+revoke all on sync_operations from anon, authenticated;
+
+-- Reproduces matches_owner_all's predicate exactly, including its
+-- status <> 'finished' lock guard — every RPC below is security definer (it
+-- has to be, to write sync_operations), which bypasses RLS entirely,
+-- so without this explicit re-check any authenticated user could edit any
+-- match on any event just by knowing its id, and a finished/locked event's
+-- matches could still be scored through the offline-sync queue even though
+-- the ordinary RLS path blocks it.
+create or replace function can_edit_match(p_match_id uuid)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from matches m
+    join brackets b on b.id = m.bracket_id
+    join categories c on c.id = b.category_id
+    join events e on e.id = c.event_id
+    where m.id = p_match_id
+      and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'brackets') or has_event_permission(e.id, 'matchlist'))
+      and e.status <> 'finished'
+  );
+$$;
+revoke all on function can_edit_match(uuid) from public, anon;
+grant execute on function can_edit_match(uuid) to authenticated;
+
+-- Flips a scheduled match to live. Mirrors startScheduledMatch's write.
+create or replace function sync_start_match(
+  p_operation_id uuid, p_device_id uuid, p_match_id uuid, p_client_ts timestamptz,
+  p_court integer, p_umpire_name text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row_count int;
+  v_match matches;
+begin
+  insert into sync_operations (operation_id, device_id, match_id, operation_type, client_ts)
+  values (p_operation_id, p_device_id, p_match_id, 'start', p_client_ts)
+  on conflict (operation_id) do nothing;
+  get diagnostics v_row_count = row_count;
+  if v_row_count = 0 then
+    select * into v_match from matches where id = p_match_id;
+    return jsonb_build_object('status', 'noop_replay', 'match', to_jsonb(v_match));
+  end if;
+
+  if not can_edit_match(p_match_id) then
+    raise exception 'not authorized to edit this match';
+  end if;
+
+  update matches
+  set status = 'in_progress', started_at = now(), running_since = now(), accumulated_seconds = 0,
+      court = p_court, umpire_name = p_umpire_name
+  where id = p_match_id and status = 'scheduled'
+  returning * into v_match;
+
+  if v_match.id is null then
+    select * into v_match from matches where id = p_match_id;
+    return jsonb_build_object('status', 'rejected_invalid_state', 'match', to_jsonb(v_match));
+  end if;
+
+  return jsonb_build_object('status', 'applied', 'match', to_jsonb(v_match));
+end;
+$$;
+revoke all on function sync_start_match(uuid, uuid, uuid, timestamptz, integer, text) from public, anon;
+grant execute on function sync_start_match(uuid, uuid, uuid, timestamptz, integer, text) to authenticated;
+
+-- Completes a scheduled match directly (Match List's "Log score" button), or
+-- corrects an already-completed one (the edit-score pencil, same handler
+-- online). Since this can legitimately re-complete an already-completed row,
+-- it can't rely on a simple status guard the way start/pause/resume/cancel
+-- do — instead it compares client_ts against the last finish/log_score
+-- applied for this match: a newer edit from another device is accepted as a
+-- correction, a stale/older one is rejected rather than clobbering a newer
+-- result.
+create or replace function sync_log_score(
+  p_operation_id uuid, p_device_id uuid, p_match_id uuid, p_client_ts timestamptz,
+  p_score_a integer, p_score_b integer, p_winner_team_id uuid, p_umpire_name text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row_count int;
+  v_match matches;
+  v_last_client_ts timestamptz;
+begin
+  insert into sync_operations (operation_id, device_id, match_id, operation_type, client_ts)
+  values (p_operation_id, p_device_id, p_match_id, 'log_score', p_client_ts)
+  on conflict (operation_id) do nothing;
+  get diagnostics v_row_count = row_count;
+  if v_row_count = 0 then
+    select * into v_match from matches where id = p_match_id;
+    return jsonb_build_object('status', 'noop_replay', 'match', to_jsonb(v_match));
+  end if;
+
+  if not can_edit_match(p_match_id) then
+    raise exception 'not authorized to edit this match';
+  end if;
+
+  select max(client_ts) into v_last_client_ts
+  from sync_operations
+  where match_id = p_match_id and operation_type in ('finish', 'log_score') and operation_id <> p_operation_id;
+
+  if v_last_client_ts is not null and v_last_client_ts > p_client_ts then
+    select * into v_match from matches where id = p_match_id;
+    return jsonb_build_object('status', 'rejected_stale', 'match', to_jsonb(v_match), 'reason', 'A newer result from another device was kept');
+  end if;
+
+  update matches
+  set status = 'completed', score_a = p_score_a, score_b = p_score_b, winner_team_id = p_winner_team_id,
+      umpire_name = p_umpire_name, finished_at = now()
+  where id = p_match_id
+  returning * into v_match;
+
+  return jsonb_build_object('status', 'applied', 'match', to_jsonb(v_match));
+end;
+$$;
+revoke all on function sync_log_score(uuid, uuid, uuid, timestamptz, integer, integer, uuid, text) from public, anon;
+grant execute on function sync_log_score(uuid, uuid, uuid, timestamptz, integer, integer, uuid, text) to authenticated;
+
+-- Pauses a live match's timer. Mirrors pauseMatch's write.
+create or replace function sync_pause_match(
+  p_operation_id uuid, p_device_id uuid, p_match_id uuid, p_client_ts timestamptz, p_accumulated_seconds integer
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row_count int;
+  v_match matches;
+begin
+  insert into sync_operations (operation_id, device_id, match_id, operation_type, client_ts)
+  values (p_operation_id, p_device_id, p_match_id, 'pause', p_client_ts)
+  on conflict (operation_id) do nothing;
+  get diagnostics v_row_count = row_count;
+  if v_row_count = 0 then
+    select * into v_match from matches where id = p_match_id;
+    return jsonb_build_object('status', 'noop_replay', 'match', to_jsonb(v_match));
+  end if;
+
+  if not can_edit_match(p_match_id) then
+    raise exception 'not authorized to edit this match';
+  end if;
+
+  update matches set accumulated_seconds = p_accumulated_seconds, running_since = null
+  where id = p_match_id and status = 'in_progress'
+  returning * into v_match;
+
+  if v_match.id is null then
+    select * into v_match from matches where id = p_match_id;
+    return jsonb_build_object('status', 'rejected_invalid_state', 'match', to_jsonb(v_match));
+  end if;
+
+  return jsonb_build_object('status', 'applied', 'match', to_jsonb(v_match));
+end;
+$$;
+revoke all on function sync_pause_match(uuid, uuid, uuid, timestamptz, integer) from public, anon;
+grant execute on function sync_pause_match(uuid, uuid, uuid, timestamptz, integer) to authenticated;
+
+-- Resumes a paused live match's timer. Mirrors resumeMatch's write.
+create or replace function sync_resume_match(
+  p_operation_id uuid, p_device_id uuid, p_match_id uuid, p_client_ts timestamptz
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row_count int;
+  v_match matches;
+begin
+  insert into sync_operations (operation_id, device_id, match_id, operation_type, client_ts)
+  values (p_operation_id, p_device_id, p_match_id, 'resume', p_client_ts)
+  on conflict (operation_id) do nothing;
+  get diagnostics v_row_count = row_count;
+  if v_row_count = 0 then
+    select * into v_match from matches where id = p_match_id;
+    return jsonb_build_object('status', 'noop_replay', 'match', to_jsonb(v_match));
+  end if;
+
+  if not can_edit_match(p_match_id) then
+    raise exception 'not authorized to edit this match';
+  end if;
+
+  update matches set running_since = now()
+  where id = p_match_id and status = 'in_progress'
+  returning * into v_match;
+
+  if v_match.id is null then
+    select * into v_match from matches where id = p_match_id;
+    return jsonb_build_object('status', 'rejected_invalid_state', 'match', to_jsonb(v_match));
+  end if;
+
+  return jsonb_build_object('status', 'applied', 'match', to_jsonb(v_match));
+end;
+$$;
+revoke all on function sync_resume_match(uuid, uuid, uuid, timestamptz) from public, anon;
+grant execute on function sync_resume_match(uuid, uuid, uuid, timestamptz) to authenticated;
+
+-- Reverts a live match back to scheduled. Mirrors cancelLiveMatch's write.
+create or replace function sync_cancel_match(
+  p_operation_id uuid, p_device_id uuid, p_match_id uuid, p_client_ts timestamptz
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row_count int;
+  v_match matches;
+begin
+  insert into sync_operations (operation_id, device_id, match_id, operation_type, client_ts)
+  values (p_operation_id, p_device_id, p_match_id, 'cancel', p_client_ts)
+  on conflict (operation_id) do nothing;
+  get diagnostics v_row_count = row_count;
+  if v_row_count = 0 then
+    select * into v_match from matches where id = p_match_id;
+    return jsonb_build_object('status', 'noop_replay', 'match', to_jsonb(v_match));
+  end if;
+
+  if not can_edit_match(p_match_id) then
+    raise exception 'not authorized to edit this match';
+  end if;
+
+  update matches set status = 'scheduled', started_at = null, running_since = null, accumulated_seconds = 0
+  where id = p_match_id and status = 'in_progress'
+  returning * into v_match;
+
+  if v_match.id is null then
+    select * into v_match from matches where id = p_match_id;
+    return jsonb_build_object('status', 'rejected_invalid_state', 'match', to_jsonb(v_match));
+  end if;
+
+  return jsonb_build_object('status', 'applied', 'match', to_jsonb(v_match));
+end;
+$$;
+revoke all on function sync_cancel_match(uuid, uuid, uuid, timestamptz) from public, anon;
+grant execute on function sync_cancel_match(uuid, uuid, uuid, timestamptz) to authenticated;
+
+-- Completes a live match with a final score. Mirrors finishMatch's write.
+-- Same newer-wins conflict handling as sync_log_score above, since both
+-- write a match's completed result and either can race the other across
+-- devices.
+create or replace function sync_finish_match(
+  p_operation_id uuid, p_device_id uuid, p_match_id uuid, p_client_ts timestamptz,
+  p_score_a integer, p_score_b integer, p_winner_team_id uuid, p_duration_minutes integer
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row_count int;
+  v_match matches;
+  v_last_client_ts timestamptz;
+begin
+  insert into sync_operations (operation_id, device_id, match_id, operation_type, client_ts)
+  values (p_operation_id, p_device_id, p_match_id, 'finish', p_client_ts)
+  on conflict (operation_id) do nothing;
+  get diagnostics v_row_count = row_count;
+  if v_row_count = 0 then
+    select * into v_match from matches where id = p_match_id;
+    return jsonb_build_object('status', 'noop_replay', 'match', to_jsonb(v_match));
+  end if;
+
+  if not can_edit_match(p_match_id) then
+    raise exception 'not authorized to edit this match';
+  end if;
+
+  select max(client_ts) into v_last_client_ts
+  from sync_operations
+  where match_id = p_match_id and operation_type in ('finish', 'log_score') and operation_id <> p_operation_id;
+
+  if v_last_client_ts is not null and v_last_client_ts > p_client_ts then
+    select * into v_match from matches where id = p_match_id;
+    return jsonb_build_object('status', 'rejected_stale', 'match', to_jsonb(v_match), 'reason', 'A newer result from another device was kept');
+  end if;
+
+  update matches
+  set status = 'completed', score_a = p_score_a, score_b = p_score_b, winner_team_id = p_winner_team_id,
+      duration_minutes = p_duration_minutes, running_since = null, finished_at = now()
+  where id = p_match_id
+  returning * into v_match;
+
+  return jsonb_build_object('status', 'applied', 'match', to_jsonb(v_match));
+end;
+$$;
+revoke all on function sync_finish_match(uuid, uuid, uuid, timestamptz, integer, integer, uuid, integer) from public, anon;
+grant execute on function sync_finish_match(uuid, uuid, uuid, timestamptz, integer, integer, uuid, integer) to authenticated;
+
+-- Deletes a still-scheduled match row. Mirrors deleteMatch's write. No
+-- FK/cascade concerns with sync_operations (deliberately not FK'd to
+-- matches — see the table comment above), so the dedup record for this
+-- operation_id survives the delete.
+create or replace function sync_remove_match(
+  p_operation_id uuid, p_device_id uuid, p_match_id uuid, p_client_ts timestamptz
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row_count int;
+begin
+  insert into sync_operations (operation_id, device_id, match_id, operation_type, client_ts)
+  values (p_operation_id, p_device_id, p_match_id, 'remove', p_client_ts)
+  on conflict (operation_id) do nothing;
+  get diagnostics v_row_count = row_count;
+  if v_row_count = 0 then
+    return jsonb_build_object('status', 'noop_replay');
+  end if;
+
+  if not can_edit_match(p_match_id) then
+    raise exception 'not authorized to edit this match';
+  end if;
+
+  delete from matches where id = p_match_id and status = 'scheduled';
+
+  return jsonb_build_object('status', 'applied');
+end;
+$$;
+revoke all on function sync_remove_match(uuid, uuid, uuid, timestamptz) from public, anon;
+grant execute on function sync_remove_match(uuid, uuid, uuid, timestamptz) to authenticated;
 
 -- ----------------------------------------------------------------------------
 -- REGISTRATION FIELDS  (organizer-defined extra questions per event)
@@ -736,20 +1148,28 @@ alter table registrations alter column player_email drop not null;
 alter table registrations enable row level security;
 
 -- Anyone can submit a registration to a published, open event. A signed-in
--- submitter may only attach their OWN id, never someone else's.
+-- submitter may only attach their OWN id, never someone else's, and it
+-- always lands as 'pending' — only the organizer approves. Without the
+-- status pin a player could insert themselves as 'approved' via a raw API
+-- call, skipping the organizer entirely (RegisterPage.jsx never sets status,
+-- so the legitimate flow always relies on the 'pending' column default).
 drop policy if exists "registrations_insert_public" on registrations;
 create policy "registrations_insert_public" on registrations for insert
   with check (
     exists (select 1 from events e where e.id = registrations.event_id and e.is_published = true)
     and (player_id is null or player_id = auth.uid())
+    and status = 'pending'
   );
 
 -- Lets the organizer insert registrations directly (manual add + Excel
 -- import) regardless of is_published — additive alongside the policy above
--- (permissive insert policies OR together).
+-- (permissive insert policies OR together). status <> 'finished' blocks
+-- this specific (owner) insert path on a locked event; the public
+-- self-registration policy above is left alone since it's already moot
+-- (nobody registers for a finished tournament) — not worth gating.
 drop policy if exists "registrations_insert_owner" on registrations;
 create policy "registrations_insert_owner" on registrations for insert
-  with check (exists (select 1 from events e where e.id = registrations.event_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'registrations'))));
+  with check (exists (select 1 from events e where e.id = registrations.event_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'registrations')) and e.status <> 'finished'));
 
 -- Only the organizer (or a staff member granted Registrations, Check-in, or
 -- Brackets — Check-in needs the roster, Brackets reads it for the
@@ -765,11 +1185,62 @@ create policy "registrations_select_own_player" on registrations for select
 
 drop policy if exists "registrations_update_owner" on registrations;
 create policy "registrations_update_owner" on registrations for update
-  using (exists (select 1 from events e where e.id = registrations.event_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'registrations') or has_event_permission(e.id, 'checkin'))));
+  using (exists (select 1 from events e where e.id = registrations.event_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'registrations') or has_event_permission(e.id, 'checkin')) and e.status <> 'finished'));
 
 drop policy if exists "registrations_delete_owner" on registrations;
 create policy "registrations_delete_owner" on registrations for delete
-  using (exists (select 1 from events e where e.id = registrations.event_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'registrations'))));
+  using (exists (select 1 from events e where e.id = registrations.event_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'registrations')) and e.status <> 'finished'));
+
+-- Server-side cap on approved players/pairs per category, read from the
+-- event's own entitlement snapshot. A trigger rather than an RLS policy
+-- because: (1) permissive insert policies OR together, so a cap on
+-- registrations_insert_owner alone could be sidestepped through any other
+-- insert policy that happens to pass; (2) a trigger sees OLD vs NEW, so it
+-- only fires on a transition INTO 'approved' (new approved row, pending ->
+-- approved, or an approved player moved to a different category) — editing
+-- an already-approved player's name in a full category isn't blocked; and
+-- (3) a BEFORE ROW trigger's query sees rows inserted earlier in the same
+-- statement, so one bulk Excel import can't sail 30 rows past a cap of 10
+-- the way a stable, statement-snapshot count would let it. Security definer
+-- so the count sees every row regardless of the caller's own RLS.
+create or replace function enforce_player_entitlement()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_cap integer;
+  v_approved integer;
+begin
+  if new.status <> 'approved' then
+    return new;
+  end if;
+  if tg_op = 'UPDATE' and old.status = 'approved' and old.category_id = new.category_id then
+    return new;
+  end if;
+
+  select entitlement_players_per_category into v_cap from events where id = new.event_id;
+  if v_cap is null then
+    return new;
+  end if;
+
+  select count(*) into v_approved
+  from registrations
+  where category_id = new.category_id and status = 'approved' and id <> new.id;
+
+  if v_approved >= v_cap then
+    raise exception 'Player limit reached — this event''s plan allows up to % players/pairs per category.', v_cap
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists enforce_player_entitlement on registrations;
+create trigger enforce_player_entitlement
+  before insert or update on registrations
+  for each row execute function enforce_player_entitlement();
 
 -- Public (anonymous) event-day check-in. RLS is row-level only — without
 -- narrowing anon's UPDATE grant down to just these two columns first, this
@@ -1147,13 +1618,18 @@ select cron.unschedule('cleanup-expired-event-staff') where exists (select 1 fro
 select cron.schedule('cleanup-expired-event-staff', '0 * * * *', 'select cleanup_expired_event_staff();');
 
 -- ----------------------------------------------------------------------------
--- EVENT PLAN TIERS  (self-declared by the organizer at event-setup time;
--- drives the category/player/court caps below and in the client). NOT tied
--- to subscription_requests.plan below — a human already reviews the payment
--- screenshot before approving a request, so there is no credit-ledger
--- binding one specific approval to one specific event. Keep these numbers
--- hand-synced with src/data/plans.js and the categories_insert_owner CASE
--- below — Postgres/edge functions can't import a JS module.
+-- EVENT PLAN TIERS  (one payment = one event = one plan entitlement — plan
+-- is scoped to the EVENT, never the organizer's account). Every event is
+-- created on 'free' and stays there until a plan-upgrade payment for THAT
+-- event is approved (see subscription_requests/approve-subscription-request
+-- below, and events.entitlement_* further down). Set exactly once per
+-- activation — free at event creation (eventsApi.js's createEvent/
+-- duplicateEvent), a paid tier at approve-subscription-request's approval —
+-- and otherwise immutable; events_update_owner's with check (below) pins
+-- both plan and the entitlement_* snapshot so no client update can change
+-- them outside those two paths. Keep these numbers hand-synced with
+-- src/data/plans.js and the approve-subscription-request edge function's own
+-- copy — Postgres/edge functions can't import a JS module.
 -- ----------------------------------------------------------------------------
 alter table events add column if not exists plan text not null default 'free';
 alter table events drop constraint if exists events_plan_check;
@@ -1186,13 +1662,20 @@ create policy "app_settings_update_admin" on app_settings for update
 -- ----------------------------------------------------------------------------
 -- SUBSCRIPTION REQUESTS  (manual/QR payment flow — no Stripe. A prospective
 -- customer picks a plan, is shown the platform's one payment QR from
--- app_settings, and submits their email + a screenshot proving payment, with
--- no account required. An admin reviews the screenshot from /admin/customers
--- and approves/rejects. Approving grants +1 to profiles.max_events on the
--- matching account (inviting the email if it has none yet) via the
--- approve-subscription-request edge function — see that file. The chosen
--- plan here is never written onto a specific event; the organizer separately
--- self-declares a plan per event (events.plan above) when they create it.
+-- app_settings, and submits their email + a screenshot proving payment.
+-- An admin reviews the screenshot from /admin/customers and approves/
+-- rejects, via the approve-subscription-request edge function — see that
+-- file. Two distinct flows share this one table, told apart by event_id:
+--   - event_id set: an authenticated organizer upgrading ONE of their own
+--     events (submitted from that event's Settings page). Approval writes
+--     the requested plan + entitlement_* snapshot onto that event alone —
+--     never onto profiles, never onto any other event.
+--   - event_id null: the original anonymous pre-signup lead flow (no
+--     account required yet). Approval only grants +1 to profiles.max_events
+--     (event-creation room) and invites the email if it has none yet — it
+--     no longer writes profiles.plan; every event, including that
+--     organizer's first, still starts on 'free' and needs its own separate
+--     event-scoped upgrade request to become a paid tier.
 -- ----------------------------------------------------------------------------
 create table if not exists subscription_requests (
   id uuid primary key default gen_random_uuid(),
@@ -1205,14 +1688,28 @@ create table if not exists subscription_requests (
   resolved_at timestamptz
 );
 
+-- Nullable: legacy/anonymous pre-signup rows keep this null; every in-app
+-- "Upgrade Event" request (SettingsPage.jsx's UpgradeEventModal) sets it.
+alter table subscription_requests add column if not exists event_id uuid references events(id) on delete cascade;
+
 alter table subscription_requests enable row level security;
 
 -- Pinning status/resolved_at here stops a crafted anonymous insert from
 -- self-approving or backdating resolution — same defensive spirit as
--- registrations_insert_public's WITH CHECK elsewhere in this file.
+-- registrations_insert_public's WITH CHECK elsewhere in this file. When
+-- event_id is supplied, the caller must actually own that event — otherwise
+-- an authenticated organizer could submit a (harmless but confusing, and
+-- eventually approvable) upgrade request against someone else's event.
 drop policy if exists "subscription_requests_insert_public" on subscription_requests;
 create policy "subscription_requests_insert_public" on subscription_requests for insert
-  with check (status = 'pending' and resolved_at is null);
+  with check (
+    status = 'pending'
+    and resolved_at is null
+    and (
+      event_id is null
+      or exists (select 1 from events e where e.id = subscription_requests.event_id and e.organizer_id = auth.uid())
+    )
+  );
 
 drop policy if exists "subscription_requests_select_admin" on subscription_requests;
 create policy "subscription_requests_select_admin" on subscription_requests for select
@@ -1220,11 +1717,144 @@ create policy "subscription_requests_select_admin" on subscription_requests for 
 
 -- Covers the Reject action (a plain client-side update); Approve goes
 -- through the service-role edge function instead since it also has to touch
--- auth.users/profiles, which this policy alone can't do.
+-- auth.users/profiles/events, which this policy alone can't do.
 drop policy if exists "subscription_requests_update_admin" on subscription_requests;
 create policy "subscription_requests_update_admin" on subscription_requests for update
   using (is_admin_user())
   with check (is_admin_user());
+
+-- ----------------------------------------------------------------------------
+-- EVENT PLAN ENTITLEMENTS  (events.entitlement_*/plan_payment_id columns
+-- were already added earlier in this file, right after events.plan — see
+-- that comment block. plan_payment_id's foreign key has to wait until here
+-- since it targets subscription_requests, which doesn't exist yet up there.
+-- events_update_owner (also earlier in this file) already pins all 5 of
+-- these columns, which only works because the COLUMNS exist by then even
+-- though this constraint doesn't yet — a column's FK constraint isn't
+-- required for a policy to reference the column itself.)
+-- ----------------------------------------------------------------------------
+alter table events drop constraint if exists events_plan_payment_id_fkey;
+alter table events add constraint events_plan_payment_id_fkey foreign key (plan_payment_id) references subscription_requests(id) on delete set null;
+
+-- Every new event starts on Free Trial, and the database — not the client —
+-- decides what that snapshot contains. Without this, events_insert_owner's
+-- plan = 'free' pin still let a raw client insert choose its own
+-- entitlement_* values (e.g. plan 'free' with 9999 players per category),
+-- since nothing checked those columns on insert. RLS WITH CHECK runs after
+-- BEFORE triggers, so the row this produces is also what satisfies the
+-- plan = 'free' pin. The only path to a paid snapshot is
+-- approve-subscription-request's service-role UPDATE. Values mirror
+-- PLAN_LIMITS.free in src/data/plans.js.
+create or replace function events_force_free_entitlements()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.plan := 'free';
+  new.entitlement_categories := 1;
+  new.entitlement_players_per_category := 10;
+  new.entitlement_courts := 1;
+  new.entitlement_csv_import := false;
+  new.plan_activated_at := now();
+  new.plan_payment_id := null;
+  -- Court cap at creation; the UPDATE-side equivalent is
+  -- events_enforce_court_entitlement below.
+  if new.num_courts is not null and new.num_courts > new.entitlement_courts then
+    raise exception 'Court limit reached — this event''s plan allows up to % court%.', new.entitlement_courts,
+      case when new.entitlement_courts = 1 then '' else 's' end
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists events_force_free_entitlements on events;
+create trigger events_force_free_entitlements
+  before insert on events
+  for each row execute function events_force_free_entitlements();
+
+-- Court cap on the event's configured court count. Only fires when
+-- num_courts actually changes, so an event already over its cap from
+-- before this existed can still have its other fields edited (and can
+-- always be lowered). The approve-subscription-request upgrade never
+-- touches num_courts, so it's unaffected.
+create or replace function events_enforce_court_entitlement()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.num_courts is distinct from old.num_courts
+     and new.num_courts is not null
+     and new.entitlement_courts is not null
+     and new.num_courts > new.entitlement_courts then
+    raise exception 'Court limit reached — this event''s plan allows up to % court%.', new.entitlement_courts,
+      case when new.entitlement_courts = 1 then '' else 's' end
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists events_enforce_court_entitlement on events;
+create trigger events_enforce_court_entitlement
+  before update on events
+  for each row execute function events_enforce_court_entitlement();
+
+-- Court cap on actual play: a match can't be put on a court number the
+-- event's plan doesn't include. This is the check that matters in
+-- practice — num_courts is only a setting, but this is what stops a Free
+-- Trial event running matches on courts 2, 3 and 4. A trigger rather than
+-- RLS because match writes mostly go through the security-definer sync_*
+-- RPCs, which bypass RLS but not triggers. Only fires when a court is
+-- newly assigned or changed, so matches already played on over-cap courts
+-- (and their later score edits) are untouched. Security definer so the
+-- bracket -> category -> event lookup isn't subject to the caller's RLS.
+create or replace function enforce_match_court_entitlement()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_cap integer;
+begin
+  if new.court is null then
+    return new;
+  end if;
+  if tg_op = 'UPDATE' and new.court is not distinct from old.court then
+    return new;
+  end if;
+
+  select e.entitlement_courts into v_cap
+  from brackets b
+  join categories c on c.id = b.category_id
+  join events e on e.id = c.event_id
+  where b.id = new.bracket_id;
+
+  if v_cap is not null and new.court > v_cap then
+    raise exception 'Court limit reached — this event''s plan allows up to % court%.', v_cap,
+      case when v_cap = 1 then '' else 's' end
+      using errcode = 'check_violation';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists enforce_match_court_entitlement on matches;
+create trigger enforce_match_court_entitlement
+  before insert or update on matches
+  for each row execute function enforce_match_court_entitlement();
+
+-- Backfill for events that existed before these columns did. Idempotent —
+-- only touches rows whose snapshot was never set.
+update events set
+  entitlement_categories = case plan when 'free' then 1 when 'starter' then 5 when 'pro' then 10 else null end,
+  entitlement_players_per_category = case plan when 'free' then 10 when 'starter' then 30 when 'pro' then 64 when 'business' then 128 end,
+  entitlement_courts = case plan when 'free' then 1 when 'starter' then 4 when 'pro' then 8 when 'business' then 16 end,
+  plan_activated_at = coalesce(plan_activated_at, created_at)
+where entitlement_players_per_category is null;
+
+update events set entitlement_csv_import = (plan <> 'free') where entitlement_csv_import is null;
 
 -- ----------------------------------------------------------------------------
 -- STORAGE  (subscription payment proofs + the platform payment QR)
@@ -1296,6 +1926,11 @@ as $$
   select count(*)::integer from categories where event_id = p_event_id;
 $$;
 
+-- Reads events.entitlement_categories directly (the snapshot captured at
+-- this event's plan-activation time) instead of a hand-duplicated CASE over
+-- plan names — closes the "keep hand-synced with plans.js" liability the
+-- CASE used to require. Also blocks inserts on a finished (locked) event —
+-- see the status <> 'finished' guards throughout this file's write policies.
 drop policy if exists "categories_insert_owner" on categories;
 create policy "categories_insert_owner" on categories for insert
   with check (
@@ -1303,26 +1938,22 @@ create policy "categories_insert_owner" on categories for insert
       select 1 from events e
       where e.id = categories.event_id
         and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'edit_event'))
+        and e.status <> 'finished'
         and (
-          -- null (business tier) = unlimited; parenthesized explicitly per
-          -- the operator-precedence warning already left twice in this file
-          -- (profiles_update_own, events_update_owner) — "a and b is null or
-          -- c" silently parses as "(a and b is null) or c", not what's meant.
-          (case e.plan when 'free' then 1 when 'starter' then 5 when 'pro' then 10 else null end) is null
-          or category_count_for_event(e.id)
-             < (case e.plan when 'free' then 1 when 'starter' then 5 when 'pro' then 10 else null end)
+          e.entitlement_categories is null
+          or category_count_for_event(e.id) < e.entitlement_categories
         )
     )
   );
 
 drop policy if exists "categories_update_owner" on categories;
 create policy "categories_update_owner" on categories for update
-  using (exists (select 1 from events e where e.id = categories.event_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'edit_event'))))
-  with check (exists (select 1 from events e where e.id = categories.event_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'edit_event'))));
+  using (exists (select 1 from events e where e.id = categories.event_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'edit_event')) and e.status <> 'finished'))
+  with check (exists (select 1 from events e where e.id = categories.event_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'edit_event')) and e.status <> 'finished'));
 
 drop policy if exists "categories_delete_owner" on categories;
 create policy "categories_delete_owner" on categories for delete
-  using (exists (select 1 from events e where e.id = categories.event_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'edit_event'))));
+  using (exists (select 1 from events e where e.id = categories.event_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'edit_event')) and e.status <> 'finished'));
 
 -- ----------------------------------------------------------------------------
 -- PUBLIC EVENT DISCOVERY  (excludes trial-account organizers, so the public

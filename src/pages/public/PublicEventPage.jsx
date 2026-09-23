@@ -3,7 +3,6 @@ import { Link, useParams } from 'react-router-dom';
 import {
   Award,
   CalendarDays,
-  Clock,
   CloudSun,
   Coins,
   ExternalLink,
@@ -36,7 +35,8 @@ import {
   listSponsors,
 } from '../../data/eventsApi';
 import { COURT_TYPES } from '../../data/constants';
-import { formatDateRange, formatDuration } from '../../utils/format';
+import { formatDateRange } from '../../utils/format';
+import { usableCourts } from '../../utils/courts';
 import { useToast } from '../../context/ToastContext';
 import StatusBadge from '../../components/organizer/StatusBadge';
 
@@ -295,9 +295,8 @@ export default function PublicEventPage() {
       label: formatDateRange(event.registration_open_date, event.registration_close_date),
     },
     event.location_address && { icon: MapPin, sub: 'Where', label: event.location_address },
+    event.num_courts != null && { icon: LayoutGrid, sub: 'Courts', label: `${usableCourts(event)} court${usableCourts(event) === 1 ? '' : 's'}` },
     event.court_type && { icon: COURT_TYPE_ICONS[event.court_type] || LayoutGrid, sub: 'Court type', label: COURT_TYPES.find((c) => c.value === event.court_type)?.label },
-    event.num_courts != null && { icon: LayoutGrid, sub: 'Courts', label: `${event.num_courts} court${event.num_courts === 1 ? '' : 's'}` },
-    event.match_duration_minutes != null && { icon: Clock, sub: 'Per match', label: `~${formatDuration(event.match_duration_minutes)}` },
     categories.length > 0 && { icon: Trophy, sub: 'Divisions', label: `${categories.length} division${categories.length === 1 ? '' : 's'}` },
     feeLabel && { icon: Coins, sub: 'Registration fee', label: feeLabel },
     matchTypes.length === 1 && { icon: Users, sub: 'Open to', label: matchTypes[0] },

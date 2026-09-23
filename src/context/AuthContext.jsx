@@ -79,6 +79,21 @@ export function AuthProvider({ children }) {
       setProfileLoading(false);
       return;
     }
+    const cacheKey = `dm_cached_profile:${userId}`;
+    // Seed from the last-known-good profile immediately, before the network
+    // call below even starts — offline, this is what lets role/isAdmin/
+    // accountType resolve to a real (if slightly stale) value on this tick
+    // instead of null, and the .catch()/.finally() below are what actually
+    // fix the bug this replaces: a rejected fetch previously never called
+    // setProfileLoading(false) at all, so profileLoading (and everything
+    // gated on it, like ProtectedRoute) hung forever the moment this went
+    // offline instead of falling back to the cache.
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) setProfile(JSON.parse(cached).profile);
+    } catch {
+      // Malformed/unavailable storage — fall through to the network fetch.
+    }
     setProfileLoading(true);
     supabase
       .from('profiles')
@@ -86,9 +101,20 @@ export function AuthProvider({ children }) {
       .eq('id', userId)
       .maybeSingle()
       .then(({ data }) => {
-        setProfile(data ?? null);
-        setProfileLoading(false);
-      });
+        if (!data) return;
+        setProfile(data);
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify({ profile: data, cachedAt: Date.now() }));
+        } catch {
+          // Storage full/unavailable — the in-memory profile is still correct.
+        }
+      })
+      .catch(() => {
+        // Offline or network error: keep whatever was seeded from cache
+        // above (or null if there was none) rather than clearing a
+        // known-good profile just because this one fetch failed.
+      })
+      .finally(() => setProfileLoading(false));
   }, [userId, loading]);
 
   // One-time correction for OAuth sign-ups: Supabase's OAuth flow can't carry

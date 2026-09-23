@@ -32,6 +32,9 @@ export default function ImportPlayersModal({ categories, defaultCategoryId, onIm
     try {
       await onImport(categoryId, rows);
       onClose();
+    } catch {
+      // The parent already surfaced why (toast or upgrade prompt); stay open
+      // so the organizer can pick a different category or file.
     } finally {
       setImporting(false);
     }
