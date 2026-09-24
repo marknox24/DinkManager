@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { AlertTriangle, ArrowRightLeft, CheckCircle2, ChevronDown, Crown, History, ListChecks, Radio, RefreshCw, Scale, Shuffle, Timer, UserPlus, X } from 'lucide-react';
 import { getEventById, listCategories, listRegistrations } from '../../../data/eventsApi';
@@ -253,6 +253,7 @@ export default function BracketsPage() {
   const [randomizerOpen, setRandomizerOpen] = useState(false);
   const [addPlayerOpen, setAddPlayerOpen] = useState(false);
   const [loadingBrackets, setLoadingBrackets] = useState(false);
+  const [bracketsError, setBracketsError] = useState(null);
   const [categoryMatches, setCategoryMatches] = useState([]);
   const [regenerating, setRegenerating] = useState(false);
   // Bracket balancing: the open Move dialog ({ team, fromBracket,
@@ -297,11 +298,46 @@ export default function BracketsPage() {
 
   const activeCategory = categories[activeCatIdx];
 
+  // Which category the loaders below are allowed to write for. Every load
+  // remembers the category it started for and drops its result if the
+  // organizer has switched tabs since — otherwise a slow or failed response
+  // for the previous tab could land on (or be left on) the new one, showing
+  // one category's brackets under another's name. Declared before the
+  // loaders' effects so it's updated before they start.
+  const activeCatRef = useRef(null);
+  useEffect(() => {
+    activeCatRef.current = activeCategory?.id ?? null;
+  }, [activeCategory]);
+
+  // Switching tabs clears everything that belongs to the previous category
+  // straight away, so nothing of it can stay on screen while (or if) the new
+  // category's data fails to load.
+  const selectCategory = (i) => {
+    if (i === activeCatIdx) return;
+    setActiveCatIdx(i);
+    setBrackets([]);
+    setBracketData({});
+    setBracketProgress([]);
+    setCategoryMatches([]);
+    setChanges([]);
+    setRegistrations([]);
+    setBracketsError(null);
+    setLoadingBrackets(true);
+    setRandomizedNotice(false);
+    setCapacityInput(null);
+    setMoving(null);
+    setBalanceOpen(false);
+    setPreviewOpen(false);
+    setDragging(null);
+  };
+
   const loadBrackets = useCallback(async () => {
     if (!activeCategory) return;
+    const catId = activeCategory.id;
     setLoadingBrackets(true);
     try {
-      const [bkts, regs] = await Promise.all([listBracketsForCategory(activeCategory.id), listRegistrations(eventId)]);
+      const [bkts, regs] = await Promise.all([listBracketsForCategory(catId), listRegistrations(eventId)]);
+      if (activeCatRef.current !== catId) return;
       // The knockout ladder (if any) lives in its own 'playoff' bracket and
       // is played out from Match List instead — see PlayoffStagesEditor /
       // MatchListPage's Playoffs panel. Only pool brackets show here.
@@ -312,13 +348,19 @@ export default function BracketsPage() {
       // organizer collapse the ones they don't need right now, not to hide
       // everything by default the way a brand-new category would.
       setExpandedIds(new Set(poolBrackets.map((b) => b.id)));
-      setRegistrations(regs.filter((r) => r.category_id === activeCategory.id && r.status === 'approved'));
+      setRegistrations(regs.filter((r) => r.category_id === catId && r.status === 'approved'));
+      setBracketsError(null);
     } catch (e) {
-      pushToast(e.message, 'error');
+      if (activeCatRef.current !== catId) return;
+      // Nothing from another category is showing (see selectCategory), so
+      // show why instead of an empty "no brackets drawn yet" state.
+      setBrackets([]);
+      setBracketData({});
+      setBracketsError(e.message);
     } finally {
-      setLoadingBrackets(false);
+      if (activeCatRef.current === catId) setLoadingBrackets(false);
     }
-  }, [activeCategory, eventId, pushToast]);
+  }, [activeCategory, eventId]);
 
   useEffect(() => {
     loadBrackets();
@@ -329,15 +371,17 @@ export default function BracketsPage() {
       setBracketProgress([]);
       return;
     }
+    const catId = activeCategory.id;
     try {
-      const progress = await getBracketProgressForCategory(activeCategory.id);
+      const progress = await getBracketProgressForCategory(catId);
+      if (activeCatRef.current !== catId) return;
       // This page only ever shows pool brackets (see loadBrackets above) —
       // exclude the playoff bracket here too, or its match counts silently
       // bleed into this page's "Category progress" ETA with no section to
       // explain the stray "Bracket PO" entry that appears alongside it.
       setBracketProgress(progress.filter((b) => b.kind !== 'playoff'));
     } catch (e) {
-      pushToast(e.message, 'error');
+      if (activeCatRef.current === catId) pushToast(e.message, 'error');
     }
   }, [activeCategory, pushToast]);
 
@@ -350,6 +394,7 @@ export default function BracketsPage() {
   // section would just mean each one flashes "Loading…" independently.
   const loadAllBracketDetails = useCallback(async () => {
     if (brackets.length === 0) return;
+    const catId = brackets[0].category_id;
     try {
       const entries = await Promise.all(
         brackets.map(async (b) => {
@@ -357,9 +402,10 @@ export default function BracketsPage() {
           return [b.id, { teams, matches }];
         })
       );
+      if (activeCatRef.current !== catId) return;
       setBracketData(Object.fromEntries(entries));
     } catch (e) {
-      pushToast(e.message, 'error');
+      if (activeCatRef.current === catId) pushToast(e.message, 'error');
     }
   }, [brackets, pushToast]);
 
@@ -378,10 +424,12 @@ export default function BracketsPage() {
       setCategoryMatches([]);
       return;
     }
+    const catId = activeCategory.id;
     try {
-      setCategoryMatches(await listMatchesForCategory(activeCategory.id));
+      const matches = await listMatchesForCategory(catId);
+      if (activeCatRef.current === catId) setCategoryMatches(matches);
     } catch (e) {
-      pushToast(e.message, 'error');
+      if (activeCatRef.current === catId) pushToast(e.message, 'error');
     }
   }, [activeCategory, pushToast]);
 
@@ -391,11 +439,13 @@ export default function BracketsPage() {
 
   const loadChanges = useCallback(async () => {
     if (!activeCategory) return;
+    const catId = activeCategory.id;
     try {
-      setChanges(await listBracketChanges(activeCategory.id));
+      const rows = await listBracketChanges(catId);
+      if (activeCatRef.current === catId) setChanges(rows);
     } catch {
       // History is informational — a failed load just leaves it empty.
-      setChanges([]);
+      if (activeCatRef.current === catId) setChanges([]);
     }
   }, [activeCategory]);
 
@@ -724,11 +774,7 @@ export default function BracketsPage() {
             {categories.map((cat, i) => (
               <button
                 key={cat.id}
-                onClick={() => {
-                  setActiveCatIdx(i);
-                  setRandomizedNotice(false);
-                  setCapacityInput(null);
-                }}
+                onClick={() => selectCategory(i)}
                 className={`shrink-0 rounded-full px-4 py-2 text-sm font-semibold transition ${
                   i === activeCatIdx ? 'bg-ink-900 text-white shadow-sm' : 'bg-white text-ink-600 ring-1 ring-ink-200 hover:bg-ink-50'
                 }`}
@@ -756,6 +802,18 @@ export default function BracketsPage() {
 
           {loadingBrackets ? (
             <div className="py-10 text-center text-sm text-ink-400">Loading…</div>
+          ) : bracketsError ? (
+            <div className="rounded-2xl border border-rose-200 bg-rose-50 p-8 text-center">
+              <AlertTriangle size={22} className="mx-auto mb-2 text-rose-400" />
+              <p className="text-sm font-semibold text-rose-800">Couldn't load the brackets for {activeCategory?.name}.</p>
+              <p className="mt-1 text-xs text-rose-700">Check your connection and try again. ({bracketsError})</p>
+              <button
+                onClick={() => Promise.all([loadBrackets(), loadBracketProgress(), loadCategoryMatches(), loadChanges()])}
+                className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-rose-600 px-5 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-rose-700 active:scale-[0.97]"
+              >
+                <RefreshCw size={14} /> Retry
+              </button>
+            </div>
           ) : brackets.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-ink-200 bg-white p-8 text-center">
               <Shuffle size={22} className="mx-auto mb-2 text-ink-300" />
