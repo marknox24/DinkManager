@@ -1,5 +1,5 @@
 import { supabase } from '../lib/supabaseClient';
-import { generateRoundRobinRounds, computeMissingPairs } from '../utils/scheduling';
+import { computeMissingPairs, effectiveGames, expectedRoundRobin, matchCounts, planCustomAdjust, planRoundRobin, planSingleEliminationRound1 } from '../utils/scheduling';
 import { getDeviceId } from '../lib/deviceId';
 
 // ---------------------------------------------------------------------------
@@ -84,30 +84,41 @@ export async function getBracketAssignmentsForEvent(categoryIds) {
 }
 
 // Per-bracket team/match counts for a category, so the Brackets page can
-// show "how many matches remain" and estimate time-to-finish. Pool brackets'
-// total assumes round-robin (n*(n-1)/2) — the only scheduling model this app
-// implements for pools (hasPlayed prevents any pair from replaying). A
-// knockout bracket's total isn't combinatorial — it's just however many
-// matches have actually been generated for it so far.
+// show "how many matches remain" and estimate time-to-finish. Once a
+// bracket has a generated matchlist, its total is the real number of
+// matches in it (canceled ones excluded — see matchCounts), so moves, added
+// players and regenerations are reflected exactly. Before that, a pool
+// bracket shows the round-robin expectation (expected: true) — the only
+// scheduling model this app implements for pools. A knockout bracket's
+// total is always just the matches generated for it so far.
 export async function getBracketProgressForCategory(categoryId) {
-  const { data: brackets, error: bracketErr } = await supabase.from('brackets').select('id, letter, kind').eq('category_id', categoryId);
+  const [{ data: category, error: catErr }, { data: brackets, error: bracketErr }] = await Promise.all([
+    supabase.from('categories').select('format, games_per_team').eq('id', categoryId).single(),
+    supabase.from('brackets').select('id, letter, kind, games_per_team').eq('category_id', categoryId),
+  ]);
+  if (catErr) throw catErr;
   if (bracketErr) throw bracketErr;
   if (brackets.length === 0) return [];
+  const isDouble = /double round robin/i.test(category.format || '');
+  const isRoundRobin = /round robin/i.test(category.format || '');
   const bracketIds = brackets.map((b) => b.id);
 
   const [{ data: teams, error: teamErr }, { data: matches, error: matchErr }] = await Promise.all([
     supabase.from('teams').select('id, bracket_id').in('bracket_id', bracketIds),
-    supabase.from('matches').select('id, bracket_id, status').in('bracket_id', bracketIds),
+    supabase.from('matches').select('id, bracket_id, team_a_id, team_b_id, status').in('bracket_id', bracketIds),
   ]);
   if (teamErr) throw teamErr;
   if (matchErr) throw matchErr;
 
+  const { byBracket } = matchCounts(matches);
   return brackets.map((b) => {
     const teamCount = teams.filter((t) => t.bracket_id === b.id).length;
-    const bracketMatches = matches.filter((m) => m.bracket_id === b.id);
-    const completedCount = bracketMatches.filter((m) => m.status === 'completed').length;
-    const totalMatches = b.kind === 'playoff' ? bracketMatches.length : (teamCount * (teamCount - 1)) / 2;
-    return { bracket_id: b.id, letter: b.letter, kind: b.kind, teamCount, totalMatches, completedCount, remaining: totalMatches - completedCount };
+    const actual = byBracket.get(b.id);
+    const expected = !actual && b.kind !== 'playoff';
+    const games = isRoundRobin ? (b.games_per_team ?? category.games_per_team) : null;
+    const totalMatches = actual ? actual.total : expected ? expectedRoundRobin(teamCount, isDouble, games).total : 0;
+    const completedCount = actual ? actual.completed : 0;
+    return { bracket_id: b.id, letter: b.letter, kind: b.kind, teamCount, totalMatches, completedCount, remaining: totalMatches - completedCount, expected };
   });
 }
 
@@ -174,6 +185,46 @@ export async function addPlayerToBracket(bracketId, registration) {
     })
     .select()
     .single();
+  if (error) throw error;
+  return data;
+}
+
+// ---------------------------------------------------------------------------
+// BRACKET BALANCING  (see "BRACKET BALANCING" in schema.sql — every rule is
+// enforced there: same category, pool brackets only, max size, not on
+// court, registered team, event editable.)
+// ---------------------------------------------------------------------------
+
+// moves: [{ team_id, to_bracket_id }] — applied all-or-nothing. action is
+// 'moved' (the Move dialog / drag-and-drop) or 'balanced' (Balance
+// Brackets), for the change history. Returns { letter: teamCount }.
+export async function moveBracketTeams(categoryId, moves, action = 'moved') {
+  const { data, error } = await supabase.rpc('move_bracket_teams', { p_category_id: categoryId, p_moves: moves, p_action: action });
+  if (error) throw error;
+  return data;
+}
+
+// After the Randomizer draws a category: pre-fills the max bracket size
+// with the even size and logs the draw. Returns the new max.
+export async function recordBracketRandomization(categoryId, again) {
+  const { data, error } = await supabase.rpc('record_bracket_randomization', { p_category_id: categoryId, p_again: again });
+  if (error) throw error;
+  return data;
+}
+
+// max = null removes the limit.
+export async function setBracketCapacity(categoryId, max) {
+  const { error } = await supabase.rpc('set_bracket_capacity', { p_category_id: categoryId, p_max: max });
+  if (error) throw error;
+}
+
+export async function listBracketChanges(categoryId, limit = 20) {
+  const { data, error } = await supabase
+    .from('bracket_changes')
+    .select('*')
+    .eq('category_id', categoryId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
   if (error) throw error;
   return data;
 }
@@ -406,101 +457,138 @@ export async function listMatchesForCategory(categoryId) {
     );
 }
 
-// Full round-robin schedule for every bracket in the category, interleaved
-// round-by-round across brackets (Bracket A's round-1 match, then Bracket
-// B's, then Bracket C's, then back to A's round 2, ...), coded per bracket
-// as letter + running count (A1, A2, ... / B1, B2, ...). "Double Round
-// Robin" runs the same cycle twice with home/away reversed the second time.
-export async function generateRoundRobinMatchList(categoryId) {
-  const { data: category, error: catErr } = await supabase.from('categories').select('format').eq('id', categoryId).single();
+// Loads what a category's matchlist is generated from — its pool brackets
+// (letter order) and their teams (created_at, then id, so the schedule is
+// deterministic) — and plans it with the same pure planners the Matchlist
+// Preview shows (planRoundRobin / planSingleEliminationRound1 in
+// utils/scheduling.js). So Preview and Generate can never disagree: both go
+// through this one function.
+export async function planMatchListForCategory(categoryId) {
+  const { data: category, error: catErr } = await supabase.from('categories').select('format, games_per_team').eq('id', categoryId).single();
   if (catErr) throw catErr;
-  const isDouble = /double round robin/i.test(category.format || '');
+  const format = category.format || '';
+  const isDouble = /double round robin/i.test(format);
 
   // Excludes the knockout bracket (if playoffs have already been generated
-  // for this category) — a round-robin regenerate must never sweep it into
-  // a pool schedule.
-  const { data: brackets, error: bracketErr } = await supabase.from('brackets').select('id, letter').eq('category_id', categoryId).eq('kind', 'pool').order('letter');
+  // for this category) — a pool schedule must never sweep it in.
+  const { data: brackets, error: bracketErr } = await supabase
+    .from('brackets')
+    .select('id, letter, games_per_team')
+    .eq('category_id', categoryId)
+    .eq('kind', 'pool')
+    .order('letter');
   if (bracketErr) throw bracketErr;
   if (brackets.length === 0) throw new Error('No brackets to generate a match list for.');
 
-  const { data: allTeams, error: teamErr } = await supabase
+  const { data: teams, error: teamErr } = await supabase
     .from('teams')
-    .select('id, bracket_id')
+    .select('id, bracket_id, player1_name, player2_name, club_name, created_at')
     .in(
       'bracket_id',
       brackets.map((b) => b.id)
-    );
+    )
+    .order('created_at')
+    .order('id');
   if (teamErr) throw teamErr;
 
-  const bracketSchedules = brackets.map((b) => {
-    const teamIds = allTeams.filter((t) => t.bracket_id === b.id).map((t) => t.id);
-    let rounds = generateRoundRobinRounds(teamIds);
-    if (isDouble) {
-      const reversed = rounds.map((round) => round.map(([a, c]) => [c, a]));
-      rounds = [...rounds, ...reversed];
-    }
-    return { bracket: b, rounds, codeCounter: 0 };
-  });
-
-  const maxRounds = Math.max(0, ...bracketSchedules.map((s) => s.rounds.length));
-  const rows = [];
-  for (let r = 0; r < maxRounds; r++) {
-    for (const sched of bracketSchedules) {
-      const pairs = sched.rounds[r] || [];
-      for (const [teamA, teamB] of pairs) {
-        sched.codeCounter += 1;
-        rows.push({
-          bracket_id: sched.bracket.id,
-          team_a_id: teamA,
-          team_b_id: teamB,
-          status: 'scheduled',
-          round_number: r + 1,
-          match_code: `${sched.bracket.letter}${sched.codeCounter}`,
-        });
-      }
-    }
+  if (/round robin/i.test(format)) {
+    const teamsByBracket = {};
+    // Effective custom games-per-team target per bracket (null = full):
+    // the bracket's own setting, else the category's. Never for Double RR.
+    const gamesByBracket = {};
+    brackets.forEach((b) => {
+      teamsByBracket[b.id] = teams.filter((t) => t.bracket_id === b.id).map((t) => t.id);
+      gamesByBracket[b.id] = isDouble ? null : effectiveGames(teamsByBracket[b.id].length, b.games_per_team ?? category.games_per_team);
+    });
+    return {
+      kind: 'round_robin',
+      isDouble,
+      brackets,
+      teams,
+      gamesByBracket,
+      rows: planRoundRobin(brackets, teamsByBracket, isDouble, gamesByBracket),
+      byes: [],
+    };
   }
+  const { rows, byes } = planSingleEliminationRound1(brackets, teams);
+  return { kind: 'single_elimination', isDouble: false, brackets, teams, gamesByBracket: {}, rows, byes };
+}
+
+// Full round-robin schedule for every pool bracket in the category — see
+// planRoundRobin for the round/interleave/coding rules ("Double Round Robin"
+// runs the cycle twice with home/away reversed the second time).
+export async function generateRoundRobinMatchList(categoryId) {
+  const { rows } = await planMatchListForCategory(categoryId);
   if (rows.length === 0) throw new Error('Not enough teams to generate matches.');
   const { data, error } = await supabase.from('matches').insert(rows).select();
   if (error) throw error;
   return data;
 }
 
-// Adds only the matches a category's existing round-robin schedule is
-// missing — every pair of teams in each pool bracket that doesn't already
-// have its expected number of matches (one meeting, or two for Double Round
-// Robin — see computeMissingPairs). Used after "Add Player to Bracket"
-// drops a new team into a bracket that already has a generated matchlist:
-// the new team's matches get appended as one new round per bracket, and
-// every existing match — scheduled, live, or completed with a recorded
-// score — is left completely untouched. This never deletes or updates a
-// single existing row; it only ever inserts the rows that were missing.
+// Brings one category's round-robin matchlist in line with its current
+// bracket assignments, after "Add Player to Bracket" or a bracket move:
+//   1. Removes scheduled matches that no longer make sense because one of
+//      their teams moved to another bracket — but only ones never started
+//      or scored (prune_stale_scheduled_matches in schema.sql).
+//   2. Adds every pair of teams in each pool bracket that doesn't already
+//      have its expected number of matches (one meeting, or two for Double
+//      Round Robin — see computeMissingPairs), as one new round per bracket.
+// Every match that was started, scored or completed is left completely
+// untouched — played matches of a moved team stay as history in their
+// original bracket. Other categories are never affected.
+//
+// A bracket with a custom games-per-team target (Round Robin only) is
+// instead adjusted towards that target with planCustomAdjust: extra
+// balanced matchups when the target went up, and — when it went down —
+// removal of unplayed matches only (remove_unplayed_matches in schema.sql
+// skips anything started or scored), never a repeat matchup.
 export async function regenerateMatchListForCategory(categoryId) {
-  const { data: category, error: catErr } = await supabase.from('categories').select('format').eq('id', categoryId).single();
+  const { data: category, error: catErr } = await supabase.from('categories').select('format, games_per_team').eq('id', categoryId).single();
   if (catErr) throw catErr;
   if (!/round robin/i.test(category.format || '')) {
-    throw new Error('Regenerating the matchlist to add new teams is only supported for Round Robin categories right now.');
+    throw new Error('Regenerating the matchlist is only supported for Round Robin categories right now.');
   }
   const isDouble = /double round robin/i.test(category.format || '');
 
-  const { data: brackets, error: bracketErr } = await supabase.from('brackets').select('id, letter').eq('category_id', categoryId).eq('kind', 'pool').order('letter');
+  const { data: pruned, error: pruneErr } = await supabase.rpc('prune_stale_scheduled_matches', { p_category_id: categoryId });
+  if (pruneErr) throw pruneErr;
+
+  const { data: brackets, error: bracketErr } = await supabase
+    .from('brackets')
+    .select('id, letter, games_per_team')
+    .eq('category_id', categoryId)
+    .eq('kind', 'pool')
+    .order('letter');
   if (bracketErr) throw bracketErr;
   if (brackets.length === 0) throw new Error('No brackets to regenerate a match list for.');
   const bracketIds = brackets.map((b) => b.id);
 
   const [{ data: allTeams, error: teamErr }, { data: existingMatches, error: matchErr }] = await Promise.all([
-    supabase.from('teams').select('id, bracket_id').in('bracket_id', bracketIds),
-    supabase.from('matches').select('id, bracket_id, team_a_id, team_b_id, round_number, match_code').in('bracket_id', bracketIds),
+    supabase.from('teams').select('id, bracket_id').in('bracket_id', bracketIds).order('created_at').order('id'),
+    supabase
+      .from('matches')
+      .select('id, bracket_id, team_a_id, team_b_id, round_number, match_code, status, score_a, score_b, court, started_at')
+      .in('bracket_id', bracketIds),
   ]);
   if (teamErr) throw teamErr;
   if (matchErr) throw matchErr;
 
   const rows = [];
+  const toRemove = [];
   for (const bracket of brackets) {
     const teamIds = allTeams.filter((t) => t.bracket_id === bracket.id).map((t) => t.id);
     const bracketMatches = existingMatches.filter((m) => m.bracket_id === bracket.id);
-    const missingPairs = computeMissingPairs(teamIds, bracketMatches, isDouble);
-    if (missingPairs.length === 0) continue;
+    const games = isDouble ? null : effectiveGames(teamIds.length, bracket.games_per_team ?? category.games_per_team);
+
+    let newPairs;
+    if (games != null) {
+      const { add, remove } = planCustomAdjust(teamIds, bracketMatches, games);
+      toRemove.push(...remove);
+      newPairs = add;
+    } else {
+      newPairs = computeMissingPairs(teamIds, bracketMatches, isDouble);
+    }
+    if (newPairs.length === 0) continue;
 
     const maxRound = bracketMatches.reduce((max, m) => Math.max(max, m.round_number || 0), 0);
     let codeCounter = bracketMatches.reduce((max, m) => {
@@ -508,23 +596,50 @@ export async function regenerateMatchListForCategory(categoryId) {
       return Math.max(max, num);
     }, 0);
 
-    missingPairs.forEach(([teamA, teamB]) => {
+    // New matches go in new rounds after the existing ones, each in the
+    // first new round where neither team is already playing.
+    const newRounds = [];
+    newPairs.forEach(([teamA, teamB]) => {
+      let r = newRounds.findIndex((busy) => !busy.has(teamA) && !busy.has(teamB));
+      if (r === -1) {
+        newRounds.push(new Set());
+        r = newRounds.length - 1;
+      }
+      newRounds[r].add(teamA).add(teamB);
       codeCounter += 1;
       rows.push({
         bracket_id: bracket.id,
         team_a_id: teamA,
         team_b_id: teamB,
         status: 'scheduled',
-        round_number: maxRound + 1,
+        round_number: maxRound + 1 + r,
         match_code: `${bracket.letter}${codeCounter}`,
       });
     });
   }
 
-  if (rows.length === 0) throw new Error('No new matches are needed — every team already has a full schedule.');
+  let trimmed = 0;
+  if (toRemove.length > 0) {
+    const { data: removedCount, error: removeErr } = await supabase.rpc('remove_unplayed_matches', { p_category_id: categoryId, p_match_ids: toRemove });
+    if (removeErr) throw removeErr;
+    trimmed = removedCount;
+  }
+
+  if (rows.length === 0) {
+    if (pruned + trimmed > 0) return { added: 0, removed: pruned + trimmed };
+    throw new Error('No changes are needed — every team already has its full schedule.');
+  }
   const { data, error } = await supabase.from('matches').insert(rows).select();
   if (error) throw error;
-  return data;
+  return { added: data.length, removed: pruned + trimmed };
+}
+
+// Custom games per team (Round Robin categories only). bracketId null sets
+// the category default for all its brackets and clears their overrides;
+// games null means Full Round Robin.
+export async function setGamesPerTeam(categoryId, bracketId, games) {
+  const { error } = await supabase.rpc('set_games_per_team', { p_category_id: categoryId, p_bracket_id: bracketId, p_games: games });
+  if (error) throw error;
 }
 
 // Single elimination Round 1 only: pairs teams sequentially per bracket
@@ -532,46 +647,14 @@ export async function regenerateMatchListForCategory(categoryId) {
 // than an auto-advance record. Round 2+ is played via the existing
 // Start-match/Log-score flow on the Brackets page.
 export async function generateSingleEliminationRound1(categoryId) {
-  const { data: brackets, error: bracketErr } = await supabase.from('brackets').select('id, letter').eq('category_id', categoryId).order('letter');
-  if (bracketErr) throw bracketErr;
-  if (brackets.length === 0) throw new Error('No brackets to generate a match list for.');
-
-  const { data: allTeams, error: teamErr } = await supabase
-    .from('teams')
-    .select('id, bracket_id, player1_name, player2_name, created_at')
-    .in(
-      'bracket_id',
-      brackets.map((b) => b.id)
-    )
-    .order('created_at');
-  if (teamErr) throw teamErr;
-
-  const rows = [];
-  const byes = [];
-  for (const b of brackets) {
-    const bracketTeams = allTeams.filter((t) => t.bracket_id === b.id);
-    let counter = 0;
-    let i = 0;
-    for (; i + 1 < bracketTeams.length; i += 2) {
-      counter += 1;
-      rows.push({
-        bracket_id: b.id,
-        team_a_id: bracketTeams[i].id,
-        team_b_id: bracketTeams[i + 1].id,
-        status: 'scheduled',
-        round_number: 1,
-        match_code: `${b.letter}${counter}`,
-      });
-    }
-    if (i < bracketTeams.length) {
-      const bye = bracketTeams[i];
-      byes.push({ letter: b.letter, name: bye.player2_name ? `${bye.player1_name} & ${bye.player2_name}` : bye.player1_name });
-    }
-  }
+  const { rows, byes } = await planMatchListForCategory(categoryId);
   if (rows.length === 0) throw new Error('Not enough teams to generate matches.');
   const { data, error } = await supabase.from('matches').insert(rows).select();
   if (error) throw error;
-  return { matches: data, byes };
+  return {
+    matches: data,
+    byes: byes.map(({ bracket, team }) => ({ letter: bracket.letter, name: team.player2_name ? `${team.player1_name} & ${team.player2_name}` : team.player1_name })),
+  };
 }
 
 // Flips an existing scheduled match to a running live match (no new row) —

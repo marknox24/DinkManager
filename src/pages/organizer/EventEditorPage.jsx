@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Award,
   Check,
@@ -17,6 +17,7 @@ import {
   MapPin,
   Plus,
   QrCode,
+  Sparkles,
   Trash2,
   Trophy,
 } from 'lucide-react';
@@ -430,7 +431,23 @@ export default function EventEditorPage() {
                     ))}
                   </Select>
                 </FormField>
-                <FormField label="Plan" hint="Set per event — use Settings → Upgrade Plan to raise this event's caps.">
+                <FormField
+                  label="Plan"
+                  hint={
+                    // Only the event's owner can buy an upgrade for it; Business
+                    // is the top tier and a finished event is locked.
+                    user?.id === event.organizer_id && event.plan !== 'business' && event.status !== 'finished' ? (
+                      <Link
+                        to={`/events/${eventId}/settings?upgrade=1`}
+                        className="inline-flex items-center gap-1 text-xs font-bold text-brand-600 hover:text-brand-700"
+                      >
+                        <Sparkles size={12} /> Upgrade this event's plan →
+                      </Link>
+                    ) : (
+                      'Set per event — plans are upgraded from Settings.'
+                    )
+                  }
+                >
                   <div className={`${inputClass} cursor-not-allowed bg-ink-50 text-ink-600`} aria-readonly="true">
                     {(PLAN_LIMITS[event.plan] ?? PLAN_LIMITS.free).label} — up to {event.entitlement_categories ?? 'unlimited'}{' '}
                     categories, {event.entitlement_players_per_category} players/cat,{' '}

@@ -23,6 +23,7 @@ import LiveMatchCard from '../../../components/organizer/LiveMatchCard';
 import LogScoreModal from '../../../components/organizer/LogScoreModal';
 import StartMatchModal from '../../../components/organizer/StartMatchModal';
 import PlayoffCrossoverConfirmModal from '../../../components/organizer/PlayoffCrossoverConfirmModal';
+import MatchlistPreviewModal from '../../../components/organizer/MatchlistPreviewModal';
 import RoundRobinScoreSheets from '../../../components/organizer/RoundRobinScoreSheets';
 import BlankScoreSheets from '../../../components/organizer/BlankScoreSheets';
 import {
@@ -77,6 +78,8 @@ export default function MatchListPage() {
   const [playoffStatus, setPlayoffStatus] = useState([]);
   const [loadingMatches, setLoadingMatches] = useState(false);
   const [generating, setGenerating] = useState(false);
+  // Generate always goes through the Matchlist Preview first.
+  const [generatePreviewOpen, setGeneratePreviewOpen] = useState(false);
   const [generatingStage, setGeneratingStage] = useState(null);
   const [confirmingLevel, setConfirmingLevel] = useState(null);
   const [loggingMatch, setLoggingMatch] = useState(null);
@@ -279,6 +282,7 @@ export default function MatchListPage() {
           'success'
         );
       }
+      setGeneratePreviewOpen(false);
       await reloadCategoryData();
     } catch (e) {
       pushToast(e.message, 'error');
@@ -614,11 +618,11 @@ export default function MatchListPage() {
                       : 'Later rounds are played from the Brackets page once Round 1 results are in.'}
                   </p>
                   <button
-                    onClick={handleGenerate}
+                    onClick={() => (blockIfLocked() ? null : setGeneratePreviewOpen(true))}
                     disabled={generating}
                     className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-brand-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-50"
                   >
-                    <Sparkles size={14} /> {generating ? 'Generating…' : isRoundRobinFormat(activeCategory.format) ? 'Generate match list' : 'Generate Round 1'}
+                    <Sparkles size={14} /> {generating ? 'Generating…' : isRoundRobinFormat(activeCategory.format) ? 'Preview & generate match list' : 'Preview & generate Round 1'}
                   </button>
                 </>
               ) : (
@@ -780,6 +784,15 @@ export default function MatchListPage() {
           plan={activeCategory}
           onConfirm={handleConfirmCrossover}
           onClose={() => setConfirmingLevel(null)}
+        />
+      )}
+
+      {generatePreviewOpen && activeCategory && (
+        <MatchlistPreviewModal
+          category={activeCategory}
+          generating={generating}
+          onGenerate={handleGenerate}
+          onClose={() => setGeneratePreviewOpen(false)}
         />
       )}
 

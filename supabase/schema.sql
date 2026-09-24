@@ -2455,3 +2455,363 @@ $$;
 
 revoke execute on function activate_purchase(uuid, uuid) from public, anon, authenticated;
 grant execute on function activate_purchase(uuid, uuid) to service_role;
+
+-- ----------------------------------------------------------------------------
+-- BRACKET BALANCING  (Brackets page: move teams between a category's pool
+-- brackets after the Randomizer, balance them, and a per-category max size).
+-- The Randomizer gives the first distribution; these RPCs let the organizer
+-- (or staff with redraw_brackets) fine-tune it. Every rule is enforced here,
+-- not just in the UI. A move only ever changes teams.bracket_id — a team row
+-- is one singles player or one whole doubles pair, so partners can never be
+-- split — and never touches registrations, matches, scores or courts: the
+-- existing matchlist stays as-is until the organizer regenerates it.
+-- ----------------------------------------------------------------------------
+
+-- null = no limit. Pre-filled by record_bracket_randomization() with the
+-- even size (22 teams / 4 brackets -> 6), editable via set_bracket_capacity().
+alter table categories add column if not exists max_teams_per_bracket integer;
+
+create table if not exists bracket_changes (
+  id uuid primary key default gen_random_uuid(),
+  event_id uuid not null references events(id) on delete cascade,
+  category_id uuid not null references categories(id) on delete cascade,
+  team_id uuid references teams(id) on delete set null,
+  team_label text,
+  from_bracket text,
+  to_bracket text,
+  action text not null check (action in ('moved', 'balanced', 'randomized', 'randomized_again', 'capacity_changed')),
+  details text,
+  actor_id uuid references auth.users(id) on delete set null,
+  actor_email text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists bracket_changes_category_idx on bracket_changes (category_id, created_at desc);
+
+alter table bracket_changes enable row level security;
+
+-- Written only by the security-definer functions below — no insert policy.
+drop policy if exists "bracket_changes_select_owner" on bracket_changes;
+create policy "bracket_changes_select_owner" on bracket_changes for select
+  using (exists (
+    select 1 from events e
+    where e.id = bracket_changes.event_id
+      and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'redraw_brackets'))
+  ));
+
+-- Shared gate for the functions below: the category's event, if the caller
+-- may edit its brackets and the event isn't finished. Raises otherwise.
+create or replace function bracket_edit_event(p_category_id uuid)
+returns events
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_event events%rowtype;
+begin
+  select e.* into v_event from categories c join events e on e.id = c.event_id where c.id = p_category_id;
+  if not found then
+    raise exception 'Category not found';
+  end if;
+  if not (v_event.organizer_id = auth.uid() or has_event_permission(v_event.id, 'redraw_brackets')) then
+    raise exception 'You don''t have permission to change brackets for this event' using errcode = '42501';
+  end if;
+  if v_event.status = 'finished' then
+    raise exception 'This event is finished and locked — brackets can no longer be edited.' using errcode = 'check_violation';
+  end if;
+  return v_event;
+end;
+$$;
+
+revoke execute on function bracket_edit_event(uuid) from public, anon, authenticated;
+
+-- Moves one or more teams to other pool brackets of the same category, as
+-- one all-or-nothing batch (a single Move, or every move of Balance
+-- Brackets). p_moves: [{"team_id": ..., "to_bracket_id": ...}, ...].
+-- Capacity is checked after the whole batch is applied, so a batch can swap
+-- teams between two full brackets.
+create or replace function move_bracket_teams(p_category_id uuid, p_moves jsonb, p_action text default 'moved')
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_event events%rowtype;
+  v_cap integer;
+  v_move jsonb;
+  v_team teams%rowtype;
+  v_from brackets%rowtype;
+  v_to brackets%rowtype;
+  v_reg registrations%rowtype;
+  v_label text;
+  v_dest uuid[] := '{}';
+  v_count integer;
+  v_letter text;
+  v_email text := (select email from auth.users where id = auth.uid());
+begin
+  if p_action not in ('moved', 'balanced') then
+    raise exception 'Unknown action: %', p_action;
+  end if;
+  if p_moves is null or jsonb_typeof(p_moves) <> 'array' or jsonb_array_length(p_moves) = 0 then
+    raise exception 'Nothing to move';
+  end if;
+
+  v_event := bracket_edit_event(p_category_id);
+  select max_teams_per_bracket into v_cap from categories where id = p_category_id;
+
+  for v_move in select * from jsonb_array_elements(p_moves) loop
+    select * into v_team from teams where id = (v_move->>'team_id')::uuid for update;
+    if not found then
+      raise exception 'Team not found';
+    end if;
+    v_label := v_team.player1_name || coalesce(' & ' || v_team.player2_name, '');
+
+    select * into v_from from brackets where id = v_team.bracket_id;
+    if v_from.category_id <> p_category_id or v_from.kind <> 'pool' then
+      raise exception '% isn''t in a pool bracket of this category', v_label;
+    end if;
+
+    if v_team.registration_id is null then
+      raise exception '% has no registration — only registered players/teams can be moved', v_label;
+    end if;
+    select * into v_reg from registrations where id = v_team.registration_id;
+    if not found or v_reg.status <> 'approved' or v_reg.event_id <> v_event.id or v_reg.category_id <> p_category_id then
+      raise exception '% isn''t an approved registration in this category', v_label;
+    end if;
+    if (select count(*) from teams t join brackets b on b.id = t.bracket_id
+        where b.category_id = p_category_id and t.registration_id = v_team.registration_id) <> 1 then
+      raise exception '% is assigned to more than one bracket — fix that before moving', v_label;
+    end if;
+
+    select * into v_to from brackets where id = (v_move->>'to_bracket_id')::uuid;
+    if not found or v_to.category_id <> p_category_id then
+      raise exception 'Players/teams can only move to another bracket in the same category';
+    end if;
+    if v_to.kind <> 'pool' then
+      raise exception 'Players/teams can only move between pool brackets';
+    end if;
+    if v_to.id = v_from.id then
+      raise exception '% is already in Bracket %', v_label, v_to.letter;
+    end if;
+
+    if exists (select 1 from matches where status = 'in_progress' and (team_a_id = v_team.id or team_b_id = v_team.id)) then
+      raise exception '% is playing right now — finish or cancel that match first', v_label;
+    end if;
+
+    update teams set bracket_id = v_to.id where id = v_team.id;
+    v_dest := array_append(v_dest, v_to.id);
+
+    insert into bracket_changes (event_id, category_id, team_id, team_label, from_bracket, to_bracket, action, actor_id, actor_email)
+    values (v_event.id, p_category_id, v_team.id, v_label, v_from.letter, v_to.letter, p_action, auth.uid(), v_email);
+  end loop;
+
+  if v_cap is not null then
+    for v_letter, v_count in
+      select b.letter, count(t.id) from brackets b left join teams t on t.bracket_id = b.id
+      where b.id = any(v_dest) group by b.letter
+    loop
+      if v_count > v_cap then
+        raise exception 'Bracket % is full (max % teams per bracket).', v_letter, v_cap using errcode = 'check_violation';
+      end if;
+    end loop;
+  end if;
+
+  return (
+    select jsonb_object_agg(b.letter, (select count(*) from teams t where t.bracket_id = b.id))
+    from brackets b where b.category_id = p_category_id and b.kind = 'pool'
+  );
+end;
+$$;
+
+revoke execute on function move_bracket_teams(uuid, jsonb, text) from public, anon;
+grant execute on function move_bracket_teams(uuid, jsonb, text) to authenticated;
+
+-- Called right after the Randomizer draws a category: pre-fills the max
+-- bracket size with the even size and logs the draw.
+create or replace function record_bracket_randomization(p_category_id uuid, p_again boolean)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_event events%rowtype;
+  v_brackets integer;
+  v_teams integer;
+  v_cap integer;
+begin
+  v_event := bracket_edit_event(p_category_id);
+  select count(*) into v_brackets from brackets where category_id = p_category_id and kind = 'pool';
+  select count(*) into v_teams from teams t join brackets b on b.id = t.bracket_id where b.category_id = p_category_id and b.kind = 'pool';
+  v_cap := case when v_brackets > 0 then ceil(v_teams::numeric / v_brackets)::integer end;
+
+  update categories set max_teams_per_bracket = v_cap where id = p_category_id;
+
+  insert into bracket_changes (event_id, category_id, action, details, actor_id, actor_email)
+  values (v_event.id, p_category_id, case when p_again then 'randomized_again' else 'randomized' end,
+    v_teams || ' teams into ' || v_brackets || ' brackets', auth.uid(), (select email from auth.users where id = auth.uid()));
+  return v_cap;
+end;
+$$;
+
+revoke execute on function record_bracket_randomization(uuid, boolean) from public, anon;
+grant execute on function record_bracket_randomization(uuid, boolean) to authenticated;
+
+create or replace function set_bracket_capacity(p_category_id uuid, p_max integer)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_event events%rowtype;
+begin
+  v_event := bracket_edit_event(p_category_id);
+  if p_max is not null and p_max < 1 then
+    raise exception 'Max teams per bracket must be at least 1';
+  end if;
+  update categories set max_teams_per_bracket = p_max where id = p_category_id;
+  insert into bracket_changes (event_id, category_id, action, details, actor_id, actor_email)
+  values (v_event.id, p_category_id, 'capacity_changed', 'Max teams per bracket: ' || coalesce(p_max::text, 'no limit'),
+    auth.uid(), (select email from auth.users where id = auth.uid()));
+end;
+$$;
+
+revoke execute on function set_bracket_capacity(uuid, integer) from public, anon;
+grant execute on function set_bracket_capacity(uuid, integer) to authenticated;
+
+-- Regenerate-after-move clean-up: deletes a category's scheduled matches
+-- that no longer make sense because a team moved out of that bracket — but
+-- ONLY ones never started or scored (no court, no start, no score). Played,
+-- live and scored matches are never touched; they stay as history. Returns
+-- how many were removed. Security definer so staff allowed to redraw
+-- brackets can do this even without the matchlist permission.
+create or replace function prune_stale_scheduled_matches(p_category_id uuid)
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_count integer;
+begin
+  perform bracket_edit_event(p_category_id);
+  delete from matches m
+  using brackets b
+  where b.id = m.bracket_id
+    and b.category_id = p_category_id
+    and b.kind = 'pool'
+    and m.status = 'scheduled'
+    and m.score_a is null and m.score_b is null
+    and m.court is null and m.started_at is null
+    and (
+      not exists (select 1 from teams t where t.id = m.team_a_id and t.bracket_id = m.bracket_id)
+      or not exists (select 1 from teams t where t.id = m.team_b_id and t.bracket_id = m.bracket_id)
+    );
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+revoke execute on function prune_stale_scheduled_matches(uuid) from public, anon;
+grant execute on function prune_stale_scheduled_matches(uuid) to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- GAMES PER TEAM  (custom round robin: each team plays a target number of
+-- games instead of every other team — for tight venue time/courts). Round
+-- Robin categories only. null = Full Round Robin (the default). The
+-- category value is the default for its brackets (and survives Randomize
+-- Again, which recreates them); a bracket's own value overrides it. The
+-- balanced schedule itself is built client-side (planCustomRounds /
+-- planCustomAdjust in src/utils/scheduling.js) — never a repeat matchup,
+-- every team at the target or, when teams × target is odd, one team at +1.
+-- ----------------------------------------------------------------------------
+alter table categories add column if not exists games_per_team integer;
+alter table brackets add column if not exists games_per_team integer;
+
+alter table bracket_changes drop constraint if exists bracket_changes_action_check;
+alter table bracket_changes add constraint bracket_changes_action_check check (action in (
+  'moved', 'balanced', 'randomized', 'randomized_again', 'capacity_changed', 'games_changed'
+));
+
+-- p_bracket_id null = the category default for all its brackets (clears
+-- per-bracket overrides); otherwise that one bracket. p_games null or 0 =
+-- Full Round Robin — on a bracket, null means "use the category default"
+-- and 0 means "Full Round Robin even though the category default is
+-- custom".
+create or replace function set_games_per_team(p_category_id uuid, p_bracket_id uuid, p_games integer)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_event events%rowtype;
+  v_format text;
+  v_letter text;
+begin
+  v_event := bracket_edit_event(p_category_id);
+  select format into v_format from categories where id = p_category_id;
+  if v_format is null or v_format !~* 'round robin' or v_format ~* 'double round robin' then
+    raise exception 'Games per team can only be customized for Round Robin categories';
+  end if;
+  if p_games is not null and p_games < 0 then
+    raise exception 'Games per team can''t be negative';
+  end if;
+
+  if p_bracket_id is null then
+    update categories set games_per_team = p_games where id = p_category_id;
+    update brackets set games_per_team = null where category_id = p_category_id;
+  else
+    select letter into v_letter from brackets where id = p_bracket_id and category_id = p_category_id and kind = 'pool';
+    if not found then
+      raise exception 'That bracket isn''t a pool bracket of this category';
+    end if;
+    update brackets set games_per_team = p_games where id = p_bracket_id;
+  end if;
+
+  insert into bracket_changes (event_id, category_id, action, details, actor_id, actor_email)
+  values (v_event.id, p_category_id, 'games_changed',
+    coalesce('Bracket ' || v_letter, 'All brackets') || ': ' ||
+      case when p_games is null and v_letter is not null then 'same as category'
+           when coalesce(p_games, 0) = 0 then 'Full Round Robin'
+           else p_games || ' games/team' end,
+    auth.uid(), (select email from auth.users where id = auth.uid()));
+end;
+$$;
+
+revoke execute on function set_games_per_team(uuid, uuid, integer) from public, anon;
+grant execute on function set_games_per_team(uuid, uuid, integer) to authenticated;
+
+-- Lowering games per team, at Regenerate: deletes the listed matches, but
+-- only ones in this category's pool brackets that were never played (no
+-- score, no court, not started) — anything else in the list is skipped, so
+-- a recorded result can never be removed this way. Returns how many went.
+create or replace function remove_unplayed_matches(p_category_id uuid, p_match_ids uuid[])
+returns integer
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_count integer;
+begin
+  perform bracket_edit_event(p_category_id);
+  delete from matches m
+  using brackets b
+  where m.id = any(p_match_ids)
+    and b.id = m.bracket_id
+    and b.category_id = p_category_id
+    and b.kind = 'pool'
+    and m.status = 'scheduled'
+    and m.score_a is null and m.score_b is null
+    and m.court is null and m.started_at is null;
+  get diagnostics v_count = row_count;
+  return v_count;
+end;
+$$;
+
+revoke execute on function remove_unplayed_matches(uuid, uuid[]) from public, anon;
+grant execute on function remove_unplayed_matches(uuid, uuid[]) to authenticated;

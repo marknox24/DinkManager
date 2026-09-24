@@ -54,16 +54,19 @@ export default function SettingsPage() {
   // ?upgrade=1 is how EventEditorPage.jsx/RegistrationsPage.jsx's plan-limit
   // dialogs land here already pointed at the Upgrade Plan modal, instead of
   // dropping the organizer on a page they then have to hunt around on.
+  // An upgrade already awaiting payment review isn't opened again — that
+  // would let the organizer submit a second request (and pay twice).
   useEffect(() => {
     if (searchParams.get('upgrade') === '1' && event && !isLocked) {
-      setUpgradeModalOpen(true);
+      if (pendingRequest) pushToast('An upgrade for this event is already pending review', 'info');
+      else setUpgradeModalOpen(true);
       setSearchParams((prev) => {
         const next = new URLSearchParams(prev);
         next.delete('upgrade');
         return next;
       }, { replace: true });
     }
-  }, [searchParams, setSearchParams, event, isLocked]);
+  }, [searchParams, setSearchParams, event, isLocked, pendingRequest, pushToast]);
 
   const save = async () => {
     let n = parseInt(numCourts, 10);

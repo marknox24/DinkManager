@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { AlertTriangle, CheckCircle2, ChevronDown, Crown, Radio, RefreshCw, Shuffle, Timer, UserPlus } from 'lucide-react';
+import { AlertTriangle, ArrowRightLeft, CheckCircle2, ChevronDown, Crown, History, ListChecks, Radio, RefreshCw, Scale, Shuffle, Timer, UserPlus, X } from 'lucide-react';
 import { getEventById, listCategories, listRegistrations } from '../../../data/eventsApi';
 import {
   cancelLiveMatch,
@@ -9,14 +9,18 @@ import {
   finishMatch,
   generateBrackets,
   getBracketProgressForCategory,
+  listBracketChanges,
   listBracketsForCategory,
   listLiveMatchesForEvent,
   listMatchesForBracket,
   listMatchesForCategory,
   listTeamsForBracket,
   pauseMatch,
+  recordBracketRandomization,
   regenerateMatchListForCategory,
   resumeMatch,
+  setBracketCapacity,
+  setGamesPerTeam,
 } from '../../../data/bracketsApi';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
@@ -24,26 +28,63 @@ import { useEventAccess } from '../../../context/EventAccessContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import RandomizerModal from '../../../components/organizer/RandomizerModal';
 import AddPlayerToBracketModal from '../../../components/organizer/AddPlayerToBracketModal';
+import MoveTeamModal from '../../../components/organizer/MoveTeamModal';
+import BalanceBracketsModal from '../../../components/organizer/BalanceBracketsModal';
+import MatchlistPreviewModal from '../../../components/organizer/MatchlistPreviewModal';
+import GamesPerTeamPanel from '../../../components/organizer/GamesPerTeamPanel';
 import LiveMatchCard from '../../../components/organizer/LiveMatchCard';
 import { useNow } from '../../../hooks/useNow';
 import { usableCourts } from '../../../utils/courts';
 import { formatDuration } from '../../../utils/format';
 import { liveElapsedSeconds, teamLabel } from '../../../utils/match';
-import { computeMissingPairs } from '../../../utils/scheduling';
+import { computeMissingPairs, effectiveGames, expectedRoundRobin, matchCounts, planCustomAdjust, progressLabel } from '../../../utils/scheduling';
 import { rankTeams } from '../../../utils/standings';
 
 // One collapsible section per drawn pool — standings + its own recent
-// matches. Starting/logging matches now lives entirely on Match List, so
-// this page is read-only: draw brackets, watch progress, see results.
+// matches. Starting/logging matches lives on Match List; this page draws
+// brackets, lets the organizer fine-tune them (Move / drag a team to
+// another bracket, Balance Brackets), and shows progress and results.
 // (Printable Round Robin score sheets also moved to Match List — see its
 // header action — since a print run spans every pool bracket in a
 // category, grouped by round, rather than one bracket at a time.)
-function BracketSection({ bracket, progress, expanded, onToggle, teams, matches }) {
+//
+// Drag-and-drop (desktop): team rows are draggable when canMove; dropping
+// one on another bracket's section opens the same Move dialog with that
+// bracket pre-selected, so every move goes through one confirm/validate
+// path. On touch screens the [Move] button is the way to do it.
+//
+// Match counts come from the real matchlist (teamCounts / progress —
+// see matchCounts in utils/scheduling.js): Matches is every non-canceled
+// match the player/pair is in, Completed the completed ones, Remaining the
+// rest. Before a matchlist exists, only the round-robin expectation is
+// known, shown as "expected" with no completed/remaining.
+function BracketSection({ bracket, progress, expanded, onToggle, teams, matches, teamCounts, isDouble, games, canMove, onMove, dragging, onDragTeam, onDropTeam }) {
   const rankedTeams = useMemo(() => rankTeams(teams || []), [teams]);
   const loaded = !!teams;
+  const [dragOver, setDragOver] = useState(false);
+  const isDropTarget = dragging && dragging.fromBracketId !== bracket.id;
+  // games = this bracket's custom games-per-team target (null = full).
+  const expected = expectedRoundRobin(teams?.length ?? 0, isDouble, games);
+  const perTeam = expected.perTeamMax > expected.perTeam ? `${expected.perTeam}–${expected.perTeamMax}` : expected.perTeam;
+  const hasList = progress && !progress.expected;
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-ink-100 bg-white shadow-sm">
+    <div
+      onDragOver={(e) => {
+        if (!isDropTarget) return;
+        e.preventDefault();
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        if (isDropTarget) onDropTeam(bracket);
+      }}
+      className={`overflow-hidden rounded-2xl border bg-white shadow-sm transition ${
+        dragOver ? 'border-brand-500 ring-2 ring-brand-500/40' : isDropTarget ? 'border-dashed border-brand-300' : 'border-ink-100'
+      }`}
+    >
       <div
         onClick={onToggle}
         className="flex cursor-pointer items-center justify-between gap-3 px-5 py-3.5 transition hover:bg-ink-50/60"
@@ -53,11 +94,24 @@ function BracketSection({ bracket, progress, expanded, onToggle, teams, matches 
             {bracket.letter}
           </span>
           <div>
-            <div className="text-sm font-bold text-ink-900">Bracket {bracket.letter}</div>
+            <div className="text-sm font-bold text-ink-900">
+              Bracket {bracket.letter}
+              {teams && <span className="ml-1.5 text-xs font-semibold text-ink-400">· {teams.length} {teams.length === 1 ? 'team' : 'teams'}</span>}
+            </div>
             {progress && (
               <div className="text-xs text-ink-500">
-                {progress.completedCount}/{progress.totalMatches} matches played
-                {progress.remaining > 0 ? ` · ${progress.remaining} left` : ' · Complete'}
+                Target: {perTeam} games/team · {progress.totalMatches} total {progress.totalMatches === 1 ? 'match' : 'matches'}
+                {hasList ? (
+                  <>
+                    {' · '}
+                    <strong className="font-bold text-ink-800">
+                      {progress.completedCount}/{progress.totalMatches}
+                    </strong>{' '}
+                    completed · {progress.remaining > 0 ? `${progress.remaining} remaining` : 'Complete'}
+                  </>
+                ) : (
+                  ' expected'
+                )}
               </div>
             )}
           </div>
@@ -83,11 +137,25 @@ function BracketSection({ bracket, progress, expanded, onToggle, teams, matches 
                       <th className="px-3 py-2.5 text-center">RF</th>
                       <th className="px-3 py-2.5 text-center">RA</th>
                       <th className="px-3 py-2.5 text-center">Diff</th>
+                      <th className="border-l border-ink-100 px-3 py-2.5 text-center" title="Completed / total scheduled matches">
+                        Matches
+                      </th>
+                      {canMove && <th className="px-3 py-2.5" />}
                     </tr>
                   </thead>
                   <tbody>
                     {rankedTeams.map((t) => (
-                      <tr key={t.id} className={`border-b border-ink-50 ${t.rank === 1 ? 'bg-amber-50/70' : ''}`}>
+                      <tr
+                        key={t.id}
+                        draggable={canMove}
+                        onDragStart={(e) => {
+                          e.dataTransfer.effectAllowed = 'move';
+                          e.dataTransfer.setData('text/plain', t.id);
+                          onDragTeam({ team: t, fromBracketId: bracket.id });
+                        }}
+                        onDragEnd={() => onDragTeam(null)}
+                        className={`border-b border-ink-50 ${t.rank === 1 ? 'bg-amber-50/70' : ''} ${canMove ? 'cursor-grab active:cursor-grabbing' : ''}`}
+                      >
                         <td className="px-3 py-2.5 text-center">
                           <span
                             className={`inline-flex h-6 min-w-6 items-center justify-center gap-0.5 rounded-full px-1.5 text-xs font-extrabold ${t.rank === 1 ? 'bg-amber-400 text-amber-950' : 'bg-ink-100 text-ink-600'}`}
@@ -105,6 +173,32 @@ function BracketSection({ bracket, progress, expanded, onToggle, teams, matches 
                         <td className={`px-3 py-2.5 text-center font-mono font-bold ${t.diff >= 0 ? 'text-brand-600' : 'text-rose-600'}`}>
                           {t.diff >= 0 ? `+${t.diff}` : t.diff}
                         </td>
+                        {hasList ? (
+                          (() => {
+                            const p = progressLabel(teamCounts.get(t.id));
+                            return (
+                              <td className="border-l border-ink-100 px-3 py-2 text-center" title={p.detail}>
+                                <div className="font-mono text-sm font-bold text-ink-900">{p.short}</div>
+                                <div className={`text-[10px] font-semibold ${p.done ? 'text-emerald-600' : 'text-ink-400'}`}>{p.secondary}</div>
+                              </td>
+                            );
+                          })()
+                        ) : (
+                          <td className="border-l border-ink-100 px-3 py-2 text-center" title="Expected once the matchlist is generated">
+                            <div className="font-mono text-sm font-bold text-ink-400">0/{expected.perTeam}</div>
+                            <div className="text-[10px] font-semibold text-ink-400">not generated</div>
+                          </td>
+                        )}
+                        {canMove && (
+                          <td className="px-3 py-2.5 text-right">
+                            <button
+                              onClick={() => onMove(t, bracket)}
+                              className="inline-flex items-center gap-1 rounded-full border border-ink-200 px-2.5 py-1 text-[11px] font-bold text-ink-600 transition hover:bg-ink-50 active:scale-[0.97]"
+                            >
+                              <ArrowRightLeft size={11} /> Move
+                            </button>
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -161,6 +255,21 @@ export default function BracketsPage() {
   const [loadingBrackets, setLoadingBrackets] = useState(false);
   const [categoryMatches, setCategoryMatches] = useState([]);
   const [regenerating, setRegenerating] = useState(false);
+  // Bracket balancing: the open Move dialog ({ team, fromBracket,
+  // initialToId }), the team being dragged, the Balance preview, the
+  // just-randomized notice, the change history, and the max per bracket
+  // (kept per category here once changed, so saving it doesn't have to
+  // reload the whole category list).
+  const [moving, setMoving] = useState(null);
+  const [dragging, setDragging] = useState(null);
+  const [balanceOpen, setBalanceOpen] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [randomizedNotice, setRandomizedNotice] = useState(false);
+  const [changes, setChanges] = useState([]);
+  const [capacityByCat, setCapacityByCat] = useState({});
+  const [gamesByCat, setGamesByCat] = useState({});
+  const [capacityInput, setCapacityInput] = useState(null);
+  const [savingCapacity, setSavingCapacity] = useState(false);
 
   const now = useNow(1000);
 
@@ -280,6 +389,56 @@ export default function BracketsPage() {
     loadCategoryMatches();
   }, [loadCategoryMatches]);
 
+  const loadChanges = useCallback(async () => {
+    if (!activeCategory) return;
+    try {
+      setChanges(await listBracketChanges(activeCategory.id));
+    } catch {
+      // History is informational — a failed load just leaves it empty.
+      setChanges([]);
+    }
+  }, [activeCategory]);
+
+  useEffect(() => {
+    if (!activeCategory) return undefined;
+    let cancelled = false;
+    listBracketChanges(activeCategory.id)
+      .then((rows) => !cancelled && setChanges(rows))
+      .catch(() => !cancelled && setChanges([]));
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCategory]);
+
+  // Custom games per team (single Round Robin only): the category default,
+  // kept here once changed like capacity, and each bracket's effective
+  // target (its own value, else the category's; null = full).
+  const isSingleRoundRobin = /round robin/i.test(activeCategory?.format || '') && !/double round robin/i.test(activeCategory?.format || '');
+  const categoryGames = activeCategory ? (activeCategory.id in gamesByCat ? gamesByCat[activeCategory.id] : (activeCategory.games_per_team ?? null)) : null;
+  const bracketGames = useCallback((b) => (isSingleRoundRobin ? (b.games_per_team ?? categoryGames) : null), [isSingleRoundRobin, categoryGames]);
+
+  // Per player/pair counts across this category's actual matchlist.
+  const teamCounts = useMemo(() => matchCounts(categoryMatches).byTeam, [categoryMatches]);
+  const isDoubleRR = /double round robin/i.test(activeCategory?.format || '');
+
+  const capacity = activeCategory ? (activeCategory.id in capacityByCat ? capacityByCat[activeCategory.id] : (activeCategory.max_teams_per_bracket ?? null)) : null;
+
+  // Pool brackets with their loaded teams, for the summary card, the Move
+  // dialog and Balance Brackets. null until every bracket's teams loaded.
+  const poolsWithTeams = useMemo(() => {
+    if (brackets.length === 0 || !brackets.every((b) => bracketData[b.id]?.teams)) return null;
+    return brackets.map((b) => ({ ...b, teams: bracketData[b.id].teams }));
+  }, [brackets, bracketData]);
+
+  const balance = useMemo(() => {
+    if (!poolsWithTeams) return null;
+    const counts = poolsWithTeams.map((b) => b.teams.length);
+    const total = counts.reduce((sum, n) => sum + n, 0);
+    const balanced = Math.max(...counts) - Math.min(...counts) <= 1;
+    const overCapacity = capacity != null && counts.some((n) => n > capacity);
+    return { total, balanced, overCapacity, ready: balanced && !overCapacity };
+  }, [poolsWithTeams, capacity]);
+
   // null = nothing to show yet (brackets/teams still loading, or no
   // matchlist has ever been generated for this category — see the spec's
   // "no regeneration warning is necessary" case). Once a matchlist exists,
@@ -297,23 +456,42 @@ export default function BracketsPage() {
 
     const isDouble = /double round robin/i.test(activeCategory?.format || '');
     let missingCount = 0;
+    let staleCount = 0;
     brackets.forEach((b) => {
       const teamIds = (bracketData[b.id]?.teams || []).map((t) => t.id);
+      const inBracket = new Set(teamIds);
       const bracketMatches = poolMatches.filter((m) => m.bracket_id === b.id);
-      missingCount += computeMissingPairs(teamIds, bracketMatches, isDouble).length;
+      const games = isDouble ? null : effectiveGames(teamIds.length, bracketGames(b));
+      if (games != null) {
+        // A custom games-per-team bracket: the same plan Regenerate runs.
+        const { add, remove } = planCustomAdjust(teamIds, bracketMatches, games);
+        missingCount += add.length + remove.length;
+      } else {
+        missingCount += computeMissingPairs(teamIds, bracketMatches, isDouble).length;
+      }
+      // A scheduled, unplayed match whose team moved to another bracket —
+      // regenerating removes it (played matches are kept as history).
+      staleCount += bracketMatches.filter(
+        (m) =>
+          m.status === 'scheduled' &&
+          m.score_a == null &&
+          m.score_b == null &&
+          m.court == null &&
+          (!inBracket.has(m.team_a_id) || !inBracket.has(m.team_b_id))
+      ).length;
     });
     const hasResults = poolMatches.some((m) => m.status !== 'scheduled' || m.score_a != null || m.score_b != null || m.court != null);
-    return { needsUpdate: missingCount > 0, hasResults };
-  }, [brackets, bracketData, categoryMatches, activeCategory]);
+    return { needsUpdate: missingCount > 0 || staleCount > 0, hasResults };
+  }, [brackets, bracketData, categoryMatches, activeCategory, bracketGames]);
 
   const handleRegenerateMatchlist = async () => {
     if (blockIfLocked()) return;
     const strongWarning =
-      'This category already has matches with recorded scores. Regenerating the matchlist may affect existing match results. Please confirm before continuing.';
-    const standardWarning = 'Existing matchups, scores, and match progress for this category may be affected.';
+      'This category already has matches with recorded scores. Those matches and their scores are kept exactly as they are, but the tournament structure around them may change. Please confirm before continuing.';
+    const standardWarning = 'No match in this category has been played yet.';
     const ok = await confirm({
-      title: 'Regenerate Matchlist?',
-      message: `A matchlist has already been generated for this category. Regenerating it will rebuild the matches using the updated bracket assignments, including the newly added player/team. ${
+      title: `Regenerate ${activeCategory?.name} matchlist?`,
+      message: `This rebuilds only this category's matchlist from the current bracket assignments: unplayed matches that no longer fit a bracket are removed, and missing matchups are added. Other categories aren't touched. ${
         matchlistStatus?.hasResults ? strongWarning : standardWarning
       }`,
       confirmLabel: 'Regenerate Matchlist',
@@ -321,8 +499,11 @@ export default function BracketsPage() {
     if (!ok) return;
     setRegenerating(true);
     try {
-      await regenerateMatchListForCategory(activeCategory.id);
-      pushToast('Matchlist regenerated', 'success');
+      const result = await regenerateMatchListForCategory(activeCategory.id);
+      pushToast(
+        `Matchlist regenerated — ${result.added} ${result.added === 1 ? 'match' : 'matches'} added${result.removed ? `, ${result.removed} outdated removed` : ''}`,
+        'success'
+      );
       await Promise.all([loadAllBracketDetails(), loadBracketProgress(), loadCategoryMatches()]);
     } catch (e) {
       pushToast(e.message, 'error');
@@ -362,14 +543,20 @@ export default function BracketsPage() {
 
   const handleGenerate = async (grouping) => {
     if (blockIfLocked()) return;
+    const again = brackets.length > 0;
     try {
-      if (brackets.length > 0) {
+      if (again) {
         await deleteBracketsForCategory(activeCategory.id);
       }
       await generateBrackets(activeCategory.id, grouping);
-      pushToast('Brackets drawn', 'success');
+      // Pre-fills the max per bracket with the even size and logs the draw.
+      const cap = await recordBracketRandomization(activeCategory.id, again);
+      setCapacityByCat((prev) => ({ ...prev, [activeCategory.id]: cap }));
+      setCapacityInput(null);
+      pushToast('Brackets randomized successfully', 'success');
       setRandomizerOpen(false);
-      await Promise.all([loadBrackets(), loadLiveMatches(), loadBracketProgress()]);
+      setRandomizedNotice(true);
+      await Promise.all([loadBrackets(), loadLiveMatches(), loadBracketProgress(), loadCategoryMatches(), loadChanges()]);
     } catch (e) {
       pushToast(e.message, 'error');
     }
@@ -410,7 +597,7 @@ export default function BracketsPage() {
         await deleteMatch(match.id);
       }
       pushToast('Match canceled', 'success');
-      await loadLiveMatches();
+      await Promise.all([loadLiveMatches(), loadBracketProgress(), loadCategoryMatches()]);
     } catch (e) {
       pushToast(e.message, 'error');
     }
@@ -426,15 +613,83 @@ export default function BracketsPage() {
       duration_minutes: Math.max(1, Math.round(elapsedSeconds / 60)),
     });
     pushToast('Match recorded', 'success');
-    await Promise.all([loadAllBracketDetails(), loadLiveMatches(), loadBracketProgress()]);
+    await Promise.all([loadAllBracketDetails(), loadLiveMatches(), loadBracketProgress(), loadCategoryMatches()]);
+  };
+
+  const canMove = canRedraw && !isLocked;
+  const matchlistInfo = { exists: Boolean(matchlistStatus), hasResults: Boolean(matchlistStatus?.hasResults) };
+
+  // After any move: counts, standings, progress, matchlist status and the
+  // history all reflect it immediately. The matchlist itself is never
+  // regenerated here — that stays an explicit organizer action.
+  const refreshAfterMove = async () => {
+    setMoving(null);
+    setBalanceOpen(false);
+    await Promise.all([loadAllBracketDetails(), loadBracketProgress(), loadCategoryMatches(), loadChanges()]);
+  };
+
+  const openMove = (team, fromBracket, initialToId = null) => {
+    if (blockIfLocked()) return;
+    setMoving({ team, fromBracket, initialToId });
+  };
+
+  const handleDropTeam = (toBracket) => {
+    const drag = dragging;
+    setDragging(null);
+    if (!drag) return;
+    const fromBracket = brackets.find((b) => b.id === drag.fromBracketId);
+    if (fromBracket) openMove(drag.team, fromBracket, toBracket.id);
+  };
+
+  const handleSaveGames = async (bracketId, games) => {
+    if (blockIfLocked()) return;
+    try {
+      await setGamesPerTeam(activeCategory.id, bracketId, games);
+      if (bracketId == null) {
+        setGamesByCat((prev) => ({ ...prev, [activeCategory.id]: games }));
+        setBrackets((prev) => prev.map((b) => ({ ...b, games_per_team: null })));
+      } else {
+        setBrackets((prev) => prev.map((b) => (b.id === bracketId ? { ...b, games_per_team: games } : b)));
+      }
+      pushToast('Games per team updated', 'success');
+      await Promise.all([loadBracketProgress(), loadChanges()]);
+    } catch (e) {
+      pushToast(e.message, 'error');
+    }
+  };
+
+  const handleSaveCapacity = async () => {
+    if (blockIfLocked()) return;
+    const raw = String(capacityInput ?? '').trim();
+    const next = raw === '' ? null : Number(raw);
+    if (next != null && (!Number.isInteger(next) || next < 1)) {
+      pushToast('Max teams per bracket must be a whole number of at least 1 (or empty for no limit)', 'error');
+      return;
+    }
+    setSavingCapacity(true);
+    try {
+      await setBracketCapacity(activeCategory.id, next);
+      setCapacityByCat((prev) => ({ ...prev, [activeCategory.id]: next }));
+      setCapacityInput(null);
+      pushToast(next == null ? 'Bracket size limit removed' : `Max ${next} teams per bracket`, 'success');
+      loadChanges();
+    } catch (e) {
+      pushToast(e.message, 'error');
+    } finally {
+      setSavingCapacity(false);
+    }
   };
 
   const handleRedrawClick = async () => {
     if (blockIfLocked()) return;
     const ok = await confirm({
-      title: `Redraw ${activeCategory?.name}?`,
-      message: 'This category has already been drawn. Redrawing will erase the current brackets, teams and any recorded match results — including any Quarterfinals/Semifinals/Championship matches already generated — then draw fresh brackets.',
-      confirmLabel: 'Redraw',
+      title: `Randomize ${activeCategory?.name} again?`,
+      message: `Randomizing again will replace the current bracket assignments, including any manual moves.${
+        matchlistStatus
+          ? ' It also erases this category\'s matchlist and every recorded match result — including any Quarterfinals/Semifinals/Championship matches already generated.'
+          : ''
+      }`,
+      confirmLabel: 'Randomize Again',
     });
     if (!ok) return;
     setRandomizerOpen(true);
@@ -469,7 +724,11 @@ export default function BracketsPage() {
             {categories.map((cat, i) => (
               <button
                 key={cat.id}
-                onClick={() => setActiveCatIdx(i)}
+                onClick={() => {
+                  setActiveCatIdx(i);
+                  setRandomizedNotice(false);
+                  setCapacityInput(null);
+                }}
                 className={`shrink-0 rounded-full px-4 py-2 text-sm font-semibold transition ${
                   i === activeCatIdx ? 'bg-ink-900 text-white shadow-sm' : 'bg-white text-ink-600 ring-1 ring-ink-200 hover:bg-ink-50'
                 }`}
@@ -514,58 +773,227 @@ export default function BracketsPage() {
             </div>
           ) : (
             <>
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <h2 className="text-sm font-bold text-ink-800">Pools</h2>
-                <div className="flex flex-wrap items-center gap-2">
-                  {matchlistStatus?.needsUpdate ? (
-                    <>
+              {randomizedNotice && (
+                <div className="flex items-start justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
+                  <div className="flex items-start gap-2 text-sm text-emerald-800">
+                    <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
+                    <div>
+                      <p className="font-bold">Brackets randomized successfully.</p>
+                      <p className="text-xs">Review and manually adjust bracket assignments before generating the matchlist.</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setRandomizedNotice(false)} aria-label="Dismiss" className="shrink-0 rounded-full p-1 text-emerald-700 hover:bg-emerald-100">
+                    <X size={14} />
+                  </button>
+                </div>
+              )}
+
+              <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <h2 className="font-display text-base font-bold text-ink-900">{activeCategory?.name}</h2>
+                    <p className="text-xs text-ink-500">
+                      {balance ? `${balance.total} ${balance.total === 1 ? 'team' : 'teams'} · ` : ''}
+                      {brackets.length} {brackets.length === 1 ? 'bracket' : 'brackets'}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      onClick={() => setPreviewOpen(true)}
+                      className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-100 active:scale-[0.97]"
+                    >
+                      <ListChecks size={12} /> Matchlist Preview
+                    </button>
+                    {balance &&
+                      (balance.ready ? (
+                        <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200">
+                          <CheckCircle2 size={12} /> Brackets Ready
+                        </span>
+                      ) : (
+                        <span className="flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700 ring-1 ring-amber-200">
+                          <AlertTriangle size={12} /> Brackets Need Review
+                        </span>
+                      ))}
+                    {matchlistStatus?.needsUpdate ? (
                       <span className="flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700 ring-1 ring-amber-200">
-                        <AlertTriangle size={12} /> Matchlist needs update
+                        <AlertTriangle size={12} /> Matchlist Needs Regeneration
                       </span>
-                      {canRedraw && (
+                    ) : (
+                      matchlistStatus && (
+                        <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200">
+                          <CheckCircle2 size={12} /> Matchlist up to date
+                        </span>
+                      )
+                    )}
+                  </div>
+                </div>
+
+                {poolsWithTeams && (
+                  <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {poolsWithTeams.map((b) => {
+                      const n = b.teams.length;
+                      const full = capacity != null && n >= capacity;
+                      const over = capacity != null && n > capacity;
+                      return (
+                        <div key={b.id} className={`rounded-xl px-3 py-2 ring-1 ${over ? 'bg-rose-50 ring-rose-200' : 'bg-ink-50/60 ring-ink-100'}`}>
+                          <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Bracket {b.letter}</div>
+                          <div className="flex items-baseline gap-1.5">
+                            <span className={`font-display text-lg font-bold tabular-nums ${over ? 'text-rose-600' : 'text-ink-900'}`}>
+                              {capacity != null ? `${n} / ${capacity}` : n}
+                            </span>
+                            <span className="text-xs text-ink-500">teams</span>
+                            {over ? (
+                              <span className="ml-auto rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-600">OVER</span>
+                            ) : (
+                              full && <span className="ml-auto rounded-full bg-ink-200 px-2 py-0.5 text-[10px] font-bold text-ink-600">FULL</span>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {balance && (
+                  <p className={`mt-3 flex items-center gap-1.5 text-xs font-semibold ${balance.balanced ? 'text-emerald-700' : 'text-amber-700'}`}>
+                    {balance.balanced ? <CheckCircle2 size={13} /> : <AlertTriangle size={13} />}
+                    {balance.balanced ? 'Balanced' : 'Uneven bracket distribution'}
+                    {balance.overCapacity && <span className="text-rose-600"> · a bracket is over the max size</span>}
+                  </p>
+                )}
+
+                {matchlistStatus?.needsUpdate && (
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl bg-amber-50 px-3.5 py-2.5">
+                    <p className="text-xs text-amber-800">Bracket assignments were changed after the matchlist was generated.</p>
+                    {canRedraw && (
+                      <button
+                        onClick={handleRegenerateMatchlist}
+                        disabled={regenerating}
+                        className="flex items-center gap-1.5 rounded-full bg-amber-600 px-3.5 py-1.5 text-xs font-bold text-white transition hover:bg-amber-700 disabled:opacity-50"
+                      >
+                        <RefreshCw size={12} className={regenerating ? 'animate-spin' : ''} /> {regenerating ? 'Regenerating…' : 'Regenerate Matchlist'}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                {isSingleRoundRobin && poolsWithTeams && (
+                  <GamesPerTeamPanel
+                    key={activeCategory.id}
+                    pools={poolsWithTeams}
+                    categoryGames={categoryGames}
+                    canEdit={canMove}
+                    matchlistExists={Boolean(matchlistStatus)}
+                    onSave={handleSaveGames}
+                  />
+                )}
+
+                {canMove && (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-ink-100 pt-4">
+                    <form
+                      onSubmit={(e) => {
+                        e.preventDefault();
+                        handleSaveCapacity();
+                      }}
+                      className="flex items-center gap-2"
+                    >
+                      <label htmlFor="max-per-bracket" className="text-xs font-semibold text-ink-600">
+                        Max teams per bracket
+                      </label>
+                      <input
+                        id="max-per-bracket"
+                        type="number"
+                        min={1}
+                        placeholder="No limit"
+                        value={capacityInput ?? capacity ?? ''}
+                        onChange={(e) => setCapacityInput(e.target.value)}
+                        className="w-20 rounded-lg border border-ink-200 px-2.5 py-1.5 text-sm tabular-nums focus:border-brand-500 focus:outline-none"
+                      />
+                      {capacityInput != null && String(capacityInput) !== String(capacity ?? '') && (
                         <button
-                          onClick={handleRegenerateMatchlist}
-                          disabled={regenerating}
-                          className="flex items-center gap-1.5 rounded-full bg-amber-600 px-3.5 py-1.5 text-xs font-bold text-white transition hover:bg-amber-700 disabled:opacity-50"
+                          type="submit"
+                          disabled={savingCapacity}
+                          className="rounded-full bg-ink-900 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-ink-800 disabled:opacity-50"
                         >
-                          <RefreshCw size={12} className={regenerating ? 'animate-spin' : ''} /> {regenerating ? 'Regenerating…' : 'Regenerate Matchlist'}
+                          {savingCapacity ? 'Saving…' : 'Save'}
                         </button>
                       )}
-                    </>
-                  ) : (
-                    matchlistStatus && (
-                      <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200">
-                        <CheckCircle2 size={12} /> Matchlist up to date
-                      </span>
-                    )
-                  )}
-                  {canRedraw && (
-                    <button
-                      onClick={handleRedrawClick}
-                      className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-100"
-                    >
-                      <Shuffle size={12} /> Redraw
-                    </button>
-                  )}
-                </div>
+                    </form>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        onClick={() => (blockIfLocked() ? null : setBalanceOpen(true))}
+                        disabled={!poolsWithTeams}
+                        className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-100 disabled:opacity-50"
+                      >
+                        <Scale size={12} /> Balance Brackets
+                      </button>
+                      <button
+                        onClick={handleRedrawClick}
+                        className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-100"
+                      >
+                        <Shuffle size={12} /> Randomize Again
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {bracketProgress.length > 0 && (
                 <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 text-sm font-bold text-ink-800">
-                      <Timer size={14} className="text-ink-400" /> Category progress
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div>
+                      <div className="flex items-center gap-2 text-sm font-bold text-ink-800">
+                        <Timer size={14} className="text-ink-400" /> Category progress
+                      </div>
+                      <p className="mt-0.5 text-xs text-ink-500">
+                        {activeCategory?.name}
+                        {balance ? ` · ${balance.total} ${balance.total === 1 ? 'team' : 'teams'}` : ''} · {categoryProgress.totalMatches} total{' '}
+                        {categoryProgress.totalMatches === 1 ? 'match' : 'matches'}
+                        {bracketProgress.some((b) => b.expected) && ' (expected)'}
+                      </p>
                     </div>
-                    <div className="text-xs font-semibold text-ink-600">
-                      {categoryProgress.completed}/{categoryProgress.totalMatches} matches played · {categoryProgress.remaining} remaining
-                      {categoryProgress.remaining > 0 &&
-                        ` · ~${formatDuration(categoryProgress.estimatedMinutes)} left across ${numCourts} ${numCourts === 1 ? 'court' : 'courts'}`}
+                    <div className="flex items-baseline gap-4 text-right">
+                      <div>
+                        <div className="font-display text-lg font-bold tabular-nums text-ink-900">
+                          {categoryProgress.completed}/{categoryProgress.totalMatches}
+                        </div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Completed</div>
+                      </div>
+                      <div>
+                        <div className={`font-display text-lg font-bold tabular-nums ${categoryProgress.remaining === 0 ? 'text-emerald-600' : 'text-ink-900'}`}>
+                          {categoryProgress.remaining}
+                        </div>
+                        <div className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">Remaining</div>
+                      </div>
                     </div>
                   </div>
+                  <div
+                    className="mt-3 h-2 overflow-hidden rounded-full bg-ink-100"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={categoryProgress.totalMatches}
+                    aria-valuenow={categoryProgress.completed}
+                    aria-label={`${categoryProgress.completed} of ${categoryProgress.totalMatches} matches completed`}
+                  >
+                    <div
+                      className="h-full rounded-full bg-brand-600 transition-[width] duration-500"
+                      style={{ width: `${categoryProgress.totalMatches ? (100 * categoryProgress.completed) / categoryProgress.totalMatches : 0}%` }}
+                    />
+                  </div>
+                  <p className="mt-1.5 text-xs text-ink-500">
+                    {categoryProgress.completed}/{categoryProgress.totalMatches} matches completed
+                    {categoryProgress.remaining > 0 &&
+                      ` · ~${formatDuration(categoryProgress.estimatedMinutes)} left across ${numCourts} ${numCourts === 1 ? 'court' : 'courts'}`}
+                  </p>
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {bracketProgress.map((b) => (
-                      <span key={b.bracket_id} className="rounded-full bg-ink-50 px-2.5 py-1 text-[11px] font-semibold text-ink-600 ring-1 ring-ink-200">
-                        Bracket {b.letter}: {b.completedCount}/{b.totalMatches} · {b.remaining} left
+                      <span
+                        key={b.bracket_id}
+                        title={progressLabel({ total: b.totalMatches, completed: b.completedCount, remaining: b.remaining }).detail}
+                        className="rounded-full bg-ink-50 px-2.5 py-1 text-[11px] font-semibold text-ink-600 ring-1 ring-ink-200"
+                      >
+                        Bracket {b.letter}: {b.completedCount}/{b.totalMatches}
+                        {b.remaining === 0 && b.totalMatches > 0 ? ' · Complete' : ` · ${b.remaining} left`}
                       </span>
                     ))}
                   </div>
@@ -582,9 +1010,49 @@ export default function BracketsPage() {
                     onToggle={() => toggleBracket(b.id)}
                     teams={bracketData[b.id]?.teams}
                     matches={bracketData[b.id]?.matches || []}
+                    teamCounts={teamCounts}
+                    isDouble={isDoubleRR}
+                    games={bracketGames(b)}
+                    canMove={canMove && Boolean(poolsWithTeams) && brackets.length > 1}
+                    onMove={openMove}
+                    dragging={dragging}
+                    onDragTeam={setDragging}
+                    onDropTeam={handleDropTeam}
                   />
                 ))}
               </div>
+
+              {changes.length > 0 && (
+                <details className="rounded-2xl border border-ink-100 bg-white px-5 py-3.5 shadow-sm">
+                  <summary className="flex cursor-pointer items-center gap-2 text-sm font-bold text-ink-800">
+                    <History size={14} className="text-ink-400" /> Bracket changes
+                    <span className="text-xs font-semibold text-ink-400">({changes.length} most recent)</span>
+                  </summary>
+                  <ul className="mt-3 flex flex-col divide-y divide-ink-50">
+                    {changes.map((c) => (
+                      <li key={c.id} className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5 py-2 text-xs">
+                        <span className="text-ink-800">
+                          {c.action === 'moved' || c.action === 'balanced' ? (
+                            <>
+                              <strong className="font-semibold">{c.team_label}</strong> moved from Bracket {c.from_bracket} to Bracket {c.to_bracket}
+                              {c.action === 'balanced' && <span className="text-ink-400"> (Balance Brackets)</span>}
+                            </>
+                          ) : c.action === 'randomized' ? (
+                            `Bracket randomization performed — ${c.details}`
+                          ) : c.action === 'randomized_again' ? (
+                            `Bracket assignments randomized again — ${c.details}`
+                          ) : (
+                            c.details
+                          )}
+                        </span>
+                        <span className="text-ink-400">
+                          {c.actor_email ?? 'Unknown user'} · {new Date(c.created_at).toLocaleString()}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
             </>
           )}
         </div>
@@ -598,6 +1066,34 @@ export default function BracketsPage() {
           allowSameClub={!!event.randomizer_allow_same_club}
           onConfirm={handleGenerate}
           onClose={() => setRandomizerOpen(false)}
+        />
+      )}
+
+      {moving && poolsWithTeams && (
+        <MoveTeamModal
+          categoryId={activeCategory.id}
+          team={moving.team}
+          fromBracket={moving.fromBracket}
+          brackets={poolsWithTeams}
+          capacity={capacity}
+          checkSameClub={!event.randomizer_allow_same_club}
+          matchlist={matchlistInfo}
+          initialToId={moving.initialToId}
+          onMoved={refreshAfterMove}
+          onClose={() => setMoving(null)}
+        />
+      )}
+
+      {previewOpen && activeCategory && <MatchlistPreviewModal category={activeCategory} onClose={() => setPreviewOpen(false)} />}
+
+      {balanceOpen && poolsWithTeams && (
+        <BalanceBracketsModal
+          categoryId={activeCategory.id}
+          brackets={poolsWithTeams}
+          capacity={capacity}
+          matchlist={matchlistInfo}
+          onApplied={refreshAfterMove}
+          onClose={() => setBalanceOpen(false)}
         />
       )}
 
