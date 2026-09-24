@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { UserPlus } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Sparkles, UserPlus } from 'lucide-react';
 import Logo from '../../components/ui/Logo';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -8,11 +8,21 @@ import AuthSplitLayout from '../../components/auth/AuthSplitLayout';
 import RoleToggle from '../../components/auth/RoleToggle';
 import SocialLoginButtons, { SOCIAL_LOGIN_ENABLED } from '../../components/auth/SocialLoginButtons';
 import { isDuplicateEmailError, isDuplicateSignupResponse } from '../../utils/authErrors';
+import { PAID_PLAN_ORDER, PLAN_LIMITS } from '../../data/plans';
+import { rememberPlan } from '../../utils/pendingPlan';
 
 export default function SignupPage() {
   const { signUp } = useAuth();
   const { pushToast } = useToast();
   const navigate = useNavigate();
+  // A plan picked on the website (?plan=starter): remembered through email
+  // confirmation and login, then pre-selected in the dashboard's pricing
+  // pop-up — see utils/pendingPlan.
+  const [searchParams] = useSearchParams();
+  const chosenPlan = PAID_PLAN_ORDER.includes(searchParams.get('plan')) ? searchParams.get('plan') : null;
+  useEffect(() => {
+    if (chosenPlan) rememberPlan(chosenPlan);
+  }, [chosenPlan]);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -72,6 +82,15 @@ export default function SignupPage() {
       </div>
 
       <RoleToggle value="organizer" mode="signup" />
+
+      {chosenPlan && (
+        <p className="mb-4 flex items-start gap-2 rounded-xl bg-brand-50 px-3.5 py-2.5 text-xs text-brand-800">
+          <Sparkles size={14} className="mt-0.5 shrink-0" />
+          <span>
+            You picked <strong>{PLAN_LIMITS[chosenPlan].label}</strong>. Create your account first — right after you log in you'll choose how to pay.
+          </span>
+        </p>
+      )}
 
       <form onSubmit={handleSubmit} className="flex flex-col gap-4">
         <div>

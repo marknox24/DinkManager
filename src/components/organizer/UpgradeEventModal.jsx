@@ -6,9 +6,9 @@ import { getAppSettings, getEventMediaUrl, submitEventPlanUpgrade, uploadSubscri
 import { PAID_PLAN_ORDER, PLAN_LIMITS } from '../../data/plans';
 import { useToast } from '../../context/ToastContext';
 
-// Same manual/QR payment flow as the anonymous SubscribePage.jsx, scoped to
-// ONE event: the organizer is already authenticated and owns `event`, so
-// unlike that page there's no email field and no account-creation path —
+// Same manual/QR payment flow as the pricing pop-up (PricingPromptModal),
+// scoped to ONE existing event: the organizer owns `event`, so there's no
+// new event to create —
 // approving this (see approve-subscription-request) writes the purchased
 // plan onto this event alone, never onto the organizer's account or any
 // other event they own. No optimistic local plan change on submit; the

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { Award, Gavel, LayoutGrid, ListOrdered, Lock, LogOut, Menu, MonitorPlay, QrCode, Settings, Shuffle, Trophy, UserCog, Users, Wallet, X } from 'lucide-react';
+import { Award, Gavel, LayoutGrid, ListOrdered, Lock, LogOut, Menu, MonitorPlay, PencilLine, QrCode, Settings, Shuffle, UserCog, Users, Wallet, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useEventAccess } from '../../context/EventAccessContext';
@@ -75,11 +75,17 @@ export default function EventWorkspaceLayout({ event, children }) {
         </button>
       </div>
 
-      <div className="mb-5 rounded-xl bg-white/5 px-3 py-2.5">
-        <div className="truncate text-xs font-semibold text-white">{eventName || 'Loading…'}</div>
+      <div className="mb-5 rounded-xl bg-white/5 p-2.5">
+        <div className="truncate px-0.5 text-xs font-semibold text-white">{eventName || 'Loading…'}</div>
+        {/* The way into the event's details (name, dates, venue, categories,
+            description…) — a full-size button so it's never missed. */}
         {can('edit_event') && (
-          <Link to={`/events/${eventId}/edit`} className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-semibold text-brand-400 hover:text-brand-300">
-            <Trophy size={10} /> Edit event details
+          <Link
+            to={`/events/${eventId}/edit`}
+            onClick={() => setMobileOpen(false)}
+            className="mt-2 flex w-full items-center justify-center gap-2 rounded-xl bg-white px-3 py-2.5 text-sm font-bold text-ink-900 shadow-sm transition hover:bg-brand-50 active:scale-[0.98]"
+          >
+            <PencilLine size={16} strokeWidth={2.3} className="text-brand-600" /> Edit Event Details
           </Link>
         )}
       </div>

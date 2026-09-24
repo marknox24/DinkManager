@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { Eye, EyeOff, LogIn, ShieldCheck } from 'lucide-react';
 import Logo from '../../components/ui/Logo';
 import { useAuth } from '../../context/AuthContext';
@@ -8,6 +8,7 @@ import { supabase } from '../../lib/supabaseClient';
 import AuthSplitLayout from '../../components/auth/AuthSplitLayout';
 import RoleToggle from '../../components/auth/RoleToggle';
 import SocialLoginButtons, { SOCIAL_LOGIN_ENABLED } from '../../components/auth/SocialLoginButtons';
+import { rememberPlan } from '../../utils/pendingPlan';
 
 const REMEMBER_KEY = 'dinkmanager_remembered_organizer_email';
 
@@ -29,6 +30,13 @@ export default function LoginPage() {
     const saved = localStorage.getItem(REMEMBER_KEY);
     if (saved) setEmail(saved);
   }, []);
+
+  // A returning user who picked a plan on the website (?plan=pro) gets it
+  // pre-selected in the dashboard's pricing pop-up after logging in.
+  const [searchParams] = useSearchParams();
+  useEffect(() => {
+    rememberPlan(searchParams.get('plan'));
+  }, [searchParams]);
 
   const finishLogin = async () => {
     if (rememberMe) {

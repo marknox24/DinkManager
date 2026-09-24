@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Check, Sparkles, X } from 'lucide-react';
 import { PLAN_LIMITS } from '../../data/plans';
+import { useAuth } from '../../context/AuthContext';
+import { planEntryPath } from '../../utils/pendingPlan';
 
 // A preview of the in-app upgrade prompt an organizer sees after hitting a
 // Free Trial limit — shown here on the marketing page so visitors can see
@@ -9,6 +11,7 @@ import { PLAN_LIMITS } from '../../data/plans';
 // help, not a hard stop: the "continue on Free Trial" path is right there,
 // equally sized, no dark-pattern emphasis on the paid option.
 export default function UpgradeModal({ open, onClose }) {
+  const { user, loading } = useAuth();
   useEffect(() => {
     if (!open) return;
     const onKey = (e) => e.key === 'Escape' && onClose();
@@ -58,7 +61,7 @@ export default function UpgradeModal({ open, onClose }) {
 
         <div className="mt-5 flex flex-col gap-2.5">
           <Link
-            to="/subscribe/starter"
+            to={planEntryPath('starter', !loading && Boolean(user))}
             className="press-scale rounded-full bg-brand-600 py-3 text-center text-sm font-bold text-white transition hover:bg-brand-700"
           >
             Upgrade to Starter

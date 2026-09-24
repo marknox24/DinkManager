@@ -1,16 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CalendarDays, Files, HandHelping, Image as ImageIcon, MapPin, Plus, Settings2, Sparkles, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { createEvent, duplicateEvent, getEventMediaUrl, getOnboardingProgress, listMyEvents, listStaffedEvents } from '../../data/eventsApi';
-import { PLAN_LIMITS } from '../../data/plans';
+import { createEvent, duplicateEvent, getEventMediaUrl, getOnboardingProgress, listMyEvents, listMyPendingPlanRequests, listStaffedEvents } from '../../data/eventsApi';
+import { PAID_PLAN_ORDER, PLAN_LIMITS } from '../../data/plans';
+import { clearPendingPlan, pendingPlan } from '../../utils/pendingPlan';
 import { EVENT_PERMISSIONS } from '../../data/permissions';
 import { formatDateRange } from '../../utils/format';
 import OrganizerLayout from '../../components/organizer/OrganizerLayout';
 import StatusBadge from '../../components/organizer/StatusBadge';
 import GettingStartedChecklist from '../../components/organizer/GettingStartedChecklist';
 import WelcomeOnboardingModal from '../../components/organizer/WelcomeOnboardingModal';
+import PricingPromptModal from '../../components/organizer/PricingPromptModal';
 import AccountTypeCard from '../../components/ui/AccountTypeCard';
 
 // Where a staffer's event card should link to — their first granted nav
@@ -21,7 +23,8 @@ function firstAllowedNavId(staff) {
 }
 
 export default function DashboardPage() {
-  const { user, profile, accountType } = useAuth();
+  const { user, profile, accountType, isAdmin } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { pushToast } = useToast();
   const navigate = useNavigate();
   const [events, setEvents] = useState(null);
@@ -30,6 +33,9 @@ export default function DashboardPage() {
   const [duplicatingId, setDuplicatingId] = useState(null);
   const [progress, setProgress] = useState(null);
   const [showWelcome, setShowWelcome] = useState(false);
+  // The pricing pop-up (null = closed, otherwise { plan } to pre-select).
+  const [pricing, setPricing] = useState(null);
+  const welcomeDeferred = useRef(false);
 
   const maxEvents = profile?.max_events ?? null;
   const atEventLimit = maxEvents != null && (events?.length ?? 0) >= maxEvents;
@@ -37,7 +43,7 @@ export default function DashboardPage() {
   // events_force_free_entitlements). The profile is loaded once at sign-in,
   // so an event this session just created counts too.
   const trialUsed = Boolean(profile?.free_trial_used_at) || Boolean(events?.some((e) => e.origin === 'trial'));
-  const autoTrialStarted = useRef(false);
+  const pricingShownKey = `dm_pricing_prompt_${user.id}`;
 
   useEffect(() => {
     // An invited/temp-login account (added as event_staff by another
@@ -51,30 +57,47 @@ export default function DashboardPage() {
     // checklist (gated on staff-only, since an organizer who owns an event
     // but hasn't finished setting it up should still see it regardless of
     // whether they also help staff someone else's event).
-    Promise.all([listMyEvents(user.id), listStaffedEvents(user.id)])
-      .then(([myEvents, staffed]) => {
+    Promise.all([listMyEvents(user.id), listStaffedEvents(user.id), listMyPendingPlanRequests(user.email).catch(() => [])])
+      .then(([myEvents, staffed, pendingRequests]) => {
         setEvents(myEvents);
         setStaffedEvents(staffed);
-        // A brand-new organizer (not a helper staffed on someone else's
-        // event) starts with their Free Trial event already created — no
-        // "create your first event" step. The ref keeps StrictMode's double
-        // effect from trying twice; the database would refuse the second
-        // anyway.
-        if (myEvents.length === 0 && staffed.length === 0 && !profile?.free_trial_used_at && !autoTrialStarted.current) {
-          autoTrialStarted.current = true;
-          createEvent(user.id, { name: 'Untitled Tournament', status: 'upcoming', is_published: false })
-            .then((event) => {
-              pushToast('Your Free Trial event is ready — set it up here', 'success');
-              navigate(`/events/${event.id}/edit`);
-            })
-            .catch((e) => pushToast(e.message, 'error'));
-          return;
-        }
         const isStaffOnly = myEvents.length === 0 && staffed.length > 0;
+
+        // The pricing pop-up. A plan picked on the website (?plan= or
+        // remembered through sign-up — see utils/pendingPlan) always opens it
+        // with that plan selected. Otherwise it opens once per login session
+        // while an organizer has no paid event and nothing pending review —
+        // never for the Admiral or for a helper staffed on someone else's
+        // event.
+        const urlPlan = searchParams.get('plan');
+        const chosenPlan = PAID_PLAN_ORDER.includes(urlPlan) ? urlPlan : pendingPlan();
+        if (urlPlan) {
+          setSearchParams(
+            (prev) => {
+              const next = new URLSearchParams(prev);
+              next.delete('plan');
+              return next;
+            },
+            { replace: true }
+          );
+        }
+        let shownThisSession = false;
+        try {
+          shownThisSession = sessionStorage.getItem(pricingShownKey) === '1';
+        } catch {
+          // No session storage — at worst the pop-up shows again next visit.
+        }
+        const showPricing =
+          Boolean(chosenPlan) ||
+          (!isAdmin && !isStaffOnly && !myEvents.some((e) => e.plan !== 'free') && pendingRequests.length === 0 && !shownThisSession);
+        if (showPricing) setPricing({ plan: chosenPlan });
+
         const seenKey = `dm_welcome_seen_${user.id}`;
         if (myEvents.length === 0 && staffed.length === 0 && !localStorage.getItem(seenKey)) {
-          setShowWelcome(true);
           localStorage.setItem(seenKey, '1');
+          // Never stacked on the pricing pop-up — shown once that's closed.
+          if (showPricing) welcomeDeferred.current = true;
+          else setShowWelcome(true);
         }
         if (!isStaffOnly) {
           getOnboardingProgress(user.id)
@@ -85,6 +108,24 @@ export default function DashboardPage() {
       .catch((e) => pushToast(e.message, 'error'));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.id, pushToast]);
+
+  const markPricingShown = () => {
+    clearPendingPlan();
+    try {
+      sessionStorage.setItem(pricingShownKey, '1');
+    } catch {
+      // Best-effort only.
+    }
+  };
+
+  const closePricing = () => {
+    markPricingShown();
+    setPricing(null);
+    if (welcomeDeferred.current) {
+      welcomeDeferred.current = false;
+      setShowWelcome(true);
+    }
+  };
 
   const handleCreate = async () => {
     setCreating(true);
@@ -125,13 +166,13 @@ export default function DashboardPage() {
           <p className="text-sm text-ink-500">Create and manage your pickleball events</p>
         </div>
         {trialUsed ? (
-          <Link
-            to="/#pricing"
+          <button
+            onClick={() => setPricing({ plan: null })}
             title="Your Free Trial event is used — each new event comes with its own plan"
             className="press-scale flex items-center gap-1.5 rounded-full bg-brand-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700"
           >
             <Sparkles size={16} /> Get a plan for a new event
-          </Link>
+          </button>
         ) : atEventLimit ? (
           <span
             title={`Your trial allows up to ${maxEvents} event${maxEvents === 1 ? '' : 's'}`}
@@ -160,14 +201,19 @@ export default function DashboardPage() {
         <div className="rounded-3xl border border-dashed border-ink-200 bg-white py-16 text-center">
           <p className="text-sm text-ink-500">No tournaments yet.</p>
           {trialUsed ? (
-            <Link to="/#pricing" className="mt-3 inline-block text-sm font-semibold text-brand-600">
+            <button onClick={() => setPricing({ plan: null })} className="mt-3 text-sm font-semibold text-brand-600">
               Get a plan to create an event →
-            </Link>
+            </button>
           ) : (
             !atEventLimit && (
-              <button onClick={handleCreate} className="mt-3 text-sm font-semibold text-brand-600">
-                Create your first event →
-              </button>
+              <div className="mt-3 flex flex-col items-center gap-1.5">
+                <button onClick={handleCreate} className="text-sm font-semibold text-brand-600">
+                  Start your Free Trial event →
+                </button>
+                <button onClick={() => setPricing({ plan: null })} className="text-xs font-semibold text-ink-500 hover:text-ink-700">
+                  or choose a paid plan
+                </button>
+              </div>
             )
           )}
         </div>
@@ -291,6 +337,21 @@ export default function DashboardPage() {
             ))}
           </div>
         </div>
+      )}
+
+      {pricing && (
+        <PricingPromptModal
+          email={user.email}
+          initialPlan={pricing.plan}
+          canStartTrial={!trialUsed && !atEventLimit}
+          onStartTrial={async () => {
+            markPricingShown();
+            setPricing(null);
+            await handleCreate();
+          }}
+          onSubmitted={markPricingShown}
+          onClose={closePricing}
+        />
       )}
 
       {showWelcome && (

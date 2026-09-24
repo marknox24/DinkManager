@@ -4,6 +4,8 @@ import { Check } from 'lucide-react';
 import Reveal from './Reveal';
 import UpgradeModal from './UpgradeModal';
 import { PLAN_LIMITS } from '../../data/plans';
+import { useAuth } from '../../context/AuthContext';
+import { planEntryPath } from '../../utils/pendingPlan';
 
 // Numeric caps come from the shared src/data/plans.js (the same numbers
 // EventEditorPage/RegistrationsPage/SettingsPage actually enforce per event)
@@ -84,6 +86,10 @@ const PLANS = [
 
 export default function Pricing() {
   const [upgradeOpen, setUpgradeOpen] = useState(false);
+  // Choosing a plan means signing up first (the plan is remembered), or —
+  // already signed in — the dashboard's pricing pop-up with it pre-selected.
+  const { user, loading } = useAuth();
+  const signedIn = !loading && Boolean(user);
 
   return (
     <section id="pricing" className="bg-ink-50/40 py-24">
@@ -124,7 +130,7 @@ export default function Pricing() {
                 </ul>
 
                 <Link
-                  to={plan.key === 'free' ? '/signup' : `/subscribe/${plan.key}`}
+                  to={planEntryPath(plan.key, signedIn)}
                   className={`press-scale mt-7 rounded-full py-3 text-center text-sm font-bold transition ${
                     plan.highlighted ? 'bg-brand-600 text-white hover:bg-brand-700' : 'border border-ink-200 text-ink-800 hover:border-ink-300'
                   }`}

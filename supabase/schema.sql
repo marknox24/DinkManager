@@ -1700,13 +1700,23 @@ alter table subscription_requests enable row level security;
 -- event_id is supplied, the caller must actually own that event — otherwise
 -- an authenticated organizer could submit a (harmless but confusing, and
 -- eventually approvable) upgrade request against someone else's event.
+--
+-- A plan purchase for a new event (event_id null) now needs a signed-in
+-- account, requesting under its own email — the landing page sends
+-- visitors to sign up first and they choose/pay from the in-app pricing
+-- pop-up (PricingPromptModal.jsx). This also stops anyone filing a request
+-- under someone else's email.
 drop policy if exists "subscription_requests_insert_public" on subscription_requests;
 create policy "subscription_requests_insert_public" on subscription_requests for insert
   with check (
     status = 'pending'
     and resolved_at is null
     and (
-      event_id is null
+      (
+        event_id is null
+        and auth.uid() is not null
+        and lower(email) = lower(coalesce(auth.jwt() ->> 'email', ''))
+      )
       or exists (select 1 from events e where e.id = subscription_requests.event_id and e.organizer_id = auth.uid())
     )
   );
@@ -1714,6 +1724,13 @@ create policy "subscription_requests_insert_public" on subscription_requests for
 drop policy if exists "subscription_requests_select_admin" on subscription_requests;
 create policy "subscription_requests_select_admin" on subscription_requests for select
   using (is_admin_user());
+
+-- An organizer can see the requests filed under their own email, so the
+-- dashboard knows a plan purchase is already pending review and stops
+-- showing the pricing pop-up.
+drop policy if exists "subscription_requests_select_own_email" on subscription_requests;
+create policy "subscription_requests_select_own_email" on subscription_requests for select
+  using (lower(email) = lower(coalesce(auth.jwt() ->> 'email', '')));
 
 -- Covers Reject and Reopen (plain client-side updates: pending -> rejected,
 -- rejected -> pending); Approve goes through the service-role edge function

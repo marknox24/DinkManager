@@ -641,14 +641,28 @@ export async function getSubscriptionProofUrl(path) {
   return data.signedUrl;
 }
 
-// No .select() here deliberately — an anonymous submitter has no SELECT
-// policy on subscription_requests (only subscription_requests_select_admin
-// exists), and Postgres rejects the whole INSERT when a RETURNING clause
-// can't satisfy that row's SELECT policy, not just the returned data. The
-// caller doesn't use the inserted row anyway (see SubscribePage.jsx).
+// A plan purchase for a new event, filed by the signed-in organizer under
+// their own email (the pricing pop-up, PricingPromptModal.jsx — RLS
+// requires a signed-in account and a matching email). No .select(): the
+// caller doesn't use the inserted row.
 export async function submitSubscriptionRequest({ email, plan, screenshotPath }) {
   const { error } = await supabase.from('subscription_requests').insert({ email, plan, screenshot_path: screenshotPath });
   if (error) throw error;
+}
+
+// The signed-in organizer's own plan requests still awaiting review — both
+// website purchases and event upgrades (subscription_requests_select_own_email
+// matches on their email). The dashboard stops showing the pricing pop-up
+// while one is pending. Filtered by email here too, since an admin's RLS
+// would otherwise return everyone's.
+export async function listMyPendingPlanRequests(email) {
+  const { data, error } = await supabase
+    .from('subscription_requests')
+    .select('id, plan, event_id, email, created_at')
+    .eq('status', 'pending')
+    .ilike('email', email);
+  if (error) throw error;
+  return data.filter((r) => r.email.toLowerCase() === email.toLowerCase());
 }
 
 // Event-scoped upgrade request — the organizer is already authenticated and
