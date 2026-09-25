@@ -11,6 +11,7 @@ import {
   listMatchesForCategory,
 } from '../../../data/bracketsApi';
 import { PLAYOFF_STAGES, generateStageMatches, getPlayoffStatus, matchLevelLabel, savePlan } from '../../../data/playoffApi';
+import { getCustomFormat } from '../../../data/customFormats';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
 import { useEventAccess } from '../../../context/EventAccessContext';
@@ -51,8 +52,10 @@ import { usableCourts } from '../../../utils/courts';
 import { formatDuration } from '../../../utils/format';
 import { liveElapsedSeconds, teamLabel } from '../../../utils/match';
 
+// Match-template formats ("RR:Custom Match 1") are generated through the same
+// pool-schedule path as Round Robin, just from a fixed template.
 function isRoundRobinFormat(format) {
-  return /round robin/i.test(format || '');
+  return /round robin/i.test(format || '') || getCustomFormat(format) !== null;
 }
 
 function isSingleElimFormat(format) {
@@ -610,10 +613,13 @@ export default function MatchListPage() {
               {formatSupported ? (
                 <>
                   <p className="text-sm font-semibold text-ink-700">
-                    Generate the {isRoundRobinFormat(activeCategory.format) ? 'full match list' : 'Round 1 pairings'} for {activeCategory.name}
+                    Generate the {getCustomFormat(activeCategory.format) ? `"${activeCategory.format}" match list` : isRoundRobinFormat(activeCategory.format) ? 'full match list' : 'Round 1 pairings'} for{' '}
+                    {activeCategory.name}
                   </p>
                   <p className="mt-1 text-xs text-ink-400">
-                    {isRoundRobinFormat(activeCategory.format)
+                    {getCustomFormat(activeCategory.format)
+                      ? 'Every bracket plays the same fixed sequence; Team 1, Team 2… are the teams in the order they appear in each bracket. Codes are per bracket (A1, A2, B1, B2, ...).'
+                      : isRoundRobinFormat(activeCategory.format)
                       ? 'Matches are coded per bracket (A1, B1, A2, ...) and alternate across brackets round by round.'
                       : 'Later rounds are played from the Brackets page once Round 1 results are in.'}
                   </p>

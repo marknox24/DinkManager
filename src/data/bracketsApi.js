@@ -1,5 +1,17 @@
 import { supabase } from '../lib/supabaseClient';
-import { computeMissingPairs, effectiveGames, expectedRoundRobin, matchCounts, planCustomAdjust, planRoundRobin, planSingleEliminationRound1 } from '../utils/scheduling';
+import {
+  computeMissingPairs,
+  effectiveGames,
+  expectedRoundRobin,
+  expectedTemplateMatches,
+  matchCounts,
+  missingTemplatePairs,
+  planCustomAdjust,
+  planRoundRobin,
+  planSingleEliminationRound1,
+  planTemplateMatches,
+} from '../utils/scheduling';
+import { getCustomFormat } from './customFormats';
 import { getDeviceId } from '../lib/deviceId';
 
 // ---------------------------------------------------------------------------
@@ -101,6 +113,7 @@ export async function getBracketProgressForCategory(categoryId) {
   if (brackets.length === 0) return [];
   const isDouble = /double round robin/i.test(category.format || '');
   const isRoundRobin = /round robin/i.test(category.format || '');
+  const template = getCustomFormat(category.format);
   const bracketIds = brackets.map((b) => b.id);
 
   const [{ data: teams, error: teamErr }, { data: matches, error: matchErr }] = await Promise.all([
@@ -116,7 +129,8 @@ export async function getBracketProgressForCategory(categoryId) {
     const actual = byBracket.get(b.id);
     const expected = !actual && b.kind !== 'playoff';
     const games = isRoundRobin ? (b.games_per_team ?? category.games_per_team) : null;
-    const totalMatches = actual ? actual.total : expected ? expectedRoundRobin(teamCount, isDouble, games).total : 0;
+    const expectedTotal = template ? expectedTemplateMatches(template, b.letter, teamCount) : expectedRoundRobin(teamCount, isDouble, games).total;
+    const totalMatches = actual ? actual.total : expected ? expectedTotal : 0;
     const completedCount = actual ? actual.completed : 0;
     return { bracket_id: b.id, letter: b.letter, kind: b.kind, teamCount, totalMatches, completedCount, remaining: totalMatches - completedCount, expected };
   });
@@ -130,9 +144,17 @@ export async function generateBrackets(categoryId, grouping) {
   if (bracketErr) throw bracketErr;
 
   const teamRows = [];
+  // One INSERT stamps every row with the same created_at, which would leave a
+  // bracket's team order (created_at, then id) to the random uuids. Spacing
+  // the stamps by a millisecond in draw order makes "Team 1, Team 2…" — what
+  // match-template formats like "RR:Custom Match 1" number teams by — the
+  // order the randomizer placed them.
+  const drawStart = Date.now();
+  let drawn = 0;
   brackets.forEach((bracket) => {
     (grouping[bracket.letter] || []).forEach((reg) => {
       teamRows.push({
+        created_at: new Date(drawStart + drawn++).toISOString(),
         bracket_id: bracket.id,
         registration_id: reg.id,
         player1_name: reg.player_name,
@@ -233,7 +255,7 @@ export async function listBracketChanges(categoryId, limit = 20) {
 // TEAMS
 // ---------------------------------------------------------------------------
 export async function listTeamsForBracket(bracketId) {
-  const { data, error } = await supabase.from('teams').select('*').eq('bracket_id', bracketId).order('created_at');
+  const { data, error } = await supabase.from('teams').select('*').eq('bracket_id', bracketId).order('created_at').order('id');
   if (error) throw error;
   return data;
 }
@@ -491,6 +513,18 @@ export async function planMatchListForCategory(categoryId) {
     .order('id');
   if (teamErr) throw teamErr;
 
+  // A match-template format ("RR:Custom Match 1"): every bracket plays the
+  // same fixed sequence, Team N = the team's position inside its bracket.
+  const template = getCustomFormat(format);
+  if (template) {
+    const teamsByBracket = {};
+    brackets.forEach((b) => {
+      teamsByBracket[b.id] = teams.filter((t) => t.bracket_id === b.id).map((t) => t.id);
+    });
+    const { rows, skippedByBracket } = planTemplateMatches(template, brackets, teamsByBracket);
+    return { kind: 'template', template, isDouble: false, brackets, teams, teamsByBracket, skippedByBracket, gamesByBracket: {}, rows, byes: [] };
+  }
+
   if (/round robin/i.test(format)) {
     const teamsByBracket = {};
     // Effective custom games-per-team target per bracket (null = full):
@@ -545,7 +579,8 @@ export async function generateRoundRobinMatchList(categoryId) {
 export async function regenerateMatchListForCategory(categoryId) {
   const { data: category, error: catErr } = await supabase.from('categories').select('format, games_per_team').eq('id', categoryId).single();
   if (catErr) throw catErr;
-  if (!/round robin/i.test(category.format || '')) {
+  const template = getCustomFormat(category.format);
+  if (!template && !/round robin/i.test(category.format || '')) {
     throw new Error('Regenerating the matchlist is only supported for Round Robin categories right now.');
   }
   const isDouble = /double round robin/i.test(category.format || '');
@@ -578,10 +613,24 @@ export async function regenerateMatchListForCategory(categoryId) {
   for (const bracket of brackets) {
     const teamIds = allTeams.filter((t) => t.bracket_id === bracket.id).map((t) => t.id);
     const bracketMatches = existingMatches.filter((m) => m.bracket_id === bracket.id);
-    const games = isDouble ? null : effectiveGames(teamIds.length, bracket.games_per_team ?? category.games_per_team);
+    const games = isDouble || template ? null : effectiveGames(teamIds.length, bracket.games_per_team ?? category.games_per_team);
 
     let newPairs;
-    if (games != null) {
+    if (template) {
+      // A template bracket only ever gains its missing template matches;
+      // nothing is removed except stale unplayed ones (pruned above). They
+      // keep their template round and code (B2 is always Team 3 vs Team 4)
+      // unless that code is already taken by another match.
+      const taken = new Set(bracketMatches.map((m) => m.match_code));
+      let highest = bracketMatches.reduce((max, m) => Math.max(max, parseInt((m.match_code || '').match(/\d+$/)?.[0] || '0', 10)), 0);
+      missingTemplatePairs(template, bracket.letter, teamIds, bracketMatches).forEach((m) => {
+        let code = `${bracket.letter}${m.matchNo}`;
+        if (taken.has(code)) code = `${bracket.letter}${(highest += 1)}`;
+        taken.add(code);
+        rows.push({ bracket_id: bracket.id, team_a_id: m.a, team_b_id: m.b, status: 'scheduled', round_number: m.round, match_code: code });
+      });
+      continue;
+    } else if (games != null) {
       const { add, remove } = planCustomAdjust(teamIds, bracketMatches, games);
       toRemove.push(...remove);
       newPairs = add;

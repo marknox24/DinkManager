@@ -37,7 +37,8 @@ import { useNow } from '../../../hooks/useNow';
 import { usableCourts } from '../../../utils/courts';
 import { formatDuration } from '../../../utils/format';
 import { liveElapsedSeconds, teamLabel } from '../../../utils/match';
-import { computeMissingPairs, effectiveGames, expectedRoundRobin, matchCounts, planCustomAdjust, progressLabel } from '../../../utils/scheduling';
+import { computeMissingPairs, effectiveGames, expectedRoundRobin, matchCounts, missingTemplatePairs, planCustomAdjust, planTemplateRounds, progressLabel } from '../../../utils/scheduling';
+import { getCustomFormat } from '../../../data/customFormats';
 import { rankTeams } from '../../../utils/standings';
 
 // One collapsible section per drawn pool — standings + its own recent
@@ -58,7 +59,7 @@ import { rankTeams } from '../../../utils/standings';
 // match the player/pair is in, Completed the completed ones, Remaining the
 // rest. Before a matchlist exists, only the round-robin expectation is
 // known, shown as "expected" with no completed/remaining.
-function BracketSection({ bracket, progress, expanded, onToggle, teams, matches, teamCounts, isDouble, games, canMove, onMove, dragging, onDragTeam, onDropTeam }) {
+function BracketSection({ bracket, progress, expanded, onToggle, teams, matches, teamCounts, isDouble, games, template, canMove, onMove, dragging, onDragTeam, onDropTeam }) {
   const rankedTeams = useMemo(() => rankTeams(teams || []), [teams]);
   const loaded = !!teams;
   const [dragOver, setDragOver] = useState(false);
@@ -66,6 +67,21 @@ function BracketSection({ bracket, progress, expanded, onToggle, teams, matches,
   // games = this bracket's custom games-per-team target (null = full).
   const expected = expectedRoundRobin(teams?.length ?? 0, isDouble, games);
   const perTeam = expected.perTeamMax > expected.perTeam ? `${expected.perTeam}–${expected.perTeamMax}` : expected.perTeam;
+  // A match-template format has no "games per team" target: each team plays
+  // whatever the template gives it (0 for a team outside it).
+  // Planned matches per team position, for the "0/n not generated" cell.
+  const templateExpected = useMemo(() => {
+    if (!template) return null;
+    const ids = (teams || []).map((t) => t.id);
+    const counts = new Map(ids.map((id) => [id, 0]));
+    planTemplateRounds(template, bracket.letter, ids).rounds.forEach((r) =>
+      r.matches.forEach((m) => {
+        counts.set(m.a, counts.get(m.a) + 1);
+        counts.set(m.b, counts.get(m.b) + 1);
+      })
+    );
+    return counts;
+  }, [template, teams, bracket.letter]);
   const hasList = progress && !progress.expected;
 
   return (
@@ -100,7 +116,8 @@ function BracketSection({ bracket, progress, expanded, onToggle, teams, matches,
             </div>
             {progress && (
               <div className="text-xs text-ink-500">
-                Target: {perTeam} games/team · {progress.totalMatches} total {progress.totalMatches === 1 ? 'match' : 'matches'}
+                {template ? `Template: ${template.label}` : `Target: ${perTeam} games/team`} · {progress.totalMatches} total{' '}
+                {progress.totalMatches === 1 ? 'match' : 'matches'}
                 {hasList ? (
                   <>
                     {' · '}
@@ -185,7 +202,7 @@ function BracketSection({ bracket, progress, expanded, onToggle, teams, matches,
                           })()
                         ) : (
                           <td className="border-l border-ink-100 px-3 py-2 text-center" title="Expected once the matchlist is generated">
-                            <div className="font-mono text-sm font-bold text-ink-400">0/{expected.perTeam}</div>
+                            <div className="font-mono text-sm font-bold text-ink-400">0/{templateExpected ? (templateExpected.get(t.id) ?? 0) : expected.perTeam}</div>
                             <div className="text-[10px] font-semibold text-ink-400">not generated</div>
                           </td>
                         )}
@@ -470,6 +487,7 @@ export default function BracketsPage() {
   // Per player/pair counts across this category's actual matchlist.
   const teamCounts = useMemo(() => matchCounts(categoryMatches).byTeam, [categoryMatches]);
   const isDoubleRR = /double round robin/i.test(activeCategory?.format || '');
+  const activeTemplate = getCustomFormat(activeCategory?.format);
 
   const capacity = activeCategory ? (activeCategory.id in capacityByCat ? capacityByCat[activeCategory.id] : (activeCategory.max_teams_per_bracket ?? null)) : null;
 
@@ -505,14 +523,18 @@ export default function BracketsPage() {
     if (poolMatches.length === 0) return null;
 
     const isDouble = /double round robin/i.test(activeCategory?.format || '');
+    const template = getCustomFormat(activeCategory?.format);
     let missingCount = 0;
     let staleCount = 0;
     brackets.forEach((b) => {
       const teamIds = (bracketData[b.id]?.teams || []).map((t) => t.id);
       const inBracket = new Set(teamIds);
       const bracketMatches = poolMatches.filter((m) => m.bracket_id === b.id);
-      const games = isDouble ? null : effectiveGames(teamIds.length, bracketGames(b));
-      if (games != null) {
+      const games = isDouble || template ? null : effectiveGames(teamIds.length, bracketGames(b));
+      if (template) {
+        // A match-template format: only template matches without a live match count.
+        missingCount += missingTemplatePairs(template, b.letter, teamIds, bracketMatches).length;
+      } else if (games != null) {
         // A custom games-per-team bracket: the same plan Regenerate runs.
         const { add, remove } = planCustomAdjust(teamIds, bracketMatches, games);
         missingCount += add.length + remove.length;
@@ -1071,6 +1093,7 @@ export default function BracketsPage() {
                     teamCounts={teamCounts}
                     isDouble={isDoubleRR}
                     games={bracketGames(b)}
+                    template={activeTemplate}
                     canMove={canMove && Boolean(poolsWithTeams) && brackets.length > 1}
                     onMove={openMove}
                     dragging={dragging}

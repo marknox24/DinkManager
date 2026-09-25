@@ -3,6 +3,8 @@ export const MATCH_TYPES = ['Singles', 'Doubles', 'Mixed Doubles', 'Team Event',
 export const MATCH_FORMATS = [
   'Round Robin',
   'Double Round Robin',
+  // A fixed match template reused by every bracket — see data/customFormats.js.
+  'RR:Custom Match 1',
   'Single Elimination',
   'Double Elimination',
   'Swiss System',

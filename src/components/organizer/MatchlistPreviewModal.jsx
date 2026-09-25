@@ -41,7 +41,10 @@ export default function MatchlistPreviewModal({ category, generating, onGenerate
 
   const isProgress = Boolean(data?.matches);
   const plan = data?.plan;
-  const isRR = plan?.kind === 'round_robin';
+  // Round robin and template formats are both pool schedules; only single
+  // elimination differs (Round 1 pairings with byes).
+  const isRR = plan?.kind === 'round_robin' || plan?.kind === 'template';
+  const isTemplate = plan?.kind === 'template';
 
   const view = useMemo(() => {
     if (!data) return null;
@@ -57,7 +60,8 @@ export default function MatchlistPreviewModal({ category, generating, onGenerate
       const rounds = roundNumbers.map((n) => {
         const matches = rows.filter((r) => (r.round_number ?? null) === n);
         const playing = new Set(matches.flatMap((m) => [m.team_a_id, m.team_b_id]));
-        return { number: n, matches, byes: data.matches ? [] : teams.filter((t) => !playing.has(t.id)) };
+        // A template gives some teams no match in a round by design, so "Bye" would be noise there.
+        return { number: n, matches, byes: data.matches || p.kind === 'template' ? [] : teams.filter((t) => !playing.has(t.id)) };
       });
       const games = p.gamesByBracket?.[b.id] ?? null;
       const counts = teams.map((t) => byTeam.get(t.id)?.total ?? 0);
@@ -73,6 +77,7 @@ export default function MatchlistPreviewModal({ category, generating, onGenerate
         generatedMin: counts.length ? Math.min(...counts) : 0,
         generatedMax: counts.length ? Math.max(...counts) : 0,
         seBye: p.byes.find((x) => x.bracket.id === b.id)?.team,
+        skipped: p.skippedByBracket?.[b.id] ?? [],
       };
     });
     const total = sections.reduce((s, x) => s + x.total, 0);
@@ -94,7 +99,7 @@ export default function MatchlistPreviewModal({ category, generating, onGenerate
                 <p className="font-display text-sm font-bold uppercase tracking-wide text-ink-900">{category.name}</p>
                 <p className="text-xs text-ink-500">
                   {view.teamCount} {view.teamCount === 1 ? 'team' : 'teams'} · {view.total} total {view.total === 1 ? 'match' : 'matches'}
-                  {isRR ? (plan.isDouble ? ' · Double Round Robin' : ' · Round Robin') : ' · Single Elimination, Round 1'}
+                  {isTemplate ? ` · ${plan.template.label}` : isRR ? (plan.isDouble ? ' · Double Round Robin' : ' · Round Robin') : ' · Single Elimination, Round 1'}
                 </p>
               </div>
               {isProgress ? (
@@ -125,7 +130,7 @@ export default function MatchlistPreviewModal({ category, generating, onGenerate
             </p>
           </div>
 
-          {view.sections.map(({ bracket, teams, rounds, games, total, completed, target, generatedMin, generatedMax, seBye }) => (
+          {view.sections.map(({ bracket, teams, rounds, games, total, completed, target, generatedMin, generatedMax, seBye, skipped }) => (
             <section key={bracket.id} className="rounded-2xl border border-ink-100">
               <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-ink-100 bg-ink-50/60 px-4 py-3">
                 <h4 className="font-display text-sm font-bold text-ink-900">Bracket {bracket.letter}</h4>
@@ -138,6 +143,16 @@ export default function MatchlistPreviewModal({ category, generating, onGenerate
                     : games != null && ` · Generated: ${generatedMin === generatedMax ? generatedMin : `${generatedMin}–${generatedMax}`} games/team`}
                 </p>
               </div>
+
+              {isTemplate && !isProgress && skipped.length > 0 && (
+                <p className="mx-4 mt-4 flex items-start gap-2 rounded-xl bg-amber-50 px-3.5 py-2.5 text-xs text-amber-800">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+                  <span>
+                    {skipped.map((m) => `${bracket.letter}${m.matchNo}`).join(', ')} skipped — Bracket {bracket.letter} has {teams.length}{' '}
+                    {teams.length === 1 ? 'team' : 'teams'} (needs {Math.max(...skipped.map((m) => m.needs))}).
+                  </span>
+                </p>
+              )}
 
               {!isProgress && games != null && generatedMax > generatedMin && (
                 <p className="mx-4 mt-4 flex items-start gap-2 rounded-xl bg-amber-50 px-3.5 py-2.5 text-xs text-amber-800">
@@ -179,7 +194,7 @@ export default function MatchlistPreviewModal({ category, generating, onGenerate
                     <span>Matches</span>
                   </div>
                   <ul className="flex flex-col divide-y divide-ink-50 rounded-lg ring-1 ring-ink-100">
-                    {teams.map((team) => {
+                    {teams.map((team, position) => {
                       const counts = view.byTeam.get(team.id) ?? { total: 0, completed: 0, remaining: 0 };
                       const p = progressLabel(counts);
                       const aboveTarget = !isProgress && games != null && counts.total > games;
@@ -189,7 +204,11 @@ export default function MatchlistPreviewModal({ category, generating, onGenerate
                           title={p.detail}
                           className={`flex items-center justify-between gap-2 px-2.5 py-1.5 text-xs ${aboveTarget ? 'bg-amber-50' : ''}`}
                         >
-                          <span className="min-w-0 truncate text-ink-700">{teamLabel(team)}</span>
+                          <span className="min-w-0 truncate text-ink-700">
+                            {/* Template formats number teams by position in the bracket. */}
+                            {isTemplate && <span className="mr-1.5 font-mono text-[10px] font-bold text-ink-400">T{position + 1}</span>}
+                            {teamLabel(team)}
+                          </span>
                           <span className="shrink-0 text-right">
                             <span className={`block font-mono font-bold ${aboveTarget ? 'text-amber-700' : 'text-ink-900'}`}>{p.short}</span>
                             <span className={`block text-[10px] ${p.done ? 'font-semibold text-emerald-600' : 'text-ink-400'}`}>{p.secondary}</span>

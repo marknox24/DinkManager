@@ -357,3 +357,89 @@ export function planCustomAdjust(teamIds, matches, k) {
   const { added, removed } = balanceTopUp(teamIds, kept, k);
   return { add: added, remove: [...trimmed, ...removed].map((e) => e.id) };
 }
+
+// ---------------------------------------------------------------------------
+// MATCH TEMPLATE FORMATS  (see src/data/customFormats.js — e.g. "RR:Custom
+// Match 1": every bracket plays the same fixed sequence, with team numbers
+// taken from the team's position inside its own bracket.)
+// ---------------------------------------------------------------------------
+
+// One bracket's rounds from a template: [{ number, matches: [{ matchNo, a,
+// b }] }], with a/b = the bracket's own team ids. template.rounds is either
+// explicit rounds or a function of the bracket's team count (see
+// customFormats.js). matchNo is a running count of the bracket's real
+// matches in template order, so codes have no gaps. A fixed match naming a
+// team number the bracket doesn't have is skipped and reported in `skipped`
+// (with its position in the template); a match naming a generator's bye slot
+// (a number past teamCount + 1) is just a bye and isn't reported. A pair
+// listed twice keeps only its first match. teamIds must be in the bracket's
+// team order.
+export function planTemplateRounds(template, letter, teamIds) {
+  const source = template.overrides?.[letter] ?? template.rounds;
+  const rounds = typeof source === 'function' ? source(teamIds.length) : source;
+  const generated = typeof source === 'function';
+  const seen = new Set();
+  const skipped = [];
+  let matchNo = 0;
+  let slot = 0;
+  const planned = rounds.map((round, r) => {
+    const matches = [];
+    round.forEach(([x, y]) => {
+      slot += 1;
+      const a = teamIds[x - 1];
+      const b = teamIds[y - 1];
+      if (!a || !b) {
+        if (!generated) skipped.push({ matchNo: slot, needs: Math.max(x, y), teamNumbers: [x, y] });
+        return;
+      }
+      const key = pairKey(a, b);
+      if (a === b || seen.has(key)) return;
+      seen.add(key);
+      matchNo += 1;
+      matches.push({ matchNo, a, b });
+    });
+    return { number: r + 1, matches };
+  });
+  return { rounds: planned, skipped };
+}
+
+// The rows to insert for a whole category from a template — every bracket
+// reuses the template, interleaved round by round across brackets (A's
+// round-1 matches, then B's, …) and coded <Letter><matchNo>, so a four
+// bracket category's Round 1 reads A1, A2, B1, B2, C1, C2, D1, D2.
+export function planTemplateMatches(template, brackets, teamsByBracket) {
+  const perBracket = brackets.map((b) => ({ bracket: b, ...planTemplateRounds(template, b.letter, teamsByBracket[b.id] || []) }));
+  const maxRounds = Math.max(0, ...perBracket.map((p) => p.rounds.length));
+  const rows = [];
+  for (let r = 0; r < maxRounds; r++) {
+    for (const { bracket, rounds } of perBracket) {
+      for (const m of rounds[r]?.matches ?? []) {
+        rows.push({
+          bracket_id: bracket.id,
+          team_a_id: m.a,
+          team_b_id: m.b,
+          status: 'scheduled',
+          round_number: r + 1,
+          match_code: `${bracket.letter}${m.matchNo}`,
+        });
+      }
+    }
+  }
+  return { rows, skippedByBracket: Object.fromEntries(perBracket.map((p) => [p.bracket.id, p.skipped])) };
+}
+
+// How many matches a template gives a bracket of this many teams — the
+// "expected" figure shown before a matchlist is generated.
+export function expectedTemplateMatches(template, letter, teamCount) {
+  const { rounds } = planTemplateRounds(template, letter, Array.from({ length: teamCount }, (_, i) => `t${i}`));
+  return rounds.reduce((sum, r) => sum + r.matches.length, 0);
+}
+
+// What Regenerate should add to a template bracket's existing matchlist:
+// the template matches whose pair isn't already there (any status other
+// than canceled). Existing matches are never changed or removed here.
+export function missingTemplatePairs(template, letter, teamIds, existingMatches) {
+  const have = new Set(existingMatches.filter((m) => m.status !== 'canceled').map((m) => pairKey(m.team_a_id, m.team_b_id)));
+  const { rounds } = planTemplateRounds(template, letter, teamIds);
+  return rounds.flatMap((round) => round.matches.filter((m) => !have.has(pairKey(m.a, m.b))).map((m) => ({ ...m, round: round.number })));
+}
