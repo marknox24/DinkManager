@@ -95,6 +95,32 @@ export async function getBracketAssignmentsForEvent(categoryIds) {
   return assignments;
 }
 
+// Pure core of getBracketProgressForCategory: given the category, its
+// brackets, and the teams/matches already loaded for them, returns the same
+// per-bracket progress rows without any of its own queries. Split out so a
+// caller that already has brackets/teams/matches in hand (e.g. the Preview
+// Screen's poll) can derive progress for free instead of re-fetching them —
+// see getBracketProgressForCategory below for the querying wrapper most
+// callers still want, and PreviewDisplayPage.jsx for the reuse.
+export function computeBracketProgress(category, brackets, teams, matches) {
+  if (brackets.length === 0) return [];
+  const isDouble = /double round robin/i.test(category?.format || '');
+  const isRoundRobin = /round robin/i.test(category?.format || '');
+  const template = getCustomFormat(category?.format);
+
+  const { byBracket } = matchCounts(matches);
+  return brackets.map((b) => {
+    const teamCount = teams.filter((t) => t.bracket_id === b.id).length;
+    const actual = byBracket.get(b.id);
+    const expected = !actual && b.kind !== 'playoff';
+    const games = isRoundRobin ? (b.games_per_team ?? category?.games_per_team) : null;
+    const expectedTotal = template ? expectedTemplateMatches(template, b.letter, teamCount) : expectedRoundRobin(teamCount, isDouble, games).total;
+    const totalMatches = actual ? actual.total : expected ? expectedTotal : 0;
+    const completedCount = actual ? actual.completed : 0;
+    return { bracket_id: b.id, letter: b.letter, kind: b.kind, teamCount, totalMatches, completedCount, remaining: totalMatches - completedCount, expected };
+  });
+}
+
 // Per-bracket team/match counts for a category, so the Brackets page can
 // show "how many matches remain" and estimate time-to-finish. Once a
 // bracket has a generated matchlist, its total is the real number of
@@ -111,9 +137,6 @@ export async function getBracketProgressForCategory(categoryId) {
   if (catErr) throw catErr;
   if (bracketErr) throw bracketErr;
   if (brackets.length === 0) return [];
-  const isDouble = /double round robin/i.test(category.format || '');
-  const isRoundRobin = /round robin/i.test(category.format || '');
-  const template = getCustomFormat(category.format);
   const bracketIds = brackets.map((b) => b.id);
 
   const [{ data: teams, error: teamErr }, { data: matches, error: matchErr }] = await Promise.all([
@@ -123,17 +146,7 @@ export async function getBracketProgressForCategory(categoryId) {
   if (teamErr) throw teamErr;
   if (matchErr) throw matchErr;
 
-  const { byBracket } = matchCounts(matches);
-  return brackets.map((b) => {
-    const teamCount = teams.filter((t) => t.bracket_id === b.id).length;
-    const actual = byBracket.get(b.id);
-    const expected = !actual && b.kind !== 'playoff';
-    const games = isRoundRobin ? (b.games_per_team ?? category.games_per_team) : null;
-    const expectedTotal = template ? expectedTemplateMatches(template, b.letter, teamCount) : expectedRoundRobin(teamCount, isDouble, games).total;
-    const totalMatches = actual ? actual.total : expected ? expectedTotal : 0;
-    const completedCount = actual ? actual.completed : 0;
-    return { bracket_id: b.id, letter: b.letter, kind: b.kind, teamCount, totalMatches, completedCount, remaining: totalMatches - completedCount, expected };
-  });
+  return computeBracketProgress(category, brackets, teams, matches);
 }
 
 // Creates brackets + teams from a { letter: [registration, ...] } grouping.
@@ -477,6 +490,34 @@ export async function listMatchesForCategory(categoryId) {
         a.bracket_letter.localeCompare(b.bracket_letter) ||
         compareMatchCode(a.match_code, b.match_code)
     );
+}
+
+// Everything the Preview Screen's poll needs (brackets, teams, matches for
+// the selected category, plus in-progress matches event-wide) in a single
+// round trip, via the preview_live_snapshot() SQL function (schema.sql) —
+// instead of the ~7 separate queries listBracketsForCategory +
+// listTeamsForCategory + listMatchesForCategory + listLiveMatchesForEvent
+// make between them. Runs under the caller's own RLS (the function is
+// security invoker), so a signed-out visitor on an unpublished event still
+// gets empty arrays back, exactly as those separate queries would.
+//
+// Returns null instead of throwing when the function isn't deployed yet
+// (error code PGRST202, "function not found") — PreviewDisplayPage.jsx
+// falls back to the multi-query path in that case, so the frontend and this
+// migration can ship independently of each other.
+export async function getPreviewLiveSnapshot(eventId, categoryId) {
+  const { data, error } = await supabase.rpc('preview_live_snapshot', { p_event_id: eventId, p_category_id: categoryId });
+  if (error) {
+    if (error.code === 'PGRST202') return null;
+    throw error;
+  }
+  const matches = (data.matches || []).sort(
+    (a, b) =>
+      (a.round_number || 0) - (b.round_number || 0) ||
+      (a.bracket_letter || '').localeCompare(b.bracket_letter || '') ||
+      compareMatchCode(a.match_code, b.match_code)
+  );
+  return { brackets: data.brackets || [], teams: data.teams || [], matches, live: data.live || [] };
 }
 
 // Loads what a category's matchlist is generated from — its pool brackets

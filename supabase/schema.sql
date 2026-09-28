@@ -2832,3 +2832,76 @@ $$;
 
 revoke execute on function remove_unplayed_matches(uuid, uuid[]) from public, anon;
 grant execute on function remove_unplayed_matches(uuid, uuid[]) to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- PREVIEW SCREEN SNAPSHOT  (one round trip for the public/organizer live
+-- display's poll, instead of the ~7 separate queries listBracketsForCategory
+-- + listTeamsForCategory + listMatchesForCategory + listLiveMatchesForEvent
+-- make between them — see PreviewDisplayPage.jsx's loadLive())
+-- ----------------------------------------------------------------------------
+-- security invoker (the default for a plain "language sql" function, named
+-- here for clarity) is deliberate: it runs with the CALLER's own row
+-- visibility, so a signed-out visitor gets exactly what
+-- brackets_select_public_or_owner / teams_select_public_or_owner /
+-- matches_select_public_or_owner already allow them — empty arrays for an
+-- unpublished event, never a bypass of those policies. Nothing new is
+-- exposed versus the equivalent direct queries.
+create or replace function preview_live_snapshot(p_event_id uuid, p_category_id uuid)
+returns jsonb
+language sql
+security invoker
+stable
+as $$
+  with cat_brackets as (
+    select *
+    from brackets
+    where category_id = p_category_id
+  ),
+  cat_teams as (
+    select t.*
+    from teams t
+    join cat_brackets b on b.id = t.bracket_id
+  ),
+  cat_matches as (
+    select
+      m.*,
+      b.letter as bracket_letter,
+      jsonb_build_object('id', ta.id, 'player1_name', ta.player1_name, 'player2_name', ta.player2_name, 'club_name', ta.club_name) as team_a,
+      jsonb_build_object('id', tb.id, 'player1_name', tb.player1_name, 'player2_name', tb.player2_name, 'club_name', tb.club_name) as team_b
+    from matches m
+    join cat_brackets b on b.id = m.bracket_id
+    left join teams ta on ta.id = m.team_a_id
+    left join teams tb on tb.id = m.team_b_id
+  ),
+  event_categories as (
+    select id, name from categories where event_id = p_event_id
+  ),
+  event_brackets as (
+    select br.id, br.letter, br.category_id
+    from brackets br
+    join event_categories c on c.id = br.category_id
+  ),
+  live_matches as (
+    select
+      m.*,
+      eb.letter as bracket_letter,
+      ec.name as category_name,
+      jsonb_build_object('id', ta.id, 'player1_name', ta.player1_name, 'player2_name', ta.player2_name, 'club_name', ta.club_name) as team_a,
+      jsonb_build_object('id', tb.id, 'player1_name', tb.player1_name, 'player2_name', tb.player2_name, 'club_name', tb.club_name) as team_b
+    from matches m
+    join event_brackets eb on eb.id = m.bracket_id
+    join event_categories ec on ec.id = eb.category_id
+    left join teams ta on ta.id = m.team_a_id
+    left join teams tb on tb.id = m.team_b_id
+    where m.status = 'in_progress'
+    order by m.created_at
+  )
+  select jsonb_build_object(
+    'brackets', coalesce((select jsonb_agg(to_jsonb(cb.*) order by cb.letter) from cat_brackets cb), '[]'::jsonb),
+    'teams', coalesce((select jsonb_agg(to_jsonb(ct.*)) from cat_teams ct), '[]'::jsonb),
+    'matches', coalesce((select jsonb_agg(to_jsonb(cm.*)) from cat_matches cm), '[]'::jsonb),
+    'live', coalesce((select jsonb_agg(to_jsonb(lm.*)) from live_matches lm), '[]'::jsonb)
+  );
+$$;
+
+grant execute on function preview_live_snapshot(uuid, uuid) to anon, authenticated;

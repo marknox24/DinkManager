@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { Clock, Crown, Radio, Timer, Trophy } from 'lucide-react';
+import { AlertTriangle, Clock, Crown, Radio, Timer, Trophy } from 'lucide-react';
 import { getEventById, listCategories, listSponsors } from '../../../data/eventsApi';
 import {
-  getBracketProgressForCategory,
+  computeBracketProgress,
+  getPreviewLiveSnapshot,
   listBracketsForCategory,
   listLiveMatchesForEvent,
   listMatchesForCategory,
@@ -20,7 +21,13 @@ import { teamLabel } from '../../../utils/match';
 import { rankTeams } from '../../../utils/standings';
 import { matchLevelLabel } from '../../../data/playoffApi';
 
-const REFRESH_MS = 6000;
+// Live data (brackets/teams/matches/live courts) polls this often. The
+// event/category/sponsors barely change during a tournament, so they're
+// only re-fetched every STATIC_REFRESH_MS, or sooner while the event/
+// category hasn't resolved yet (draft not published, category deleted) —
+// see poll() below.
+const REFRESH_MS = 10000;
+const STATIC_REFRESH_MS = 5 * 60 * 1000;
 const SLIDE_MS = 7000;
 // Both the bracket grid (2x2) and the court row (4 across) are sized so 4
 // per page is exactly what fits a screen without wrapping into extra rows —
@@ -47,42 +54,139 @@ export default function PreviewDisplayPage() {
   const [teams, setTeams] = useState([]);
   const [matches, setMatches] = useState([]);
   const [liveMatches, setLiveMatches] = useState([]);
-  const [bracketProgress, setBracketProgress] = useState([]);
   const [sponsors, setSponsors] = useState([]);
-  const [loaded, setLoaded] = useState(false);
+  // 'loading' (first attempt still in flight) | 'ok' (event + category
+  // resolved at least once) | 'not_public' (a signed-out visitor on a draft
+  // event — the RLS policies in schema.sql hide it) | 'missing' (the
+  // category isn't on this event) | 'error' (never resolved, e.g. offline).
+  const [pageState, setPageState] = useState('loading');
+  // A later poll failing doesn't downgrade pageState once we have good data
+  // — it just flags `stale` so the last-known screen keeps showing instead
+  // of blanking, with a small "Reconnecting…" pill.
+  const [stale, setStale] = useState(false);
+  const [lastUpdated, setLastUpdated] = useState(null);
 
-  const load = useCallback(async () => {
+  const resolvedRef = useRef(false); // event + category currently valid
+  const lastStaticRef = useRef(0); // Date.now() of the last static fetch
+  const inFlightRef = useRef(false); // guards against overlapping polls
+
+  // Event/category/sponsors — rarely change mid-tournament, so this isn't
+  // part of the fast poll (see poll() below for the cadence it actually
+  // runs on).
+  const loadStatic = useCallback(async () => {
     try {
-      const [ev, cats, bkts, live, bp, sponsorsData] = await Promise.all([
-        getEventById(eventId),
-        listCategories(eventId),
-        listBracketsForCategory(categoryId),
-        listLiveMatchesForEvent(eventId),
-        getBracketProgressForCategory(categoryId),
-        listSponsors(eventId),
-      ]);
+      const [ev, cats, sponsorsData] = await Promise.all([getEventById(eventId), listCategories(eventId), listSponsors(eventId)]);
+      const cat = cats.find((c) => c.id === categoryId) || null;
       setEvent(ev);
-      setCategory(cats.find((c) => c.id === categoryId) || null);
-      setBrackets(bkts);
-      setLiveMatches(live);
-      setBracketProgress(bp);
+      setCategory(cat);
       setSponsors(sponsorsData);
-      const [tms, mts] = await Promise.all([listTeamsForCategory(categoryId, bkts), listMatchesForCategory(categoryId)]);
-      setTeams(tms);
-      setMatches(mts);
-    } catch {
-      // Spectator display — fail silently and retry on the next poll rather
-      // than showing an error screen to whoever is watching the monitor.
-    } finally {
-      setLoaded(true);
+      if (!cat) {
+        setPageState('missing');
+        return false;
+      }
+      setPageState('ok');
+      setStale(false);
+      return true;
+    } catch (e) {
+      // A signed-out visitor on a draft event: events_select_public_or_owner
+      // (schema.sql) hides the row entirely, so .single() reports "0 rows".
+      if (e?.code === 'PGRST116') {
+        setPageState('not_public');
+      } else {
+        // Only fall back to the full error screen if we've never had good
+        // data — a transient blip once the display is already showing
+        // something just marks it stale instead of blanking it.
+        setPageState((prev) => (prev === 'ok' ? prev : 'error'));
+        setStale(true);
+      }
+      return false;
     }
   }, [eventId, categoryId]);
 
+  // Brackets/teams/matches/live courts — the actual poll cadence.
+  const loadLive = useCallback(async () => {
+    try {
+      // One round trip via the snapshot function when it's deployed; falls
+      // back to the old multi-query path (getPreviewLiveSnapshot returns
+      // null) so this page works the same whether or not that migration has
+      // shipped yet — see getPreviewLiveSnapshot in bracketsApi.js.
+      const snapshot = await getPreviewLiveSnapshot(eventId, categoryId);
+      if (snapshot) {
+        setBrackets(snapshot.brackets);
+        setTeams(snapshot.teams);
+        setMatches(snapshot.matches);
+        setLiveMatches(snapshot.live);
+      } else {
+        const bkts = await listBracketsForCategory(categoryId);
+        const [tms, mts, live] = await Promise.all([
+          listTeamsForCategory(categoryId, bkts),
+          listMatchesForCategory(categoryId),
+          listLiveMatchesForEvent(eventId),
+        ]);
+        setBrackets(bkts);
+        setTeams(tms);
+        setMatches(mts);
+        setLiveMatches(live);
+      }
+      setLastUpdated(new Date());
+      setStale(false);
+    } catch {
+      setStale(true);
+    }
+  }, [eventId, categoryId]);
+
+  const poll = useCallback(async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
+    try {
+      const now = Date.now();
+      // Re-check event/category whenever they haven't resolved yet (so a
+      // draft that gets published, or a re-added category, shows up within
+      // one poll instead of waiting the full 5 minutes) or the static
+      // refresh interval has elapsed.
+      if (!resolvedRef.current || now - lastStaticRef.current >= STATIC_REFRESH_MS) {
+        resolvedRef.current = await loadStatic();
+        lastStaticRef.current = now;
+      }
+      if (resolvedRef.current) await loadLive();
+    } finally {
+      inFlightRef.current = false;
+    }
+  }, [loadStatic, loadLive]);
+
   useEffect(() => {
-    load();
-    const id = setInterval(load, REFRESH_MS);
-    return () => clearInterval(id);
-  }, [load]);
+    let intervalId = null;
+    const start = () => {
+      if (intervalId == null) intervalId = setInterval(poll, REFRESH_MS);
+    };
+    const stop = () => {
+      clearInterval(intervalId);
+      intervalId = null;
+    };
+
+    poll();
+    start();
+
+    // A phone or TV that isn't the front tab (browser minimized, kiosk
+    // switched away) has no reason to keep hitting the database — pause
+    // while hidden, and refresh at once when it comes back into view.
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        stop();
+      } else {
+        poll();
+        start();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [poll]);
+
+  const bracketProgress = useMemo(() => computeBracketProgress(category, brackets, teams, matches), [category, brackets, teams, matches]);
 
   const standingsByBracket = useMemo(() => {
     // The knockout bracket (if any) has no meaningful W/L ranking for a
@@ -116,6 +220,8 @@ export default function PreviewDisplayPage() {
   // everything else still uses.
   const goldSponsors = useMemo(() => sponsors.filter((s) => s.tier === 'gold'), [sponsors]);
   const silverSponsors = useMemo(() => sponsors.filter((s) => s.tier === 'silver'), [sponsors]);
+  // One combined box: every silver sponsor slides first, then every gold one.
+  const featuredSponsors = useMemo(() => [...silverSponsors, ...goldSponsors], [silverSponsors, goldSponsors]);
   const otherSponsors = useMemo(() => sponsors.filter((s) => s.tier !== 'gold' && s.tier !== 'silver'), [sponsors]);
 
   const numCourts = usableCourts(event);
@@ -141,8 +247,33 @@ export default function PreviewDisplayPage() {
     return { totalMatches, completed, remaining, estimatedMinutes };
   }, [bracketProgress, category, event, numCourts]);
 
-  if (!loaded) {
+  if (pageState === 'loading') {
     return <div className="flex h-screen items-center justify-center bg-[#f0f1f4] text-sm font-medium text-ink-400">Loading preview…</div>;
+  }
+  if (pageState === 'not_public') {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-2 bg-[#f0f1f4] px-6 text-center">
+        <AlertTriangle size={28} className="mb-1 text-amber-500" />
+        <div className="text-sm font-bold text-ink-800">This event isn't public yet</div>
+        <p className="max-w-xs text-xs text-ink-500">The organizer needs to publish it before the live screen can be shown.</p>
+      </div>
+    );
+  }
+  if (pageState === 'missing') {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-2 bg-[#f0f1f4] px-6 text-center">
+        <AlertTriangle size={28} className="mb-1 text-amber-500" />
+        <div className="text-sm font-bold text-ink-800">This category no longer exists</div>
+      </div>
+    );
+  }
+  if (pageState === 'error') {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-2 bg-[#f0f1f4] px-6 text-center">
+        <AlertTriangle size={28} className="mb-1 text-amber-500" />
+        <div className="text-sm font-bold text-ink-800">Couldn't reach the server, retrying…</div>
+      </div>
+    );
   }
 
   const courtCard = (c) => {
@@ -186,12 +317,33 @@ export default function PreviewDisplayPage() {
     // zero scrolling on a display nobody can scroll. Smaller screens scroll
     // normally (see WIDE_QUERY).
     <div className="flex min-h-screen w-full flex-col bg-gradient-to-br from-[#f5f5f7] to-[#e7e8ec] p-3 sm:p-5 lg:h-screen lg:overflow-hidden lg:p-6 print:hidden">
+      {/* Only reachable by the organizer (signed in as owner/staff) — a
+          signed-out visitor on the same draft gets pageState 'not_public'
+          above instead. Warns them the public can't see this yet. */}
+      {event && !event.is_published && (
+        <div className="mb-2 flex shrink-0 items-center gap-2 rounded-xl bg-amber-100 px-3.5 py-2 text-xs font-semibold text-amber-800">
+          <AlertTriangle size={13} className="shrink-0" /> Draft — the public sees a blank screen until you publish this event.
+        </div>
+      )}
       {/* Top frame: event, time left, and the courts. */}
       <div className="shrink-0 rounded-3xl border border-white/60 bg-white/70 shadow-[0_8px_30px_rgb(0,0,0,0.06)] backdrop-blur-xl">
         <div className="flex items-center justify-between gap-4 px-4 py-3.5 sm:px-6 sm:py-4">
           <div className="min-w-0">
             <div className="truncate font-display text-base font-extrabold tracking-tight text-ink-900 sm:text-xl">{event?.name}</div>
-            <div className="truncate text-xs font-semibold text-ink-500 sm:text-sm">{category?.name}</div>
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-ink-500 sm:text-sm">
+              <span className="truncate">{category?.name}</span>
+              {stale ? (
+                <span className="flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">
+                  <Radio size={9} className="animate-pulse" /> Reconnecting…
+                </span>
+              ) : (
+                lastUpdated && (
+                  <span className="shrink-0 text-[10px] font-medium text-ink-300">
+                    Updated {lastUpdated.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  </span>
+                )
+              )}
+            </div>
           </div>
           {progress.totalMatches > 0 && (
             <div className="shrink-0 text-right leading-tight">
@@ -359,17 +511,10 @@ export default function PreviewDisplayPage() {
             />
           </div>
 
-          {(goldSponsors.length > 0 || silverSponsors.length > 0) && (
-            // Hidden on phones. Only spans two columns once both tiers
-            // actually have a sponsor — with just one tier populated, that
-            // box fills the full width instead of sitting next to dead space.
-            <div
-              className={`col-span-2 hidden shrink-0 grid-cols-1 gap-3 md:grid ${
-                goldSponsors.length > 0 && silverSponsors.length > 0 ? 'sm:grid-cols-2' : ''
-              }`}
-            >
-              {goldSponsors.length > 0 && <SponsorBox tier="gold" sponsors={goldSponsors} />}
-              {silverSponsors.length > 0 && <SponsorBox tier="silver" sponsors={silverSponsors} />}
+          {featuredSponsors.length > 0 && (
+            // Hidden on phones.
+            <div className="col-span-2 hidden shrink-0 md:block">
+              <SponsorBox sponsors={featuredSponsors} />
             </div>
           )}
         </div>
