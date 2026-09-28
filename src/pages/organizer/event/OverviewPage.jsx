@@ -99,18 +99,6 @@ export default function OverviewPage() {
               <QuickLink icon={Trophy} title="Event details" description="Name, dates, categories, fees and more" onClick={() => navigate(`/events/${eventId}/edit`)} />
             </div>
           </div>
-
-          <div className="rounded-2xl border border-dashed border-ink-200 bg-white p-5">
-            <div className="flex items-center gap-2.5">
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-ink-100 text-ink-400">
-                <Shuffle size={16} strokeWidth={2.3} />
-              </span>
-              <div>
-                <div className="text-sm font-bold text-ink-800">Live court tracking</div>
-                <div className="text-xs text-ink-500">Coming next — start matches on a court with a live timer, right from the Brackets page.</div>
-              </div>
-            </div>
-          </div>
         </div>
       )}
     </EventWorkspaceLayout>

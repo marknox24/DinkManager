@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
-import { Sparkles, UserPlus } from 'lucide-react';
+import { Eye, EyeOff, Sparkles, UserPlus } from 'lucide-react';
 import Logo from '../../components/ui/Logo';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -26,6 +26,7 @@ export default function SignupPage() {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const pushDuplicateEmailToast = () =>
@@ -75,6 +76,9 @@ export default function SignupPage() {
 
   return (
     <AuthSplitLayout>
+      <Link to="/" className="mb-4 inline-flex w-fit items-center gap-1 text-xs font-semibold text-ink-500 hover:text-ink-800">
+        ← Back to website
+      </Link>
       <div className="mb-6 flex flex-col items-center text-center">
         <Logo size={44} />
         <h1 className="mt-3 font-display text-xl font-bold text-ink-900">Create your organizer account</h1>
@@ -97,6 +101,8 @@ export default function SignupPage() {
           <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-ink-500">Your name / club</label>
           <input
             required
+            autoComplete="name"
+            placeholder="e.g. Juan Dela Cruz or Manila Pickleball Club"
             value={name}
             onChange={(e) => setName(e.target.value)}
             className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
@@ -107,6 +113,8 @@ export default function SignupPage() {
           <input
             type="email"
             required
+            autoComplete="email"
+            placeholder="you@example.com"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
@@ -114,14 +122,27 @@ export default function SignupPage() {
         </div>
         <div>
           <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-ink-500">Password</label>
-          <input
-            type="password"
-            required
-            minLength={6}
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
-          />
+          <div className="relative">
+            <input
+              type={showPassword ? 'text' : 'password'}
+              required
+              minLength={6}
+              autoComplete="new-password"
+              placeholder="At least 6 characters"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 pr-10 text-sm outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              tabIndex={-1}
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+              className="absolute inset-y-0 right-0 flex w-10 items-center justify-center text-ink-400 hover:text-ink-600"
+            >
+              {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+            </button>
+          </div>
         </div>
         <button
           type="submit"

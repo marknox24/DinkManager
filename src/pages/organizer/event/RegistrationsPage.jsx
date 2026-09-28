@@ -287,15 +287,15 @@ export default function RegistrationsPage() {
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="font-display text-sm font-bold text-ink-800">{cat.name}</span>
                       <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-ink-500 ring-1 ring-ink-200">
-                        {catRegs.length}
-                        {cat.max_slots ? ` / ${cat.max_slots}` : ''}
+                        {catRegs.length} registered
+                        {cat.max_slots ? ` · max ${cat.max_slots}` : ''}
                       </span>
                       {playerCap != null && (
                         <span
                           title={approved > playerCap ? `Over this event's ${planLabel} limit — added before the limit was enforced` : undefined}
                           className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${capTone}`}
                         >
-                          {approved}/{playerCap} approved
+                          {approved} approved · plan limit {playerCap}
                         </span>
                       )}
                     </div>
@@ -303,7 +303,7 @@ export default function RegistrationsPage() {
                       onClick={() => navigate(`/events/${eventId}/brackets`)}
                       className="flex items-center gap-1.5 rounded-full bg-brand-50 px-3 py-1.5 text-[11px] font-bold text-brand-700 transition hover:bg-brand-100"
                     >
-                      <Shuffle size={12} /> Randomizer
+                      <Shuffle size={12} /> Draw brackets
                     </button>
                   </div>
                   {catRegs.length === 0 ? (
@@ -351,8 +351,8 @@ export default function RegistrationsPage() {
                               <td className="px-4 py-2.5">
                                 <div className="flex justify-end gap-1.5">
                                   {r.status !== 'approved' && (
-                                    <button onClick={() => setStatus(r, 'approved')} title="Approve" className="flex h-7 w-7 items-center justify-center rounded-full bg-brand-50 text-brand-600 hover:bg-brand-100">
-                                      <CheckCircle2 size={14} />
+                                    <button onClick={() => setStatus(r, 'approved')} title="Approve" className="flex h-7 items-center justify-center gap-1 rounded-full bg-brand-50 px-2.5 text-xs font-bold text-brand-700 hover:bg-brand-100">
+                                      <CheckCircle2 size={14} /> Approve
                                     </button>
                                   )}
                                   {r.status !== 'denied' && (

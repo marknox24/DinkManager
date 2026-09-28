@@ -72,7 +72,15 @@ export default function AccountingPage() {
   const [earningModal, setEarningModal] = useState(null);
   const [reportOpen, setReportOpen] = useState(false);
 
-  const money = (n) => formatMoney(n, event?.currency);
+  // Registration fees are set per category. When every priced category shares
+  // one currency, show all money in it so a ₱ event never reads as dollars;
+  // otherwise fall back to the event's own currency setting.
+  const feeCurrencies = useMemo(
+    () => [...new Set(registrationEarnings.filter((r) => r.fee_amount > 0).map((r) => r.fee_currency))],
+    [registrationEarnings]
+  );
+  const displayCurrency = feeCurrencies.length === 1 ? feeCurrencies[0] : event?.currency;
+  const money = (n) => formatMoney(n, displayCurrency);
 
   const reload = useCallback(async () => {
     try {
@@ -395,14 +403,14 @@ export default function AccountingPage() {
                   <span className="font-mono text-sm font-bold text-ink-900">{money(totalRegistrationEarnings)}</span>
                 </div>
                 {registrationEarnings.every((r) => r.total === 0) ? (
-                  <div className="px-5 py-8 text-center text-sm text-ink-400">No paid registrations yet.</div>
+                  <div className="px-5 py-8 text-center text-sm text-ink-400">No registration fees yet.</div>
                 ) : (
                   <div className="overflow-x-auto">
                     <table className="w-full min-w-[500px] text-sm">
                       <thead>
                         <tr className="border-b border-ink-100 text-[11px] font-bold uppercase tracking-wide text-ink-400">
                           <th className="px-4 py-2.5 text-left">Category</th>
-                          <th className="px-4 py-2.5 text-center">Paid registrations</th>
+                          <th className="px-4 py-2.5 text-center">Approved registrations</th>
                           <th className="px-4 py-2.5 text-right">Fee</th>
                           <th className="px-4 py-2.5 text-right">Subtotal</th>
                         </tr>
@@ -414,8 +422,8 @@ export default function AccountingPage() {
                             <tr key={r.category_id} className="border-b border-ink-50">
                               <td className="px-4 py-2.5 font-semibold text-ink-800">{r.category_name}</td>
                               <td className="px-4 py-2.5 text-center text-ink-500">{r.approved_count}</td>
-                              <td className="px-4 py-2.5 text-right text-ink-500">{money(r.fee_amount)}</td>
-                              <td className="px-4 py-2.5 text-right font-mono font-semibold text-ink-900">{money(r.total)}</td>
+                              <td className="px-4 py-2.5 text-right text-ink-500">{formatMoney(r.fee_amount, r.fee_currency)}</td>
+                              <td className="px-4 py-2.5 text-right font-mono font-semibold text-ink-900">{formatMoney(r.total, r.fee_currency)}</td>
                             </tr>
                           ))}
                       </tbody>

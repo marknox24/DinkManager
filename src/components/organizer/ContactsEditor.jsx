@@ -39,7 +39,7 @@ export default function ContactsEditor({ contacts, onChange }) {
           <input
             value={c.value}
             onChange={(e) => update(idx, { value: e.target.value })}
-            placeholder={c.type === 'Email' ? 'club@example.com' : c.type === 'Website' ? 'https://www.example.com' : '+1 555 000 0000'}
+            placeholder={c.type === 'Email' ? 'club@example.com' : c.type === 'Website' ? 'https://www.example.com' : '+63 9XX XXX XXXX'}
             className={`${inputClass} w-full`}
           />
         </div>

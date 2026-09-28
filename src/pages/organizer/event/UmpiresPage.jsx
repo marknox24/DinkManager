@@ -171,7 +171,6 @@ export default function UmpiresPage() {
               )
             )}
           </div>
-          <p className="mt-4 text-center text-xs text-ink-400">Live officiating status will appear here once bracket play starts.</p>
         </div>
       </div>
     </EventWorkspaceLayout>

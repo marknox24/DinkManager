@@ -24,7 +24,7 @@ export default function Community() {
         <div className="grid grid-cols-2 auto-rows-[130px] gap-3 sm:auto-rows-[150px] md:grid-cols-4 md:gap-4">
           {TILES.map((tile, i) => (
             <Reveal key={tile.src} direction="scale" delay={i * 60} className={`relative overflow-hidden rounded-2xl ${tile.span}`}>
-              <img src={tile.src} alt="" loading="lazy" className="h-full w-full object-cover" />
+              <img src={tile.src} alt={tile.statement ? `Pickleball players — ${tile.statement}` : 'Pickleball players on court'} loading="lazy" className="h-full w-full object-cover" />
               {tile.statement && (
                 <div className="absolute inset-0 flex items-end bg-gradient-to-t from-ink-950/80 via-ink-950/0 to-transparent p-3.5">
                   <p className="font-display text-base font-bold text-white sm:text-lg">{tile.statement}</p>

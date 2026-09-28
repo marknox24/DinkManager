@@ -177,7 +177,7 @@ export default function EventEditorPage() {
     try {
       const cat = await createCategory(
         eventId,
-        { name: 'New Category', match_type: 'Singles', format: 'Round Robin', fee_amount: 0, fee_currency: 'USD' },
+        { name: `Category ${categories.length + 1}`, match_type: 'Singles', format: 'Round Robin', fee_amount: 0, fee_currency: 'PHP' },
         categories.length
       );
       setCategories((prev) => [...prev, cat]);
