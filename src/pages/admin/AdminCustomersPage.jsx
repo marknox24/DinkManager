@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { AlertTriangle, Check, CheckCircle2, Copy, CreditCard, ImageIcon, KeyRound, MailCheck, Pencil, QrCode, RefreshCw, RotateCcw, Trash2, UserCheck, UserPlus, XCircle } from 'lucide-react';
+import { AlertTriangle, Calendar, Check, CheckCircle2, Copy, CreditCard, ImageIcon, KeyRound, Lock, MailCheck, Pencil, QrCode, RefreshCw, Search, Sparkles, Trash2, UserCheck, UserPlus, XCircle } from 'lucide-react';
 import OrganizerLayout from '../../components/organizer/OrganizerLayout';
 import Modal from '../../components/ui/Modal';
+import Select from '../../components/ui/Select';
+import AdminNavLinks from '../../components/admin/AdminNavLinks';
 import AccountTypeCard from '../../components/ui/AccountTypeCard';
 import ImageDropzone from '../../components/ui/ImageDropzone';
 import FormField, { inputClass, textareaClass } from '../../components/ui/FormField';
@@ -12,6 +14,9 @@ import { useToast } from '../../context/ToastContext';
 import { supabase } from '../../lib/supabaseClient';
 import { daysLeftLabel, generatePassword } from '../../utils/tempAccess';
 import {
+  adminOverrideEventDates,
+  adminSearchEvents,
+  adminUpgradeApprovedEventPlan,
   deleteSubscriptionRequest,
   getAppSettings,
   getEventMediaUrl,
@@ -19,9 +24,10 @@ import {
   listSubscriptionRequests,
   rejectSubscriptionRequest,
   reopenSubscriptionRequest,
+  updateSubscriptionRequestPlan,
   uploadPaymentQr,
 } from '../../data/eventsApi';
-import { PLAN_LIMITS } from '../../data/plans';
+import { PAID_PLAN_ORDER, PLAN_LIMITS } from '../../data/plans';
 
 function PaymentQrCard() {
   const { pushToast } = useToast();
@@ -113,11 +119,20 @@ function ActivationChecklist({ result }) {
   );
 }
 
-const SUBSCRIPTION_STATUS_STYLES = {
-  pending: 'bg-amber-100 text-amber-800',
-  approved: 'bg-brand-100 text-brand-700',
-  rejected: 'bg-rose-100 text-rose-600',
+// Same three colors the old static badge used, now applied to the Status
+// select itself so each row is still scannable at a glance.
+const STATUS_SELECT_STYLES = {
+  pending: 'border-amber-200 bg-amber-50 text-amber-800',
+  approved: 'border-brand-200 bg-brand-50 text-brand-700',
+  rejected: 'border-rose-200 bg-rose-50 text-rose-700',
 };
+
+// A one-off compact select style, not FormField's inputClass (py-2.5,
+// text-sm) — stacking conflicting size utilities on top of it would leave
+// the winner up to Tailwind's generated rule order rather than this
+// component's intent, so this table's dropdowns get their own small class.
+const PLAN_SELECT_CLASS =
+  'w-full rounded-xl border border-ink-200 bg-white px-3 py-1.5 text-xs font-semibold text-ink-800 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 disabled:opacity-60';
 
 function RejectRequestModal({ request, onClose, onRejected }) {
   const { pushToast } = useToast();
@@ -158,6 +173,11 @@ function RejectRequestModal({ request, onClose, onRejected }) {
   );
 }
 
+// screenshot_path for a row created by adminUpgradeApprovedEventPlan() —
+// there's no real uploaded file behind this shortcut, so the screenshot
+// icon shows disabled/greyed instead of trying to fetch a nonexistent one.
+const ADMIN_MANUAL_SCREENSHOT = 'admin-manual-upgrade';
+
 function SubscriptionRequestsList() {
   const location = useLocation();
   const { approveSubscriptionRequest } = useAuth();
@@ -166,8 +186,11 @@ function SubscriptionRequestsList() {
   const [requests, setRequests] = useState(null);
   const [approvingId, setApprovingId] = useState(null);
   const [busyId, setBusyId] = useState(null);
+  const [planSavingId, setPlanSavingId] = useState(null);
   const [activations, setActivations] = useState({});
   const [rejecting, setRejecting] = useState(null);
+  const [upgrading, setUpgrading] = useState(null); // the approved request being moved to a different plan
+  const [screenshotPreview, setScreenshotPreview] = useState(null); // { url, email }
 
   const reload = () => {
     listSubscriptionRequests()
@@ -187,9 +210,10 @@ function SubscriptionRequestsList() {
   }, [requests, location.hash]);
 
   const handleViewScreenshot = async (request) => {
+    if (request.screenshot_path === ADMIN_MANUAL_SCREENSHOT) return;
     try {
       const url = await getSubscriptionProofUrl(request.screenshot_path);
-      window.open(url, '_blank', 'noopener');
+      setScreenshotPreview({ url, email: request.email });
     } catch (e) {
       pushToast(e.message, 'error');
     }
@@ -241,6 +265,48 @@ function SubscriptionRequestsList() {
     }
   };
 
+  const handlePlanChange = async (request, nextPlan) => {
+    if (nextPlan === request.plan) return;
+    setPlanSavingId(request.id);
+    try {
+      const updated = await updateSubscriptionRequestPlan(request.id, nextPlan);
+      setRequests((prev) => prev.map((r) => (r.id === updated.id ? updated : r)));
+      pushToast(`Plan updated to ${PLAN_LIMITS[nextPlan]?.label ?? nextPlan}`, 'success');
+    } catch (e) {
+      pushToast(e.message, 'error');
+    } finally {
+      setPlanSavingId(null);
+    }
+  };
+
+  // The Status column is a dropdown, but "Approved" and "Rejected" aren't
+  // plain field writes — approving runs a server-side activation (creates/
+  // upgrades the event, can't be undone) and rejecting wants an optional
+  // note — so picking either of those re-runs the exact same flows the old
+  // Approve/Reject/Reopen buttons did, just from onChange instead of
+  // onClick. A native <select> is controlled by request.status, so if the
+  // confirm dialog or the reject modal is cancelled, the dropdown simply
+  // re-renders back to its real (unchanged) value on its own.
+  const handleStatusChange = async (request, nextStatus) => {
+    if (nextStatus === request.status) return;
+    if (nextStatus === 'rejected') {
+      setRejecting(request);
+      return;
+    }
+    if (nextStatus === 'approved') {
+      const ok = await confirm({
+        title: `Approve ${request.email}'s ${PLAN_LIMITS[request.plan]?.label ?? request.plan} request?`,
+        confirmLabel: 'Approve',
+        message: "This creates or upgrades their event on this plan and emails them access — it can't be undone from here.",
+      });
+      if (!ok) return;
+      handleApprove(request);
+      return;
+    }
+    // nextStatus === 'pending', i.e. reopening a rejected request.
+    handleReopen(request);
+  };
+
   return (
     <div id="subscription-requests" className="scroll-mt-24 rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
       <div className="mb-4 flex items-center gap-2.5">
@@ -255,71 +321,114 @@ function SubscriptionRequestsList() {
       {requests === null && <p className="text-sm text-ink-400">Loading…</p>}
       {requests && requests.length === 0 && <p className="text-sm text-ink-400">No subscription requests yet.</p>}
       {requests && requests.length > 0 && (
-        <div className="flex flex-col divide-y divide-ink-100">
-          {requests.map((r) => (
-            <div key={r.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-1.5">
-                  <p className="text-sm font-semibold text-ink-900">{r.email}</p>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${SUBSCRIPTION_STATUS_STYLES[r.status]}`}>{r.status}</span>
-                </div>
-                <p className="text-xs text-ink-500">
-                  <strong className="font-semibold text-ink-700">
-                    {PLAN_LIMITS[r.plan]?.label ?? r.plan} · ₱{Number(r.amount ?? PLAN_LIMITS[r.plan]?.price ?? 0).toLocaleString('en-PH')}
-                  </strong>{' '}
-                  · {requestTarget(r)} · submitted {new Date(r.created_at).toLocaleDateString()}
-                  {r.admin_note ? ` · "${r.admin_note}"` : ''}
-                </p>
-                {activations[r.id] && <ActivationChecklist result={activations[r.id]} />}
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => handleViewScreenshot(r)}
-                  className="flex items-center gap-1.5 rounded-full border border-ink-200 px-3 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-50"
-                >
-                  <ImageIcon size={13} /> View screenshot
-                </button>
-                {r.status === 'pending' && (
-                  <>
-                    <button
-                      onClick={() => handleApprove(r)}
-                      disabled={approvingId === r.id}
-                      className="flex items-center gap-1.5 rounded-full bg-brand-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-brand-700 disabled:opacity-60"
-                    >
-                      <Check size={13} /> {approvingId === r.id ? 'Approving…' : 'Approve'}
-                    </button>
-                    <button
-                      onClick={() => setRejecting(r)}
-                      className="flex items-center gap-1.5 rounded-full border border-rose-200 px-3 py-1.5 text-xs font-bold text-rose-600 transition hover:bg-rose-50"
-                    >
-                      <XCircle size={13} /> Reject
-                    </button>
-                  </>
-                )}
-                {r.status === 'rejected' && (
-                  <button
-                    onClick={() => handleReopen(r)}
-                    disabled={busyId === r.id}
-                    title="Move back to pending so it can be approved"
-                    className="flex items-center gap-1.5 rounded-full border border-ink-200 px-3 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-50 disabled:opacity-60"
-                  >
-                    <RotateCcw size={13} /> Reopen
-                  </button>
-                )}
-                {r.status !== 'approved' && (
-                  <button
-                    onClick={() => handleDelete(r)}
-                    disabled={busyId === r.id}
-                    title="Delete request"
-                    aria-label="Delete request"
-                    className="flex h-8 w-8 items-center justify-center rounded-full border border-ink-200 text-rose-500 transition hover:bg-rose-50 disabled:opacity-60"
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[880px] text-sm">
+            <thead>
+              <tr className="border-b border-ink-100 text-[11px] font-bold uppercase tracking-wide text-ink-400">
+                <th className="px-4 py-2.5 text-left">User</th>
+                <th className="px-4 py-2.5 text-left">Plan</th>
+                <th className="px-4 py-2.5 text-left">Status</th>
+                <th className="px-4 py-2.5 text-left">Details</th>
+                <th className="px-4 py-2.5 text-left">Submitted</th>
+                <th className="px-4 py-2.5 text-left">Screenshot</th>
+                <th className="px-4 py-2.5 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {requests.map((r) => {
+                const isApproved = r.status === 'approved';
+                const isBusy = approvingId === r.id || busyId === r.id;
+                return (
+                  <tr key={r.id} className="border-b border-ink-50 align-top">
+                    <td className="px-4 py-3">
+                      <p className="font-semibold text-ink-900">{r.email}</p>
+                    </td>
+                    <td className="px-4 py-3">
+                      {isApproved && !r.event_id ? (
+                        <p className="font-semibold text-ink-700" title="No event was ever linked to this approval — there's nothing to move to a different plan.">
+                          {PLAN_LIMITS[r.plan]?.label ?? r.plan}
+                        </p>
+                      ) : (
+                        <Select
+                          value={r.plan}
+                          disabled={planSavingId === r.id}
+                          onChange={(e) => (isApproved ? setUpgrading({ request: r, newPlan: e.target.value }) : handlePlanChange(r, e.target.value))}
+                          className={PLAN_SELECT_CLASS}
+                          dense
+                          title={isApproved ? "Moves the event to a different plan — a new approved row records it, this one stays as-is." : undefined}
+                        >
+                          {PAID_PLAN_ORDER.map((plan) => (
+                            <option key={plan} value={plan}>
+                              {PLAN_LIMITS[plan].label}
+                            </option>
+                          ))}
+                        </Select>
+                      )}
+                      <p className="mt-1 text-[11px] text-ink-400">
+                        ₱{Number(r.amount ?? PLAN_LIMITS[r.plan]?.price ?? 0).toLocaleString('en-PH')}
+                      </p>
+                    </td>
+                    <td className="px-4 py-3">
+                      <Select
+                        value={r.status}
+                        disabled={isApproved || isBusy}
+                        onChange={(e) => handleStatusChange(r, e.target.value)}
+                        className={`rounded-full border px-2.5 py-1 text-[11px] font-bold capitalize disabled:opacity-70 ${STATUS_SELECT_STYLES[r.status]}`}
+                        dense
+                        title={isApproved ? "Approved requests can't be changed — they're the record of what was paid." : undefined}
+                      >
+                        {r.status === 'pending' && (
+                          <>
+                            <option value="pending">Pending</option>
+                            <option value="approved">Approved</option>
+                            <option value="rejected">Rejected</option>
+                          </>
+                        )}
+                        {r.status === 'rejected' && (
+                          <>
+                            <option value="rejected">Rejected</option>
+                            <option value="pending">Pending</option>
+                          </>
+                        )}
+                        {isApproved && <option value="approved">Approved</option>}
+                      </Select>
+                      {isBusy && <p className="mt-1 text-[11px] text-ink-400">Working…</p>}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-ink-500">
+                      {requestTarget(r)}
+                      {r.admin_note ? ` · "${r.admin_note}"` : ''}
+                      {activations[r.id] && <ActivationChecklist result={activations[r.id]} />}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-ink-500">{new Date(r.created_at).toLocaleDateString()}</td>
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={() => handleViewScreenshot(r)}
+                        disabled={r.screenshot_path === ADMIN_MANUAL_SCREENSHOT}
+                        title={r.screenshot_path === ADMIN_MANUAL_SCREENSHOT ? 'No screenshot — entered by admin directly' : 'View payment screenshot'}
+                        aria-label="View payment screenshot"
+                        className="flex h-8 w-8 items-center justify-center rounded-full border border-ink-200 text-ink-600 transition hover:bg-ink-50 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white"
+                      >
+                        <ImageIcon size={14} />
+                      </button>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      {!isApproved && (
+                        <button
+                          onClick={() => handleDelete(r)}
+                          disabled={busyId === r.id}
+                          title="Delete request"
+                          aria-label="Delete request"
+                          className="ml-auto flex h-8 w-8 items-center justify-center rounded-full border border-ink-200 text-rose-500 transition hover:bg-rose-50 disabled:opacity-60"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -332,6 +441,328 @@ function SubscriptionRequestsList() {
             setRejecting(null);
           }}
         />
+      )}
+
+      {upgrading && (
+        <UpgradeApprovedPlanModal
+          request={upgrading.request}
+          initialPlan={upgrading.newPlan}
+          onClose={() => setUpgrading(null)}
+          onUpgraded={() => {
+            setUpgrading(null);
+            reload();
+          }}
+        />
+      )}
+
+      {screenshotPreview && (
+        <Modal open onClose={() => setScreenshotPreview(null)} title="Payment screenshot" icon={ImageIcon}>
+          <p className="mb-3 text-xs text-ink-500">{screenshotPreview.email}</p>
+          <img src={screenshotPreview.url} alt="Payment screenshot" className="max-h-[70vh] w-full rounded-xl border border-ink-100 object-contain" />
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// The confirmation for changing an APPROVED request's plan — richer than
+// the generic useConfirm() one-liner, since the admin needs to see the real
+// price change and can adjust what actually got collected (often a top-up
+// difference, not the new plan's full sticker price) before it's recorded.
+function UpgradeApprovedPlanModal({ request, initialPlan, onClose, onUpgraded }) {
+  const { pushToast } = useToast();
+  const currentPlan = request.plan;
+  const [newPlan, setNewPlan] = useState(initialPlan);
+  const currentPrice = PLAN_LIMITS[currentPlan]?.price ?? 0;
+  const newPrice = PLAN_LIMITS[newPlan]?.price ?? 0;
+  const [amount, setAmount] = useState(Math.max(0, newPrice - currentPrice));
+  const [note, setNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const isDowngrade = newPrice < currentPrice;
+
+  const handlePlanPick = (plan) => {
+    setNewPlan(plan);
+    setAmount(Math.max(0, (PLAN_LIMITS[plan]?.price ?? 0) - currentPrice));
+  };
+
+  const handleConfirm = async (e) => {
+    e.preventDefault();
+    setSubmitting(true);
+    try {
+      await adminUpgradeApprovedEventPlan(request.id, { newPlan, amount, note: note.trim() || null });
+      pushToast(`${request.email}'s event moved to ${PLAN_LIMITS[newPlan]?.label ?? newPlan}`, 'success');
+      onUpgraded();
+    } catch (err) {
+      pushToast(err.message, 'error');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal open onClose={onClose} title={isDowngrade ? 'Downgrade plan' : 'Upgrade plan'} icon={Sparkles}>
+      <form onSubmit={handleConfirm} className="flex flex-col gap-4">
+        <p className="text-sm text-ink-600">
+          <strong className="text-ink-800">{request.email}</strong>'s event {requestTarget(request)}
+        </p>
+        <FormField label="New plan">
+          <Select value={newPlan} onChange={(e) => handlePlanPick(e.target.value)} className={inputClass}>
+            {PAID_PLAN_ORDER.filter((p) => p !== currentPlan).map((plan) => (
+              <option key={plan} value={plan}>
+                {PLAN_LIMITS[plan].label}
+              </option>
+            ))}
+          </Select>
+        </FormField>
+        <div className="rounded-xl bg-ink-50 p-4 text-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-ink-500">Current</span>
+            <span className="font-semibold text-ink-800">
+              {PLAN_LIMITS[currentPlan]?.label} · ₱{currentPrice.toLocaleString('en-PH')}
+            </span>
+          </div>
+          <div className="mt-1 flex items-center justify-between">
+            <span className="text-ink-500">New</span>
+            <span className={`font-semibold ${isDowngrade ? 'text-amber-700' : 'text-brand-700'}`}>
+              {PLAN_LIMITS[newPlan]?.label} · ₱{newPrice.toLocaleString('en-PH')}
+            </span>
+          </div>
+        </div>
+        <FormField label="Amount to record" hint="Prefilled with the price difference — edit to match what was actually collected.">
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            value={amount}
+            onChange={(e) => setAmount(e.target.value === '' ? 0 : Number(e.target.value))}
+            className={inputClass}
+          />
+        </FormField>
+        <FormField label="Note" hint="Optional">
+          <textarea value={note} onChange={(e) => setNote(e.target.value)} className={textareaClass} placeholder="e.g. Organizer requested by phone, paid the difference via GCash." />
+        </FormField>
+        <button
+          type="submit"
+          disabled={submitting}
+          className="rounded-xl bg-brand-600 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-60"
+        >
+          {submitting ? 'Saving…' : `Confirm ${isDowngrade ? 'downgrade' : 'upgrade'}`}
+        </button>
+      </form>
+    </Modal>
+  );
+}
+
+// Mirrors the DB check constraint on events.status (schema.sql:133) and the
+// same list EventEditorPage.jsx uses — not shared from there since that's an
+// organizer-facing page and this one lives entirely in the admin area.
+const EVENT_STATUS_OPTIONS = ['upcoming', 'ongoing', 'finished', 'cancelled', 'rescheduled'];
+
+// A compact input/select style for this table's date and status cells — not
+// FormField's inputClass (py-2.5, text-sm): see PLAN_SELECT_CLASS above for
+// why stacking conflicting size utilities on top of it isn't safe.
+const DENSE_FIELD_CLASS =
+  'w-full rounded-xl border border-ink-200 bg-white px-3 py-1.5 text-xs font-semibold text-ink-800 outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100';
+
+// The product-owner path for updating any event's dates/status on the
+// organizer's behalf (see "EVENT OVERRIDE" in schema.sql) — most often an
+// event past the 48h freeze that organizers are held to, but also a plain
+// reschedule an organizer has simply asked for before it ever locks. Search
+// finds any event by name or organizer email; left blank, it shows the
+// locked-events default. Saving always asks for confirmation first, since
+// this is meant for a genuine request/mistake, not routine editing.
+function LockedEventsCard() {
+  const { pushToast } = useToast();
+  const confirm = useConfirm();
+  const [query, setQuery] = useState('');
+  const [events, setEvents] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+  const [edits, setEdits] = useState({}); // event id -> { start_date?, end_date?, status? }
+  const [savingId, setSavingId] = useState(null);
+
+  const reload = (q = query) => {
+    adminSearchEvents(q)
+      .then((rows) => {
+        setEvents(rows);
+        setLoadError(null);
+      })
+      .catch((e) => {
+        setLoadError(e.message);
+        pushToast(e.message, 'error');
+      });
+  };
+
+  useEffect(reload, []);
+
+  const handleSearchSubmit = (e) => {
+    e.preventDefault();
+    setEvents(null);
+    reload(query);
+  };
+
+  const fieldValue = (ev, key) => (edits[ev.id]?.[key] !== undefined ? edits[ev.id][key] : (ev[key] ?? ''));
+
+  const setFieldValue = (ev, key, value) => {
+    setEdits((prev) => ({ ...prev, [ev.id]: { ...prev[ev.id], [key]: value } }));
+  };
+
+  const isDirty = (ev) => Boolean(edits[ev.id]);
+
+  const handleSave = async (ev) => {
+    const ok = await confirm({
+      title: `Update "${ev.name}"'s dates/status?`,
+      message: ev.is_locked
+        ? "This event is past the normal 48-hour lock organizers are held to — this bypasses it. Only use it for a genuine reschedule request or mistake."
+        : "This changes the event's dates/status directly, on the organizer's behalf.",
+      confirmLabel: 'Save',
+    });
+    if (!ok) return;
+    setSavingId(ev.id);
+    try {
+      const updated = await adminOverrideEventDates(ev.id, {
+        startDate: fieldValue(ev, 'start_date') || null,
+        endDate: fieldValue(ev, 'end_date') || null,
+        status: fieldValue(ev, 'status'),
+      });
+      setEvents((prev) => prev.map((e) => (e.id === ev.id ? { ...e, ...updated } : e)));
+      setEdits((prev) => {
+        const next = { ...prev };
+        delete next[ev.id];
+        return next;
+      });
+      pushToast(`"${ev.name}" overridden`, 'success');
+    } catch (e) {
+      pushToast(e.message, 'error');
+    } finally {
+      setSavingId(null);
+    }
+  };
+
+  return (
+    <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex items-center gap-2.5">
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+          <Lock size={17} strokeWidth={2.3} />
+        </span>
+        <div>
+          <h2 className="font-display text-base font-bold text-ink-900">Event overrides</h2>
+          <p className="text-xs text-ink-500">
+            Update any event's dates or status on the organizer's behalf — e.g. a reschedule they asked you to make. Locked events (48h+ past their
+            end date, which organizers can no longer change themselves) are listed below by default.
+          </p>
+        </div>
+      </div>
+      <form onSubmit={handleSearchSubmit} className="mb-4 flex items-center gap-2">
+        <div className="relative flex-1">
+          <Search size={13} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-ink-400" />
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search any event by name or organizer email…"
+            className={`${inputClass} pl-8`}
+          />
+        </div>
+        <button type="submit" className="rounded-xl border border-ink-200 px-4 py-2.5 text-sm font-bold text-ink-700 transition hover:bg-ink-50">
+          Search
+        </button>
+        {query && (
+          <button
+            type="button"
+            onClick={() => {
+              setQuery('');
+              setEvents(null);
+              reload('');
+            }}
+            className="text-xs font-semibold text-ink-400 hover:text-ink-600"
+          >
+            Clear
+          </button>
+        )}
+      </form>
+      {events === null && !loadError && <p className="text-sm text-ink-400">Loading…</p>}
+      {loadError && (
+        <div className="flex items-center justify-between gap-3 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <span>Couldn't load events — {loadError}</span>
+          <button onClick={() => reload()} className="shrink-0 rounded-full border border-rose-200 px-3 py-1 text-xs font-bold hover:bg-rose-100">
+            Retry
+          </button>
+        </div>
+      )}
+      {events && events.length === 0 && (
+        <p className="text-sm text-ink-400">{query ? `No events match "${query}".` : 'No locked events right now.'}</p>
+      )}
+      {events && events.length > 0 && (
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[820px] text-sm">
+            <thead>
+              <tr className="border-b border-ink-100 text-[11px] font-bold uppercase tracking-wide text-ink-400">
+                <th className="px-4 py-2.5 text-left">Event</th>
+                <th className="px-4 py-2.5 text-left">Organizer</th>
+                <th className="px-4 py-2.5 text-left">Start date</th>
+                <th className="px-4 py-2.5 text-left">End date</th>
+                <th className="px-4 py-2.5 text-left">Status</th>
+                <th className="px-4 py-2.5 text-right">Override</th>
+              </tr>
+            </thead>
+            <tbody>
+              {events.map((ev) => (
+                <tr key={ev.id} className="border-b border-ink-50 align-top">
+                  <td className="px-4 py-3">
+                    <div className="flex items-center gap-1.5">
+                      <p className="font-semibold text-ink-900">{ev.name}</p>
+                      {ev.is_locked && (
+                        <span className="flex items-center gap-0.5 rounded-full bg-rose-50 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-rose-600">
+                          <Lock size={9} /> Locked
+                        </span>
+                      )}
+                    </div>
+                    {ev.auto_finished_at && <p className="text-[11px] text-ink-400">Auto-finished {new Date(ev.auto_finished_at).toLocaleDateString()}</p>}
+                  </td>
+                  <td className="px-4 py-3 text-xs text-ink-500">{ev.organizer_email}</td>
+                  <td className="px-4 py-3">
+                    <input
+                      type="date"
+                      value={fieldValue(ev, 'start_date')}
+                      onChange={(e) => setFieldValue(ev, 'start_date', e.target.value)}
+                      className={DENSE_FIELD_CLASS}
+                    />
+                  </td>
+                  <td className="px-4 py-3">
+                    <input
+                      type="date"
+                      value={fieldValue(ev, 'end_date')}
+                      onChange={(e) => setFieldValue(ev, 'end_date', e.target.value)}
+                      className={DENSE_FIELD_CLASS}
+                    />
+                  </td>
+                  <td className="px-4 py-3">
+                    <Select
+                      value={fieldValue(ev, 'status')}
+                      onChange={(e) => setFieldValue(ev, 'status', e.target.value)}
+                      className={DENSE_FIELD_CLASS}
+                      dense
+                    >
+                      {EVENT_STATUS_OPTIONS.map((s) => (
+                        <option key={s} value={s}>
+                          {s[0].toUpperCase() + s.slice(1)}
+                        </option>
+                      ))}
+                    </Select>
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    <button
+                      onClick={() => handleSave(ev)}
+                      disabled={!isDirty(ev) || savingId === ev.id}
+                      className="ml-auto flex items-center gap-1.5 rounded-full bg-brand-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-brand-700 disabled:opacity-40"
+                    >
+                      <Calendar size={13} /> {savingId === ev.id ? 'Saving…' : 'Save'}
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
@@ -661,6 +1092,7 @@ export default function AdminCustomersPage() {
       <div className="mb-4">
         <AccountTypeCard accountType={accountType} />
       </div>
+      <AdminNavLinks />
       <div className="mb-6">
         <h1 className="font-display text-2xl font-bold text-ink-900">Customer logins</h1>
         <p className="text-sm text-ink-500">Issue temporary trial access for customers testing DinkManager.</p>
@@ -668,6 +1100,7 @@ export default function AdminCustomersPage() {
       <div className="flex flex-col gap-5">
         <PaymentQrCard />
         <SubscriptionRequestsList />
+        <LockedEventsCard />
         <CreateTrialCard onCreated={() => setRefreshKey((k) => k + 1)} />
         <CustomersList refreshKey={refreshKey} />
       </div>

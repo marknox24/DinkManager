@@ -29,6 +29,8 @@ const PlayerDashboardPage = lazy(() => import('./pages/player/PlayerDashboardPag
 const AccountSettingsPage = lazy(() => import('./pages/account/AccountSettingsPage'));
 const AdminCustomersPage = lazy(() => import('./pages/admin/AdminCustomersPage'));
 const AdminDashboardPage = lazy(() => import('./pages/admin/AdminDashboardPage'));
+const AdminSupportRequestsPage = lazy(() => import('./pages/admin/AdminSupportRequestsPage'));
+const AdminRequestDetailPage = lazy(() => import('./pages/admin/AdminRequestDetailPage'));
 const DashboardPage = lazy(() => import('./pages/organizer/DashboardPage'));
 const EventEditorPage = lazy(() => import('./pages/organizer/EventEditorPage'));
 const OverviewPage = lazy(() => import('./pages/organizer/event/OverviewPage'));
@@ -98,6 +100,22 @@ function AppRoutes() {
           element={
             <Protected requireAdmin>
               <AdminCustomersPage />
+            </Protected>
+          }
+        />
+        <Route
+          path="/admin/support-requests"
+          element={
+            <Protected requireAdmin>
+              <AdminSupportRequestsPage />
+            </Protected>
+          }
+        />
+        <Route
+          path="/admin/support-requests/:requestId"
+          element={
+            <Protected requireAdmin>
+              <AdminRequestDetailPage />
             </Protected>
           }
         />

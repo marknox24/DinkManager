@@ -14,7 +14,9 @@ import {
   ImagePlus,
   Contact as ContactIcon,
   ListChecks,
+  Lock,
   MapPin,
+  MessageCircleQuestion,
   Plus,
   QrCode,
   Sparkles,
@@ -48,6 +50,9 @@ import RegistrationFieldEditor from '../../components/organizer/RegistrationFiel
 import ContactsEditor from '../../components/organizer/ContactsEditor';
 import FormField, { inputClass, textareaClass } from '../../components/ui/FormField';
 import Select from '../../components/ui/Select';
+import RequestDateChangeModal from '../../components/organizer/RequestDateChangeModal';
+import ContactAdminModal from '../../components/organizer/ContactAdminModal';
+import { formatDateRange } from '../../utils/format';
 import ImageDropzone from '../../components/ui/ImageDropzone';
 import AccordionItem from '../../components/ui/Accordion';
 import FaqEditor from '../../components/organizer/FaqEditor';
@@ -95,7 +100,7 @@ export default function EventEditorPage() {
   const navigate = useNavigate();
   const { pushToast } = useToast();
   const confirm = useConfirm();
-  const { user } = useAuth();
+  const { user, isAdmin } = useAuth();
 
   const [event, setEvent] = useState(null);
   const [categories, setCategories] = useState([]);
@@ -110,6 +115,12 @@ export default function EventEditorPage() {
   const [step, setStep] = useState(0);
   const [uploadingCover, setUploadingCover] = useState(false);
   const [uploadingQr, setUploadingQr] = useState(false);
+  // Read once at mount rather than calling Date.now() directly in the render
+  // body — this only needs to reflect "now" as of whenever the page loaded/
+  // last re-rendered from real data changes, not tick live.
+  const [now] = useState(() => Date.now());
+  const [requestChangeOpen, setRequestChangeOpen] = useState(false);
+  const [contactAdminOpen, setContactAdminOpen] = useState(false);
 
   // Shared by every plan-limit block point in this page (categories, courts)
   // — offers "Upgrade Event" (navigates to this event's Settings page and
@@ -323,6 +334,19 @@ export default function EventEditorPage() {
     pushToast('Public link copied', 'success');
   };
 
+  // Mirrors events_update_owner's with check in schema.sql: 48h after
+  // end_date, the database refuses to change start_date/end_date/status for
+  // an organizer/staff update, so this is a UI convenience (disable +
+  // explain) rather than the actual enforcement — the exact cutoff the
+  // server computes may differ by a few hours from this client-side
+  // estimate (end_date has no time component), but a save attempt right at
+  // that boundary would still be safely rejected server-side either way.
+  // The product owner is never locked out here — is_admin_user() is a full
+  // escape from that same with check, on any event they can already open —
+  // so this stays false whenever isAdmin is true, whether it's their own
+  // event or one they're helping an organizer with.
+  const datesLocked = !isAdmin && Boolean(event?.end_date && now > new Date(event.end_date).getTime() + 48 * 60 * 60 * 1000);
+
   if (!event) {
     return (
       <OrganizerLayout backTo="/dashboard" backLabel="Dashboard">
@@ -422,15 +446,17 @@ export default function EventEditorPage() {
                 <FormField label="Tournament name" className="sm:col-span-2">
                   <input defaultValue={event.name} onBlur={(e) => saveField({ name: e.target.value })} className={inputClass} />
                 </FormField>
-                <FormField label="Status">
-                  <Select value={event.status} onChange={(e) => saveField({ status: e.target.value })} className={inputClass}>
-                    {STATUS_OPTIONS.map((s) => (
-                      <option key={s} value={s}>
-                        {s[0].toUpperCase() + s.slice(1)}
-                      </option>
-                    ))}
-                  </Select>
-                </FormField>
+                {!datesLocked && (
+                  <FormField label="Status">
+                    <Select value={event.status} onChange={(e) => saveField({ status: e.target.value })} className={inputClass}>
+                      {STATUS_OPTIONS.map((s) => (
+                        <option key={s} value={s}>
+                          {s[0].toUpperCase() + s.slice(1)}
+                        </option>
+                      ))}
+                    </Select>
+                  </FormField>
+                )}
                 <FormField
                   label="Plan"
                   hint={
@@ -462,12 +488,49 @@ export default function EventEditorPage() {
                     className={inputClass}
                   />
                 </FormField>
-                <FormField label="Start date">
-                  <input type="date" value={event.start_date || ''} onChange={(e) => saveField({ start_date: e.target.value })} className={inputClass} />
-                </FormField>
-                <FormField label="End date">
-                  <input type="date" value={event.end_date || ''} onChange={(e) => saveField({ end_date: e.target.value })} className={inputClass} />
-                </FormField>
+                {datesLocked ? (
+                  <div className="sm:col-span-2 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                    <div className="flex items-start gap-3">
+                      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+                        <Lock size={16} strokeWidth={2.3} />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-bold uppercase tracking-wide text-amber-700">Event dates</div>
+                        <div className="mt-0.5 font-display text-base font-bold text-ink-900">{formatDateRange(event.start_date, event.end_date)}</div>
+                        <div className="mt-1 flex items-center gap-1.5 text-xs font-bold text-amber-800">
+                          <Lock size={11} /> Dates frozen
+                        </div>
+                        <p className="mt-2 text-sm text-amber-900">
+                          Your event dates and status are locked to protect player registrations, tournament schedules and event information. This
+                          happens automatically 48 hours after an event's listed end date.
+                        </p>
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          <button
+                            onClick={() => setRequestChangeOpen(true)}
+                            className="rounded-full bg-amber-600 px-3.5 py-1.5 text-xs font-bold text-white transition hover:bg-amber-700"
+                          >
+                            Request a Date Change
+                          </button>
+                          <button
+                            onClick={() => setContactAdminOpen(true)}
+                            className="flex items-center gap-1 rounded-full border border-amber-300 px-3.5 py-1.5 text-xs font-bold text-amber-800 transition hover:bg-amber-100"
+                          >
+                            <MessageCircleQuestion size={12} /> Contact Admin
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <FormField label="Start date">
+                      <input type="date" value={event.start_date || ''} onChange={(e) => saveField({ start_date: e.target.value })} className={inputClass} />
+                    </FormField>
+                    <FormField label="End date">
+                      <input type="date" value={event.end_date || ''} onChange={(e) => saveField({ end_date: e.target.value })} className={inputClass} />
+                    </FormField>
+                  </>
+                )}
                 <FormField label="Registration opens" hint="Optional — shown to players on the public page.">
                   <input
                     type="date"
@@ -826,6 +889,9 @@ export default function EventEditorPage() {
       </div>
 
       {user && <HintsTour steps={TOUR_STEPS} storageKey={`dm_event_editor_tour_seen_${user.id}`} />}
+
+      {requestChangeOpen && <RequestDateChangeModal event={event} onClose={() => setRequestChangeOpen(false)} onSubmitted={() => setRequestChangeOpen(false)} />}
+      {contactAdminOpen && <ContactAdminModal event={event} onClose={() => setContactAdminOpen(false)} onSubmitted={() => setContactAdminOpen(false)} />}
     </OrganizerLayout>
   );
 }

@@ -220,6 +220,14 @@ alter table events add column if not exists entitlement_csv_import boolean;
 alter table events add column if not exists plan_activated_at timestamptz;
 alter table events add column if not exists plan_payment_id uuid;
 
+-- Set only by lock_ended_events() below, when it auto-finishes an event
+-- 48h past its end_date — records THAT it did, so admin_override_event_dates
+-- can tell "the system finished this because nobody did" apart from "an
+-- organizer/admin deliberately marked this finished", and clear it again
+-- when an admin reopens the event (otherwise the next hourly run would
+-- immediately re-finish it and silently undo the override).
+alter table events add column if not exists auto_finished_at timestamptz;
+
 -- ----------------------------------------------------------------------------
 -- EVENT STAFF  ("table committee" helper accounts, invited by the organizer
 -- and scoped to one event each with their own per-feature on/off toggles —
@@ -399,6 +407,29 @@ create policy "events_update_owner" on events for update
     and entitlement_csv_import is not distinct from (select e2.entitlement_csv_import from events e2 where e2.id = events.id)
     and plan_activated_at is not distinct from (select e2.plan_activated_at from events e2 where e2.id = events.id)
     and plan_payment_id is not distinct from (select e2.plan_payment_id from events e2 where e2.id = events.id)
+    -- 48h grace period after end_date, then start_date/end_date/status can
+    -- never move again for an organizer/staff update — closes the loophole
+    -- of editing dates or flipping status back out of 'finished' to reopen
+    -- brackets/matches/registrations indefinitely (those all lock on
+    -- status = 'finished', which is otherwise a plain, freely-reversible
+    -- field). is_admin_user() is a full escape from the freeze itself (not
+    -- from the `using` clause above) — the product owner is never locked
+    -- out of editing dates/status on an event they can already reach this
+    -- way (their own, or one they're staff on). For an event the admin
+    -- ISN'T the organizer/staff of, this policy's `using` clause still
+    -- doesn't let them touch the row at all — that's what the separate
+    -- admin_override_event_dates()/admin_search_events() RPCs below are
+    -- for, a security-definer path gated on is_admin_user() instead of RLS.
+    and (
+      is_admin_user()
+      or (select e2.end_date from events e2 where e2.id = events.id) is null
+      or now() <= (select e2.end_date from events e2 where e2.id = events.id)::timestamp + interval '48 hours'
+      or (
+        start_date is not distinct from (select e2.start_date from events e2 where e2.id = events.id)
+        and end_date is not distinct from (select e2.end_date from events e2 where e2.id = events.id)
+        and status is not distinct from (select e2.status from events e2 where e2.id = events.id)
+      )
+    )
   );
 
 drop policy if exists "events_delete_owner" on events;
@@ -1618,6 +1649,36 @@ select cron.unschedule('cleanup-expired-event-staff') where exists (select 1 fro
 select cron.schedule('cleanup-expired-event-staff', '0 * * * *', 'select cleanup_expired_event_staff();');
 
 -- ----------------------------------------------------------------------------
+-- AUTO-FINISH ENDED EVENTS
+-- categories/brackets/teams/matches/registrations all lock their own writes
+-- on events.status = 'finished' (see e.g. categories_write_owner, matches_
+-- owner_all below) — but nothing ever SET that automatically, and status
+-- was a plain, freely reversible field, so an organizer could toggle it
+-- back out of 'finished' at will and those locks meant nothing. This closes
+-- that gap: 48h after end_date, auto-finish the event (skipping anything
+-- already finished/cancelled), and events_update_owner's with check above
+-- then pins start_date/end_date/status for good. auto_finished_at records
+-- that THIS job did it, so admin_override_event_dates() can clear it again
+-- without the next hourly run silently re-finishing an event an admin just
+-- reopened.
+-- ----------------------------------------------------------------------------
+create or replace function lock_ended_events()
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update events
+  set status = 'finished', auto_finished_at = now()
+  where end_date is not null
+    and now() > end_date::timestamp + interval '48 hours'
+    and status not in ('finished', 'cancelled');
+$$;
+
+select cron.unschedule('lock-ended-events') where exists (select 1 from cron.job where jobname = 'lock-ended-events');
+select cron.schedule('lock-ended-events', '0 * * * *', 'select lock_ended_events();');
+
+-- ----------------------------------------------------------------------------
 -- EVENT PLAN TIERS  (one payment = one event = one plan entitlement — plan
 -- is scoped to the EVENT, never the organizer's account). Every event is
 -- created on 'free' and stays there until a plan-upgrade payment for THAT
@@ -2143,12 +2204,22 @@ create table if not exists admin_activity (
   created_at timestamptz not null default now()
 );
 
+-- Added for the request-engine/admin-override activity trail (below and in
+-- admin_override_event_dates()) — every earlier trigger-written row simply
+-- has these null, which is fine: they were never attributable to one actor
+-- the way a request/override action always is.
+alter table admin_activity add column if not exists actor_id uuid references auth.users(id) on delete set null;
+alter table admin_activity add column if not exists actor_email text;
+alter table admin_activity add column if not exists details jsonb;
+
 -- credit_granted: pre-activate_purchase approvals of website purchases
 -- (kept for those old rows); purchase_activated replaces it.
 alter table admin_activity drop constraint if exists admin_activity_kind_check;
 alter table admin_activity add constraint admin_activity_kind_check check (kind in (
   'payment_received', 'plan_upgraded', 'credit_granted', 'purchase_activated',
-  'event_duplicated', 'player_added', 'event_completed'
+  'event_duplicated', 'player_added', 'event_completed',
+  'change_request_submitted', 'change_request_message', 'change_request_info_requested',
+  'change_request_approved', 'change_request_rejected', 'admin_event_override'
 ));
 
 create index if not exists admin_activity_created_at_idx on admin_activity (created_at desc);
@@ -2386,6 +2457,544 @@ revoke execute on function admin_dashboard() from public, anon;
 grant execute on function admin_dashboard() to authenticated;
 
 -- ----------------------------------------------------------------------------
+-- EVENT OVERRIDE  (product-owner path for updating ANY event's dates/status
+-- on the organizer's behalf — a locked event past the 48h freeze above, or a
+-- perfectly ordinary one an organizer has simply asked to be rescheduled).
+-- Deliberately NOT implemented by loosening RLS on events, or by letting an
+-- admin into the organizer's own /events/:id/edit workspace — EventAccess-
+-- Context/EventRoute only ever check isOwner/event_staff, and widening that
+-- would light up every nav tab (brackets, registrations, accounting...) for
+-- an admin who should only ever touch a target event's dates/status. Instead:
+-- a narrow, admin-only surface (Admiral Dashboard's event override card)
+-- backed by these two functions. (An admin editing their OWN event, as its
+-- organizer, doesn't need this at all — events_update_owner's freeze clause
+-- above already lets is_admin_user() straight through on that path.)
+-- ----------------------------------------------------------------------------
+create or replace function admin_search_events(p_query text default '')
+returns table (
+  id uuid, name text, slug text, organizer_email text,
+  start_date date, end_date date, status text, auto_finished_at timestamptz, is_locked boolean
+)
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select e.id, e.name, e.slug, p.email, e.start_date, e.end_date, e.status, e.auto_finished_at,
+    (e.end_date is not null and now() > e.end_date::timestamp + interval '48 hours') as is_locked
+  from events e
+  join profiles p on p.id = e.organizer_id
+  where is_admin_user()
+    and (
+      -- Blank query: the previous default view, events already locked.
+      (trim(p_query) = '' and e.end_date is not null and now() > e.end_date::timestamp + interval '48 hours')
+      -- Non-blank query: any event at all, locked or not, matched by name
+      -- or organizer email — so a not-yet-ended event an organizer wants
+      -- rescheduled can still be found and edited before it ever locks.
+      or (trim(p_query) <> '' and (e.name ilike '%' || trim(p_query) || '%' or p.email ilike '%' || trim(p_query) || '%'))
+    )
+  order by e.end_date desc nulls last
+  limit 50;
+$$;
+
+revoke execute on function admin_search_events(text) from public, anon;
+grant execute on function admin_search_events(text) to authenticated;
+
+-- security definer so it bypasses events_update_owner's freeze entirely;
+-- is_admin_user() here is the real access control, not the table's RLS.
+-- Clears auto_finished_at unless the admin is keeping status = 'finished',
+-- so lock_ended_events()'s next hourly run won't immediately re-finish an
+-- event the admin just deliberately reopened.
+create or replace function admin_override_event_dates(p_event_id uuid, p_start_date date, p_end_date date, p_status text)
+returns events
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_before events;
+  v_event events;
+begin
+  if not is_admin_user() then
+    raise exception 'Admin access required' using errcode = '42501';
+  end if;
+  if p_status not in ('upcoming', 'ongoing', 'finished', 'cancelled', 'rescheduled') then
+    raise exception 'Invalid status: %', p_status;
+  end if;
+
+  select * into v_before from events where id = p_event_id;
+  if v_before.id is null then
+    raise exception 'Event not found';
+  end if;
+
+  update events
+  set start_date = p_start_date,
+      end_date = p_end_date,
+      status = p_status,
+      auto_finished_at = case when p_status = 'finished' then auto_finished_at else null end
+  where id = p_event_id
+  returning * into v_event;
+
+  -- Every direct admin override gets its own activity row — previously this
+  -- RPC changed real data with no audit trail at all beyond the row's own
+  -- new values.
+  insert into admin_activity (kind, event_id, message, actor_id, actor_email, details)
+  values (
+    'admin_event_override',
+    p_event_id,
+    format('Admin overrode "%s": %s %s -> %s %s', v_event.name,
+      coalesce(v_before.start_date::text, '—'), coalesce(v_before.end_date::text, '—'),
+      coalesce(v_event.start_date::text, '—'), coalesce(v_event.end_date::text, '—')),
+    auth.uid(),
+    (select email from profiles where id = auth.uid()),
+    jsonb_build_object(
+      'before', jsonb_build_object('start_date', v_before.start_date, 'end_date', v_before.end_date, 'status', v_before.status),
+      'after', jsonb_build_object('start_date', v_event.start_date, 'end_date', v_event.end_date, 'status', v_event.status)
+    )
+  );
+
+  return v_event;
+end;
+$$;
+
+revoke execute on function admin_override_event_dates(uuid, date, date, text) from public, anon;
+grant execute on function admin_override_event_dates(uuid, date, date, text) to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- EVENT CHANGE REQUESTS  (Admin Control Center Phase 1 — the organizer-
+-- facing "Request a Change"/"Contact Admin" flow, and the admin's review
+-- queue. A request is filed by the event's organizer, carries a real
+-- conversation (event_change_request_messages), and its lifecycle is driven
+-- entirely by the RPCs below rather than raw client writes — the same
+-- reasoning as subscription_requests/activate_purchase(): state transitions
+-- here have side effects (an approved date change actually moves the
+-- event's dates, via admin_override_event_dates() above) that must never
+-- happen as a side-effect-free field flip.
+-- ----------------------------------------------------------------------------
+create table if not exists event_change_requests (
+  id uuid primary key default gen_random_uuid(),
+  request_number text unique not null,
+  organizer_id uuid not null references auth.users(id) on delete cascade,
+  -- Null for an account-level topic with no single event (billing,
+  -- technical, other) — every date-related type always carries one.
+  event_id uuid references events(id) on delete cascade,
+  request_type text not null check (request_type in (
+    'start_date', 'end_date', 'both_dates', 'extend_registration',
+    'event_info', 'plan_upgrade', 'billing', 'technical', 'other'
+  )),
+  status text not null default 'pending' check (status in (
+    'pending', 'under_review', 'waiting_for_organizer', 'approved', 'rejected', 'completed'
+  )),
+  priority text not null default 'normal' check (priority in ('low', 'normal', 'high', 'urgent')),
+  -- Snapshotted at submission time, so the request always shows what was
+  -- true when it was filed even if the event's dates move again later.
+  current_start_date date,
+  current_end_date date,
+  requested_start_date date,
+  requested_end_date date,
+  reason text not null,
+  additional_info text,
+  admin_resolution_note text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  resolved_at timestamptz
+);
+
+create index if not exists event_change_requests_organizer_idx on event_change_requests (organizer_id);
+create index if not exists event_change_requests_event_idx on event_change_requests (event_id);
+create index if not exists event_change_requests_status_idx on event_change_requests (status);
+
+create sequence if not exists event_change_request_seq;
+
+create or replace function set_change_request_number()
+returns trigger
+language plpgsql
+as $$
+begin
+  if new.request_number is null then
+    new.request_number := 'REQ-' || to_char(now(), 'YYYY') || '-' || lpad(nextval('event_change_request_seq')::text, 4, '0');
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists set_change_request_number_trigger on event_change_requests;
+create trigger set_change_request_number_trigger
+  before insert on event_change_requests
+  for each row execute function set_change_request_number();
+
+alter table event_change_requests enable row level security;
+
+drop policy if exists "event_change_requests_select" on event_change_requests;
+create policy "event_change_requests_select" on event_change_requests for select
+  using (organizer_id = auth.uid() or is_admin_user());
+
+-- The organizer's own insert exists for completeness/defense in depth — in
+-- practice every insert goes through submit_event_change_request() below,
+-- which also snapshots current_start_date/current_end_date and writes the
+-- first message + activity row, none of which a raw insert would do.
+drop policy if exists "event_change_requests_insert_owner" on event_change_requests;
+create policy "event_change_requests_insert_owner" on event_change_requests for insert
+  with check (organizer_id = auth.uid());
+
+-- No organizer update policy at all — every status transition is an admin
+-- action (or the organizer's admin_mark_request_under_review-adjacent reply,
+-- which only ever touches event_change_request_messages, never this table
+-- directly, except via add_change_request_message()'s security-definer path).
+drop policy if exists "event_change_requests_update_admin" on event_change_requests;
+create policy "event_change_requests_update_admin" on event_change_requests for update
+  using (is_admin_user())
+  with check (is_admin_user());
+
+create table if not exists event_change_request_messages (
+  id uuid primary key default gen_random_uuid(),
+  request_id uuid not null references event_change_requests(id) on delete cascade,
+  sender_id uuid not null references auth.users(id) on delete cascade,
+  sender_role text not null check (sender_role in ('organizer', 'admin')),
+  message text not null,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists event_change_request_messages_request_idx on event_change_request_messages (request_id, created_at);
+
+alter table event_change_request_messages enable row level security;
+
+drop policy if exists "event_change_request_messages_select" on event_change_request_messages;
+create policy "event_change_request_messages_select" on event_change_request_messages for select
+  using (
+    exists (
+      select 1 from event_change_requests r
+      where r.id = event_change_request_messages.request_id
+        and (r.organizer_id = auth.uid() or is_admin_user())
+    )
+  );
+
+-- Defense in depth alongside add_change_request_message()'s security-
+-- definer path, which is the only path the app actually uses (it derives
+-- sender_role from is_admin_user() server-side rather than trusting it here).
+drop policy if exists "event_change_request_messages_insert" on event_change_request_messages;
+create policy "event_change_request_messages_insert" on event_change_request_messages for insert
+  with check (
+    sender_id = auth.uid()
+    and exists (
+      select 1 from event_change_requests r
+      where r.id = event_change_request_messages.request_id
+        and (r.organizer_id = auth.uid() or is_admin_user())
+    )
+  );
+
+-- Files a request on the organizer's own event (owner only — an invited
+-- staffer with edit_event isn't allowed to open a request in the owner's
+-- name, same boundary as buying/upgrading a plan). Snapshots the event's
+-- current dates, posts the reason as the first conversation message, and
+-- logs it — one round trip instead of four separate client writes that
+-- could partially fail.
+create or replace function submit_event_change_request(
+  p_event_id uuid,
+  p_request_type text,
+  p_requested_start_date date,
+  p_requested_end_date date,
+  p_reason text,
+  p_additional_info text default null
+)
+returns event_change_requests
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_event events;
+  v_request event_change_requests;
+begin
+  if p_request_type not in (
+    'start_date', 'end_date', 'both_dates', 'extend_registration',
+    'event_info', 'plan_upgrade', 'billing', 'technical', 'other'
+  ) then
+    raise exception 'Invalid request type: %', p_request_type;
+  end if;
+  if trim(coalesce(p_reason, '')) = '' then
+    raise exception 'A reason is required';
+  end if;
+
+  if p_event_id is not null then
+    select * into v_event from events where id = p_event_id;
+    if v_event.id is null then
+      raise exception 'Event not found';
+    end if;
+    if v_event.organizer_id <> auth.uid() then
+      raise exception 'You do not own this event' using errcode = '42501';
+    end if;
+  end if;
+
+  insert into event_change_requests (
+    organizer_id, event_id, request_type,
+    current_start_date, current_end_date, requested_start_date, requested_end_date,
+    reason, additional_info
+  ) values (
+    auth.uid(), p_event_id, p_request_type,
+    v_event.start_date, v_event.end_date, p_requested_start_date, p_requested_end_date,
+    p_reason, p_additional_info
+  )
+  returning * into v_request;
+
+  insert into event_change_request_messages (request_id, sender_id, sender_role, message)
+  values (v_request.id, auth.uid(), 'organizer', p_reason);
+
+  insert into admin_activity (kind, event_id, message, actor_id, actor_email, details)
+  values (
+    'change_request_submitted',
+    p_event_id,
+    format('%s submitted %s (%s)', coalesce((select email from profiles where id = auth.uid()), 'An organizer'), v_request.request_number, p_request_type),
+    auth.uid(),
+    (select email from profiles where id = auth.uid()),
+    jsonb_build_object('request_id', v_request.id, 'request_number', v_request.request_number, 'request_type', p_request_type)
+  );
+
+  return v_request;
+end;
+$$;
+
+revoke execute on function submit_event_change_request(uuid, text, date, date, text, text) from public, anon;
+grant execute on function submit_event_change_request(uuid, text, date, date, text, text) to authenticated;
+
+-- Either side of the conversation posts through here — sender_role is
+-- always derived from is_admin_user() server-side, never taken from the
+-- client, so a message can't be spoofed as coming from "admin". An
+-- organizer reply while the request is waiting_for_organizer moves it back
+-- to under_review automatically, since that's exactly what a reply means.
+create or replace function add_change_request_message(p_request_id uuid, p_message text)
+returns event_change_request_messages
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_request event_change_requests;
+  v_is_admin boolean;
+  v_role text;
+  v_message event_change_request_messages;
+begin
+  select * into v_request from event_change_requests where id = p_request_id;
+  if v_request.id is null then
+    raise exception 'Request not found';
+  end if;
+
+  v_is_admin := is_admin_user();
+  if not v_is_admin and v_request.organizer_id <> auth.uid() then
+    raise exception 'Not authorized' using errcode = '42501';
+  end if;
+  if trim(coalesce(p_message, '')) = '' then
+    raise exception 'Message cannot be empty';
+  end if;
+
+  v_role := case when v_is_admin then 'admin' else 'organizer' end;
+
+  insert into event_change_request_messages (request_id, sender_id, sender_role, message)
+  values (p_request_id, auth.uid(), v_role, p_message)
+  returning * into v_message;
+
+  update event_change_requests
+  set status = case when v_role = 'organizer' and status = 'waiting_for_organizer' then 'under_review' else status end,
+      updated_at = now()
+  where id = p_request_id;
+
+  insert into admin_activity (kind, event_id, message, actor_id, actor_email, details)
+  values (
+    'change_request_message',
+    v_request.event_id,
+    format('%s message on %s', initcap(v_role), v_request.request_number),
+    auth.uid(),
+    (select email from profiles where id = auth.uid()),
+    jsonb_build_object('request_id', p_request_id, 'request_number', v_request.request_number)
+  );
+
+  return v_message;
+end;
+$$;
+
+revoke execute on function add_change_request_message(uuid, text) from public, anon;
+grant execute on function add_change_request_message(uuid, text) to authenticated;
+
+-- Fire-once side effect: opening a still-pending request in the admin
+-- detail page marks it seen. A no-op (updates zero rows) once it's already
+-- moved past 'pending', so it's safe to call unconditionally on page load.
+create or replace function admin_mark_request_under_review(p_request_id uuid)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update event_change_requests
+  set status = 'under_review', updated_at = now()
+  where id = p_request_id and status = 'pending' and is_admin_user();
+$$;
+
+revoke execute on function admin_mark_request_under_review(uuid) from public, anon;
+grant execute on function admin_mark_request_under_review(uuid) to authenticated;
+
+-- Everything AdminRequestDetailPage.jsx needs in one round trip, joined the
+-- same way admin_list_change_requests is, plus the fire-once "opening it
+-- marks it seen" side effect (admin_mark_request_under_review's logic,
+-- inlined here so the page doesn't need two round trips with a gap between
+-- them where the status could be stale).
+create or replace function admin_get_change_request(p_request_id uuid)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_request event_change_requests;
+  v_event events;
+begin
+  if not is_admin_user() then
+    raise exception 'Admin access required' using errcode = '42501';
+  end if;
+
+  update event_change_requests
+  set status = 'under_review', updated_at = now()
+  where id = p_request_id and status = 'pending';
+
+  select * into v_request from event_change_requests where id = p_request_id;
+  if v_request.id is null then
+    raise exception 'Request not found';
+  end if;
+
+  if v_request.event_id is not null then
+    select * into v_event from events where id = v_request.event_id;
+  end if;
+
+  return jsonb_build_object(
+    'request', to_jsonb(v_request),
+    'organizer_email', (select email from profiles where id = v_request.organizer_id),
+    'event_name', v_event.name,
+    'event_status', v_event.status
+  );
+end;
+$$;
+
+revoke execute on function admin_get_change_request(uuid) from public, anon;
+grant execute on function admin_get_change_request(uuid) to authenticated;
+
+-- The three admin actions from the request detail page. Approving a
+-- start_date/end_date/both_dates request calls straight through to
+-- admin_override_event_dates() above with the request's own requested
+-- dates (leaving status untouched) rather than duplicating that update
+-- logic — so there is exactly one place that ever moves an event's dates
+-- as an admin action. Approving any other request type has no automatic
+-- effect (Phase 1 has no automation for a plan upgrade/billing/technical/
+-- other topic) — it just records the resolution.
+create or replace function admin_review_change_request(p_request_id uuid, p_action text, p_note text default null)
+returns event_change_requests
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_request event_change_requests;
+  v_event events;
+  v_new_status text;
+begin
+  if not is_admin_user() then
+    raise exception 'Admin access required' using errcode = '42501';
+  end if;
+  if p_action not in ('request_info', 'approve', 'reject') then
+    raise exception 'Invalid action: %', p_action;
+  end if;
+
+  select * into v_request from event_change_requests where id = p_request_id;
+  if v_request.id is null then
+    raise exception 'Request not found';
+  end if;
+  if v_request.status in ('approved', 'rejected', 'completed') then
+    raise exception 'This request is already resolved';
+  end if;
+
+  if p_action = 'request_info' then
+    if trim(coalesce(p_note, '')) = '' then
+      raise exception 'A message is required';
+    end if;
+    update event_change_requests set status = 'waiting_for_organizer', updated_at = now() where id = p_request_id returning * into v_request;
+    insert into event_change_request_messages (request_id, sender_id, sender_role, message) values (p_request_id, auth.uid(), 'admin', p_note);
+    insert into admin_activity (kind, event_id, message, actor_id, actor_email, details)
+    values ('change_request_info_requested', v_request.event_id, format('Admin requested more info on %s', v_request.request_number),
+      auth.uid(), (select email from profiles where id = auth.uid()), jsonb_build_object('request_id', p_request_id));
+
+  elsif p_action = 'reject' then
+    if trim(coalesce(p_note, '')) = '' then
+      raise exception 'A reason is required';
+    end if;
+    update event_change_requests
+    set status = 'rejected', admin_resolution_note = p_note, resolved_at = now(), updated_at = now()
+    where id = p_request_id
+    returning * into v_request;
+    insert into event_change_request_messages (request_id, sender_id, sender_role, message) values (p_request_id, auth.uid(), 'admin', p_note);
+    insert into admin_activity (kind, event_id, message, actor_id, actor_email, details)
+    values ('change_request_rejected', v_request.event_id, format('Admin rejected %s', v_request.request_number),
+      auth.uid(), (select email from profiles where id = auth.uid()), jsonb_build_object('request_id', p_request_id, 'reason', p_note));
+
+  else -- approve
+    if v_request.request_type in ('start_date', 'end_date', 'both_dates') then
+      select * into v_event from events where id = v_request.event_id;
+      if v_event.id is null then
+        raise exception 'Event not found';
+      end if;
+      perform admin_override_event_dates(
+        v_request.event_id,
+        coalesce(v_request.requested_start_date, v_event.start_date),
+        coalesce(v_request.requested_end_date, v_event.end_date),
+        v_event.status
+      );
+      v_new_status := 'completed';
+    else
+      v_new_status := 'approved';
+    end if;
+
+    update event_change_requests
+    set status = v_new_status, admin_resolution_note = p_note, resolved_at = now(), updated_at = now()
+    where id = p_request_id
+    returning * into v_request;
+    if trim(coalesce(p_note, '')) <> '' then
+      insert into event_change_request_messages (request_id, sender_id, sender_role, message) values (p_request_id, auth.uid(), 'admin', p_note);
+    end if;
+    insert into admin_activity (kind, event_id, message, actor_id, actor_email, details)
+    values ('change_request_approved', v_request.event_id, format('Admin approved %s', v_request.request_number),
+      auth.uid(), (select email from profiles where id = auth.uid()), jsonb_build_object('request_id', p_request_id));
+  end if;
+
+  return v_request;
+end;
+$$;
+
+revoke execute on function admin_review_change_request(uuid, text, text) from public, anon;
+grant execute on function admin_review_change_request(uuid, text, text) to authenticated;
+
+-- The admin's Support Requests list (src/pages/admin/AdminSupportRequestsPage.jsx).
+create or replace function admin_list_change_requests(p_status text default null)
+returns table (
+  id uuid, request_number text, organizer_id uuid, organizer_email text,
+  event_id uuid, event_name text, request_type text, status text, priority text,
+  created_at timestamptz, updated_at timestamptz
+)
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select r.id, r.request_number, r.organizer_id, p.email, r.event_id, e.name, r.request_type, r.status, r.priority, r.created_at, r.updated_at
+  from event_change_requests r
+  join profiles p on p.id = r.organizer_id
+  left join events e on e.id = r.event_id
+  where is_admin_user()
+    and (p_status is null or r.status = p_status)
+  order by r.created_at desc
+  limit 200;
+$$;
+
+revoke execute on function admin_list_change_requests(text) from public, anon;
+grant execute on function admin_list_change_requests(text) to authenticated;
+
+-- ----------------------------------------------------------------------------
 -- PURCHASE ACTIVATION  (one purchase -> one approval -> one event -> one
 -- plan). The single place a paid plan is ever activated, for every plan
 -- tier; called only by the approve-subscription-request edge function
@@ -2472,6 +3081,98 @@ $$;
 
 revoke execute on function activate_purchase(uuid, uuid) from public, anon, authenticated;
 grant execute on function activate_purchase(uuid, uuid) to service_role;
+
+-- ----------------------------------------------------------------------------
+-- ADMIN QUICK PLAN UPGRADE  (an already-approved request's plan can't
+-- normally change again — that row is the record of what was paid, and
+-- events_update_owner pins plan/entitlement_* just as hard on the events
+-- side. This is the admin's fast path for "organizer already asked me to
+-- upgrade their event, they'll pay/paid the difference" without making the
+-- organizer submit their own upgrade request through UpgradeEventModal.jsx
+-- first. Deliberately NOT done by granting authenticated execute on
+-- activate_purchase() above — that function's OTHER branch creates brand-
+-- new events and invites accounts, a much bigger surface than this needs.
+-- Instead: insert a second subscription_requests row shaped exactly like an
+-- organizer's own upgrade request once approved (screenshot_path is a fixed
+-- sentinel — there's no real uploaded file for this shortcut), and apply
+-- the same plan/entitlement update activate_purchase()'s upgrade branch
+-- does. The original approved row is never touched, so it stays the correct
+-- historical record of the first payment; the new row makes this show up
+-- in revenue reporting and the existing plan_upgraded admin_activity
+-- trigger fires on its own (that trigger only looks at old/new status, not
+-- who approved it) — no new admin_activity kind needed.
+-- ----------------------------------------------------------------------------
+create or replace function admin_upgrade_approved_plan(p_request_id uuid, p_new_plan text, p_amount numeric default null, p_note text default null)
+returns subscription_requests
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_old_req subscription_requests%rowtype;
+  v_cat plan_catalog%rowtype;
+  v_event events%rowtype;
+  v_new_req subscription_requests%rowtype;
+begin
+  if not is_admin_user() then
+    raise exception 'Admin access required' using errcode = '42501';
+  end if;
+
+  select * into v_old_req from subscription_requests where id = p_request_id;
+  if v_old_req.id is null then
+    raise exception 'Request not found';
+  end if;
+  if v_old_req.status <> 'approved' then
+    raise exception 'Only an approved request can be upgraded this way';
+  end if;
+  if v_old_req.event_id is null then
+    raise exception 'This request has no linked event to change';
+  end if;
+
+  select * into v_cat from plan_catalog where plan = p_new_plan;
+  if not found or v_cat.plan = 'free' then
+    raise exception 'Unknown paid plan: %', p_new_plan;
+  end if;
+
+  select * into v_event from events where id = v_old_req.event_id;
+  if v_event.id is null then
+    raise exception 'Event not found';
+  end if;
+  if v_event.plan = p_new_plan then
+    raise exception 'Event is already on this plan';
+  end if;
+
+  -- Insert as 'pending' first (not directly 'approved') so the subsequent
+  -- update to 'approved' below is a genuine status TRANSITION —
+  -- log_admin_subscription_activity()'s trigger only fires its
+  -- plan_upgraded branch on old.status is distinct from 'approved' and
+  -- new.status = 'approved'; inserting straight into 'approved' would only
+  -- ever hit the trigger's INSERT/payment_received branch instead.
+  insert into subscription_requests (email, plan, screenshot_path, event_id, status)
+  values (v_old_req.email, p_new_plan, 'admin-manual-upgrade', v_old_req.event_id, 'pending')
+  returning * into v_new_req;
+
+  update events set
+    plan = v_cat.plan,
+    entitlement_categories = v_cat.categories,
+    entitlement_players_per_category = v_cat.players_per_category,
+    entitlement_courts = v_cat.courts,
+    entitlement_csv_import = v_cat.csv_import,
+    plan_activated_at = now(),
+    plan_payment_id = v_new_req.id
+  where id = v_old_req.event_id;
+
+  update subscription_requests
+  set status = 'approved', resolved_at = now(), amount = coalesce(p_amount, v_cat.price), admin_note = p_note
+  where id = v_new_req.id
+  returning * into v_new_req;
+
+  return v_new_req;
+end;
+$$;
+
+revoke execute on function admin_upgrade_approved_plan(uuid, text, numeric, text) from public, anon;
+grant execute on function admin_upgrade_approved_plan(uuid, text, numeric, text) to authenticated;
 
 -- ----------------------------------------------------------------------------
 -- BRACKET BALANCING  (Brackets page: move teams between a category's pool

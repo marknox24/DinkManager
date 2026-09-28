@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, Check, Coins, Copy, Files, LayoutGrid, Lock, RefreshCw, Shuffle, Sparkles, Trash2 } from 'lucide-react';
+import { AlertTriangle, Check, Coins, Copy, Files, LayoutGrid, Lock, MessageCircleQuestion, RefreshCw, Send, Shuffle, Sparkles, Trash2 } from 'lucide-react';
 import { deleteEvent, duplicateEvent, getEventById, getPendingPlanRequestForEvent, regenerateShareToken, setEventVisibility, updateEvent } from '../../../data/eventsApi';
+import { addChangeRequestMessage, listChangeRequestMessages, listMyChangeRequests } from '../../../data/changeRequestsApi';
 import { CURRENCIES, COURT_TYPES } from '../../../data/constants';
 import { PLAN_LIMITS } from '../../../data/plans';
 import { usableCourts } from '../../../utils/courts';
@@ -11,8 +12,170 @@ import { useConfirm } from '../../../context/ConfirmContext';
 import { useEventAccess } from '../../../context/EventAccessContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import UpgradeEventModal from '../../../components/organizer/UpgradeEventModal';
+import ContactAdminModal from '../../../components/organizer/ContactAdminModal';
 import Select from '../../../components/ui/Select';
 import Switch from '../../../components/ui/Switch';
+
+const REQUEST_TYPE_LABELS = {
+  start_date: 'Start date change',
+  end_date: 'End date change',
+  both_dates: 'Date change',
+  extend_registration: 'Extend registration',
+  event_info: 'Event information',
+  plan_upgrade: 'Plan upgrade',
+  billing: 'Billing / payment',
+  technical: 'Technical problem',
+  other: 'Other',
+};
+
+const REQUEST_STATUS_STYLES = {
+  pending: 'bg-amber-100 text-amber-800',
+  under_review: 'bg-brand-100 text-brand-700',
+  waiting_for_organizer: 'bg-violet-50 text-violet-700',
+  approved: 'bg-brand-100 text-brand-700',
+  rejected: 'bg-rose-100 text-rose-600',
+  completed: 'bg-ink-100 text-ink-600',
+};
+
+const REQUEST_STATUS_LABELS = {
+  pending: 'Pending',
+  under_review: 'Under review',
+  waiting_for_organizer: 'Waiting for you',
+  approved: 'Approved',
+  rejected: 'Rejected',
+  completed: 'Completed',
+};
+
+// The organizer's own "Track Status" / "Admin Conversation" surface (see
+// RequestDateChangeModal.jsx/ContactAdminModal.jsx for how a request gets
+// created) — a request row expands into its message thread and lets the
+// organizer reply directly, matching the same list-then-expand pattern
+// AdminCustomersPage.jsx's own tables use.
+function SupportRequestsCard({ eventId }) {
+  const { pushToast } = useToast();
+  const [requests, setRequests] = useState(null);
+  const [loadError, setLoadError] = useState(null);
+  const [openId, setOpenId] = useState(null);
+  const [messages, setMessages] = useState([]);
+  const [reply, setReply] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const reload = () => {
+    listMyChangeRequests(eventId)
+      .then((rows) => {
+        setRequests(rows);
+        setLoadError(null);
+      })
+      .catch((e) => {
+        setLoadError(e.message);
+        pushToast(e.message, 'error');
+      });
+  };
+
+  useEffect(reload, [eventId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const toggleOpen = async (request) => {
+    if (openId === request.id) {
+      setOpenId(null);
+      return;
+    }
+    setOpenId(request.id);
+    try {
+      setMessages(await listChangeRequestMessages(request.id));
+    } catch (e) {
+      pushToast(e.message, 'error');
+    }
+  };
+
+  const sendReply = async (requestId) => {
+    if (!reply.trim()) return;
+    setSending(true);
+    try {
+      await addChangeRequestMessage(requestId, reply.trim());
+      setReply('');
+      setMessages(await listChangeRequestMessages(requestId));
+      reload();
+    } catch (e) {
+      pushToast(e.message, 'error');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  // Only hides itself for the common "nothing to show yet" case — a failed
+  // load still renders, with a retry, rather than silently vanishing.
+  if (requests && requests.length === 0 && !loadError) return null;
+
+  return (
+    <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+      <div className="mb-4 flex items-center gap-2.5">
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+          <MessageCircleQuestion size={17} strokeWidth={2.3} />
+        </span>
+        <div>
+          <h2 className="font-display text-base font-bold text-ink-900">Support requests</h2>
+          <p className="text-xs text-ink-500">Requests you've sent about this event, and the admin's replies.</p>
+        </div>
+      </div>
+      {loadError && (
+        <div className="flex items-center justify-between gap-3 rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">
+          <span>Couldn't load your requests — {loadError}</span>
+          <button onClick={reload} className="shrink-0 rounded-full border border-rose-200 px-3 py-1 text-xs font-bold hover:bg-rose-100">
+            Retry
+          </button>
+        </div>
+      )}
+      {requests === null && !loadError ? (
+        <p className="text-sm text-ink-400">Loading…</p>
+      ) : requests === null ? null : (
+        <div className="flex flex-col divide-y divide-ink-100">
+          {requests.map((r) => (
+            <div key={r.id} className="py-3">
+              <button onClick={() => toggleOpen(r)} className="flex w-full flex-wrap items-center justify-between gap-2 text-left">
+                <div>
+                  <span className="text-sm font-semibold text-ink-900">{r.request_number}</span>{' '}
+                  <span className="text-xs text-ink-500">{REQUEST_TYPE_LABELS[r.request_type] ?? r.request_type}</span>
+                </div>
+                <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${REQUEST_STATUS_STYLES[r.status]}`}>
+                  {REQUEST_STATUS_LABELS[r.status] ?? r.status}
+                </span>
+              </button>
+              {openId === r.id && (
+                <div className="mt-3 rounded-xl bg-ink-50/60 p-3">
+                  <div className="flex flex-col gap-2">
+                    {messages.map((m) => (
+                      <div key={m.id} className={`max-w-[85%] rounded-xl px-3 py-2 text-xs ${m.sender_role === 'admin' ? 'self-start bg-white text-ink-800 shadow-sm' : 'self-end bg-brand-600 text-white'}`}>
+                        <div className="mb-0.5 font-bold uppercase tracking-wide opacity-70">{m.sender_role === 'admin' ? 'Admin' : 'You'}</div>
+                        {m.message}
+                      </div>
+                    ))}
+                  </div>
+                  {r.status !== 'rejected' && r.status !== 'completed' && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <input
+                        value={reply}
+                        onChange={(e) => setReply(e.target.value)}
+                        placeholder="Reply…"
+                        className="flex-1 rounded-full border border-ink-200 bg-white px-3.5 py-2 text-xs outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100"
+                      />
+                      <button
+                        onClick={() => sendReply(r.id)}
+                        disabled={sending || !reply.trim()}
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-brand-600 text-white transition hover:bg-brand-700 disabled:opacity-50"
+                      >
+                        <Send size={13} />
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function SettingsPage() {
   const { eventId } = useParams();
@@ -30,6 +193,7 @@ export default function SettingsPage() {
   const [pendingRequest, setPendingRequest] = useState(null);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [duplicating, setDuplicating] = useState(false);
+  const [contactAdminOpen, setContactAdminOpen] = useState(false);
 
   const isLocked = event?.status === 'finished';
   // Duplicating creates a Free Trial event — only one per account (the
@@ -348,6 +512,28 @@ export default function SettingsPage() {
             </Select>
           </div>
 
+          <SupportRequestsCard eventId={eventId} />
+
+          <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex items-center justify-between gap-2.5">
+              <div className="flex items-center gap-2.5">
+                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                  <MessageCircleQuestion size={17} strokeWidth={2.3} />
+                </span>
+                <div>
+                  <h2 className="font-display text-base font-bold text-ink-900">Need help with something else?</h2>
+                  <p className="text-xs text-ink-500">Registration, billing, a technical problem — reach the admin directly.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setContactAdminOpen(true)}
+                className="flex shrink-0 items-center gap-1.5 rounded-full border border-ink-200 px-3.5 py-2 text-xs font-bold text-ink-700 transition hover:bg-ink-50"
+              >
+                <MessageCircleQuestion size={13} /> Contact Admin
+              </button>
+            </div>
+          </div>
+
           <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
             <div className="mb-4 flex items-center justify-between gap-2.5">
               <div className="flex items-center gap-2.5">
@@ -422,6 +608,7 @@ export default function SettingsPage() {
           }}
         />
       )}
+      {contactAdminOpen && event && <ContactAdminModal event={event} onClose={() => setContactAdminOpen(false)} onSubmitted={() => setContactAdminOpen(false)} />}
     </EventWorkspaceLayout>
   );
 }

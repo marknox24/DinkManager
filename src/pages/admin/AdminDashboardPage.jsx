@@ -23,6 +23,8 @@ import AccountTypeCard from '../../components/ui/AccountTypeCard';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { getAdminDashboard } from '../../data/adminApi';
+import { adminListChangeRequests } from '../../data/changeRequestsApi';
+import AdminNavLinks from '../../components/admin/AdminNavLinks';
 import { PLAN_LIMITS } from '../../data/plans';
 
 const REQUESTS_LINK = '/admin/customers#subscription-requests';
@@ -188,6 +190,7 @@ export default function AdminDashboardPage() {
   const { pushToast } = useToast();
   const [data, setData] = useState(null);
   const [refreshing, setRefreshing] = useState(true);
+  const [pendingRequestCount, setPendingRequestCount] = useState(null);
 
   const fetchDashboard = useCallback(
     () =>
@@ -197,6 +200,12 @@ export default function AdminDashboardPage() {
         .finally(() => setRefreshing(false)),
     [pushToast]
   );
+
+  useEffect(() => {
+    adminListChangeRequests('pending')
+      .then((rows) => setPendingRequestCount(rows.length))
+      .catch(() => setPendingRequestCount(null));
+  }, []);
 
   useEffect(() => {
     fetchDashboard();
@@ -212,6 +221,7 @@ export default function AdminDashboardPage() {
       <div className="mb-4">
         <AccountTypeCard accountType={accountType} />
       </div>
+      <AdminNavLinks />
       <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-bold text-ink-900">Admiral Dashboard</h1>
@@ -228,9 +238,15 @@ export default function AdminDashboardPage() {
           </button>
           <Link
             to="/admin/customers"
-            className="flex items-center gap-1.5 rounded-full bg-ink-900 px-3.5 py-1.5 text-xs font-bold text-white transition hover:bg-ink-800 active:scale-[0.97]"
+            className="flex items-center gap-1.5 rounded-full border border-ink-200 px-3.5 py-1.5 text-xs font-bold text-ink-700 transition hover:bg-ink-50 active:scale-[0.97]"
           >
             <Users size={13} /> Customers & payments
+          </Link>
+          <Link
+            to="/admin/support-requests"
+            className="flex items-center gap-1.5 rounded-full bg-ink-900 px-3.5 py-1.5 text-xs font-bold text-white transition hover:bg-ink-800 active:scale-[0.97]"
+          >
+            <LifeBuoy size={13} /> Support requests
           </Link>
         </div>
       </div>
@@ -251,7 +267,7 @@ export default function AdminDashboardPage() {
               <AttentionTile count={data.attention.payment_approvals} label="Payment approvals" hint="New paid events" to={REQUESTS_LINK} />
               <AttentionTile count={data.attention.upgrade_requests} label="Upgrade requests" hint="Paid events moving up a tier" to={REQUESTS_LINK} />
               <AttentionTile count={data.attention.upcoming_events} label="Upcoming events" hint="Starting in the next 7 days" href="#upcoming-events" />
-              <AttentionTile count={null} label="Account issues" hint="Support tickets coming soon" />
+              <AttentionTile count={pendingRequestCount} label="Support requests" hint="Awaiting your review" to="/admin/support-requests" />
             </div>
           </Card>
 

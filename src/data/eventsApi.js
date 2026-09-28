@@ -734,6 +734,43 @@ export async function reopenSubscriptionRequest(requestId) {
   return data;
 }
 
+// Changes what plan a not-yet-approved request is for — e.g. the customer
+// asked to switch from Starter to Pro before their screenshot is reviewed.
+// Pending/rejected only: RLS's subscription_requests_update_admin policy
+// excludes approved rows from every column, not just status, since an
+// approved request's plan is already snapshotted onto the activated event
+// (see activate_purchase() in schema.sql) — the .neq() below is defense in
+// depth alongside that policy, same style as reopenSubscriptionRequest's
+// .eq('status', 'rejected') guard.
+export async function updateSubscriptionRequestPlan(requestId, plan) {
+  const { data, error } = await supabase
+    .from('subscription_requests')
+    .update({ plan })
+    .eq('id', requestId)
+    .neq('status', 'approved')
+    .select('*, event:events!subscription_requests_event_id_fkey(id, name, organizer_id)')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+// Bumps an already-approved request's linked event onto a different paid
+// plan — a second, already-resolved row shaped like an organizer's own
+// upgrade request, leaving the original approved row untouched as the
+// record of the first payment. See admin_upgrade_approved_plan() in
+// schema.sql. amount defaults (server-side) to the new plan's full price
+// when omitted; the UI always prefills it with the price difference.
+export async function adminUpgradeApprovedEventPlan(requestId, { newPlan, amount, note }) {
+  const { data, error } = await supabase.rpc('admin_upgrade_approved_plan', {
+    p_request_id: requestId,
+    p_new_plan: newPlan,
+    p_amount: amount ?? null,
+    p_note: note || null,
+  });
+  if (error) throw error;
+  return data;
+}
+
 // Pending/rejected only — RLS refuses approved rows, which are the record of
 // what was paid. The screenshot is removed after the row, best-effort: a
 // leftover file in the private bucket is harmless, a leftover row isn't.
@@ -744,6 +781,35 @@ export async function deleteSubscriptionRequest(request) {
   if (request.screenshot_path) {
     await supabase.storage.from('subscription-proofs').remove([request.screenshot_path]);
   }
+}
+
+// Blank query: events currently frozen by events_update_owner's with check
+// in schema.sql (more than 48h past end_date) — the previous default view.
+// Non-blank query: ANY event at all, matched by name or organizer email,
+// locked or not — so a not-yet-ended event an organizer wants rescheduled
+// can be found and updated before it ever locks. Either way,
+// adminOverrideEventDates() below is what actually changes the row.
+export async function adminSearchEvents(query = '') {
+  const { data, error } = await supabase.rpc('admin_search_events', { p_query: query });
+  if (error) throw error;
+  return data;
+}
+
+// The path that changes an event's start_date/end_date/status on the
+// organizer's behalf — security definer, gated on is_admin_user() inside the
+// function itself rather than RLS, and unaffected by whether the event is
+// currently locked. See "EVENT OVERRIDE" in schema.sql. (An admin editing
+// their OWN event as its organizer doesn't need this — events_update_owner's
+// freeze already lets them straight through on the normal edit path.)
+export async function adminOverrideEventDates(eventId, { startDate, endDate, status }) {
+  const { data, error } = await supabase.rpc('admin_override_event_dates', {
+    p_event_id: eventId,
+    p_start_date: startDate,
+    p_end_date: endDate,
+    p_status: status,
+  });
+  if (error) throw error;
+  return data;
 }
 
 // ---------------------------------------------------------------------------
