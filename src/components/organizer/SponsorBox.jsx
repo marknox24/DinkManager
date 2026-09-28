@@ -26,12 +26,15 @@ const TIER_STYLES = {
 
 const SLIDE_MS = 4500;
 
-// One tier's box — a single sponsor renders statically (no timer, no dots,
-// no arrows); two or more slide horizontally, one at a time, auto-advancing
-// with manual arrow/dot override. Renders nothing when the tier has no
-// sponsors, so an empty category never shows a blank box on the display.
-export default function SponsorBox({ tier, sponsors }) {
-  const style = TIER_STYLES[tier];
+// One box for both tiers: `sponsors` is the already-ordered slide list (the
+// Preview Screen passes every silver sponsor first, then every gold one).
+// Each sponsor carries its own tier, and the box's colours and badge
+// ("Silver Sponsor" / "Gold Sponsor") follow whichever one is showing. A
+// single sponsor renders statically (no timer, no dots, no arrows); two or
+// more slide horizontally, one at a time, auto-advancing with manual
+// arrow/dot override. Renders nothing when there are no sponsors, so an
+// empty category never shows a blank box on the display.
+export default function SponsorBox({ sponsors }) {
   const count = sponsors.length;
   const [index, setIndex] = useState(0);
 
@@ -54,13 +57,16 @@ export default function SponsorBox({ tier, sponsors }) {
   // effect corrects it). Reading safeIndex everywhere below means that
   // frame never happens in the first place.
   const safeIndex = Math.min(index, count - 1);
+  const style = TIER_STYLES[sponsors[safeIndex].tier] ?? TIER_STYLES.silver;
 
   const goTo = (next) => setIndex(((next % count) + count) % count);
 
   return (
-    <div className={`rounded-2xl border p-3.5 sm:p-4 ${style.wrapper}`}>
+    <div className={`rounded-2xl border p-3.5 transition-colors duration-500 sm:p-4 ${style.wrapper}`}>
       <div className="mb-3 flex items-center justify-center">
-        <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${style.badge}`}>{style.label}</span>
+        <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide transition-colors duration-500 ${style.badge}`}>
+          {style.label}
+        </span>
       </div>
 
       <div className="relative h-16 overflow-hidden sm:h-20 lg:h-24">
