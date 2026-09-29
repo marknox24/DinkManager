@@ -35,6 +35,26 @@ export async function downloadNodeAsPdf(node, filename) {
   pdf.save(filename);
 }
 
+// One PDF page per already-rasterized canvas, in order — unlike
+// downloadNodeAsPdf's height-slicing, no slicing is needed here because each
+// canvas already IS one page's content (e.g. a preview swapped page-by-page
+// and captured once per page, so the PDF matches the on-screen preview
+// exactly). Each canvas is scaled to the page width, same math as
+// downloadNodeAsPdf.
+export async function downloadPagesAsPdf(canvases, filename) {
+  const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
+  const pageWidth = pdf.internal.pageSize.getWidth();
+
+  canvases.forEach((canvas, i) => {
+    if (i > 0) pdf.addPage();
+    const imgWidth = pageWidth;
+    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+    pdf.addImage(canvas.toDataURL('image/png'), 'PNG', 0, 0, imgWidth, imgHeight);
+  });
+
+  pdf.save(filename);
+}
+
 // Rasterizes a tall container ONCE, then slices the resulting canvas into
 // PDF pages at item boundaries instead of at a fixed pixel height — used for
 // a stack of independent, same-width blocks (e.g. one printable score sheet

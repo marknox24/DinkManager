@@ -9,7 +9,7 @@ const STATUS_STYLES = {
   waitlisted: 'bg-violet-100 text-violet-700',
 };
 
-const STATUS_LABELS = {
+export const STATUS_LABELS = {
   pending: 'Pending',
   approved: 'Confirmed',
   denied: 'Rejected',

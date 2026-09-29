@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { AlertTriangle, ArrowRightLeft, CheckCircle2, ChevronDown, Crown, History, ListChecks, Radio, RefreshCw, Scale, Shuffle, Timer, UserPlus, X } from 'lucide-react';
+import { AlertTriangle, ArrowRightLeft, CheckCircle2, ChevronDown, Crown, Download, History, ListChecks, Radio, RefreshCw, Scale, Settings2, Shuffle, Timer, UserPlus, X } from 'lucide-react';
 import { getEventById, listCategories, listRegistrations } from '../../../data/eventsApi';
 import {
   cancelLiveMatch,
@@ -33,6 +33,10 @@ import BalanceBracketsModal from '../../../components/organizer/BalanceBracketsM
 import MatchlistPreviewModal from '../../../components/organizer/MatchlistPreviewModal';
 import GamesPerTeamPanel from '../../../components/organizer/GamesPerTeamPanel';
 import LiveMatchCard from '../../../components/organizer/LiveMatchCard';
+// Lazy: pulls in jspdf/html-to-image via utils/pdf.js, deferred until the
+// organizer actually opens the export modal (same reasoning as MatchListPage's
+// RoundRobinSheetsModal/BlankScoreSheetsModal).
+const DownloadBracketsListModal = lazy(() => import('../../../components/organizer/DownloadBracketsListModal'));
 import { useNow } from '../../../hooks/useNow';
 import { usableCourts } from '../../../utils/courts';
 import { formatDuration } from '../../../utils/format';
@@ -67,21 +71,21 @@ function BracketSection({ bracket, progress, expanded, onToggle, teams, matches,
   // games = this bracket's custom games-per-team target (null = full).
   const expected = expectedRoundRobin(teams?.length ?? 0, isDouble, games);
   const perTeam = expected.perTeamMax > expected.perTeam ? `${expected.perTeam}–${expected.perTeamMax}` : expected.perTeam;
-  // A match-template format has no "games per team" target: each team plays
-  // whatever the template gives it (0 for a team outside it).
-  // Planned matches per team position, for the "0/n not generated" cell.
+  // Planned matches per team position, for the "0/n not generated" cell —
+  // capped to `games` rounds when this template has a custom games-per-team
+  // target (a team outside the template's reach still gets 0).
   const templateExpected = useMemo(() => {
     if (!template) return null;
     const ids = (teams || []).map((t) => t.id);
     const counts = new Map(ids.map((id) => [id, 0]));
-    planTemplateRounds(template, bracket.letter, ids).rounds.forEach((r) =>
+    planTemplateRounds(template, bracket.letter, ids, games).rounds.forEach((r) =>
       r.matches.forEach((m) => {
         counts.set(m.a, counts.get(m.a) + 1);
         counts.set(m.b, counts.get(m.b) + 1);
       })
     );
     return counts;
-  }, [template, teams, bracket.letter]);
+  }, [template, teams, bracket.letter, games]);
   const hasList = progress && !progress.expected;
 
   return (
@@ -251,6 +255,76 @@ function BracketSection({ bracket, progress, expanded, onToggle, teams, matches,
   );
 }
 
+// Groups the two settings an organizer sets once when brackets are drawn and
+// rarely touches again (how many games each team plays, how big a bracket
+// can get) behind a single disclosure — collapsed by default, with a
+// one-line summary so the current values are still visible without opening
+// it. Balance Brackets / Randomize Again stay outside this, in BracketsPage's
+// own render — those are actions you might reach for without touching a
+// setting first, not configuration. Same chevron + grid-template-rows
+// animation as FaqAccordion.jsx, since this opens often enough to earn a
+// smoother reveal than the plain <details> used for "Bracket changes" below.
+function MatchSettingsSection({ gamesPerTeamApplies, poolsWithTeams, categoryGames, canMove, matchlistExists, onSaveGames, capacity, capacityInput, onCapacityInputChange, savingCapacity, onSaveCapacity }) {
+  const [open, setOpen] = useState(false);
+  if (!(gamesPerTeamApplies && poolsWithTeams) && !canMove) return null;
+
+  const gamesSummary = gamesPerTeamApplies ? (categoryGames ? `${categoryGames} games/team` : 'Full Round Robin') : null;
+  const capacitySummary = capacity != null ? `Max ${capacity} per bracket` : 'No bracket size limit';
+
+  return (
+    <div className="mt-4 border-t border-ink-100 pt-4">
+      <button type="button" onClick={() => setOpen((v) => !v)} className="flex w-full items-center justify-between gap-3 text-left">
+        <div className="flex flex-wrap items-center gap-2">
+          <Settings2 size={14} className="text-ink-400" />
+          <span className="text-sm font-bold text-ink-800">Match settings</span>
+          <span className="text-xs font-medium text-ink-400">
+            {[gamesSummary, capacitySummary].filter(Boolean).join(' · ')}
+          </span>
+        </div>
+        <ChevronDown size={16} className={`shrink-0 text-ink-400 transition-transform duration-200 ease-out ${open ? 'rotate-180' : ''}`} />
+      </button>
+      <div className="grid transition-[grid-template-rows] duration-300 ease-out" style={{ gridTemplateRows: open ? '1fr' : '0fr' }}>
+        <div className="overflow-hidden">
+          {gamesPerTeamApplies && poolsWithTeams && (
+            <GamesPerTeamPanel pools={poolsWithTeams} categoryGames={categoryGames} canEdit={canMove} matchlistExists={matchlistExists} onSave={onSaveGames} />
+          )}
+          {canMove && (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                onSaveCapacity();
+              }}
+              className="mt-4 flex items-center gap-2 border-t border-ink-100 pt-4"
+            >
+              <label htmlFor="max-per-bracket" className="text-xs font-semibold text-ink-600">
+                Max teams per bracket
+              </label>
+              <input
+                id="max-per-bracket"
+                type="number"
+                min={1}
+                placeholder="No limit"
+                value={capacityInput ?? capacity ?? ''}
+                onChange={(e) => onCapacityInputChange(e.target.value)}
+                className="w-20 rounded-lg border border-ink-200 px-2.5 py-1.5 text-sm tabular-nums focus:border-brand-500 focus:outline-none"
+              />
+              {capacityInput != null && String(capacityInput) !== String(capacity ?? '') && (
+                <button
+                  type="submit"
+                  disabled={savingCapacity}
+                  className="rounded-full bg-ink-900 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-ink-800 disabled:opacity-50"
+                >
+                  {savingCapacity ? 'Saving…' : 'Save'}
+                </button>
+              )}
+            </form>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function BracketsPage() {
   const { eventId } = useParams();
   const { pushToast } = useToast();
@@ -269,6 +343,7 @@ export default function BracketsPage() {
   const [bracketProgress, setBracketProgress] = useState([]);
   const [randomizerOpen, setRandomizerOpen] = useState(false);
   const [addPlayerOpen, setAddPlayerOpen] = useState(false);
+  const [bracketsListOpen, setBracketsListOpen] = useState(false);
   const [loadingBrackets, setLoadingBrackets] = useState(false);
   const [bracketsError, setBracketsError] = useState(null);
   const [categoryMatches, setCategoryMatches] = useState([]);
@@ -477,17 +552,20 @@ export default function BracketsPage() {
     };
   }, [activeCategory]);
 
-  // Custom games per team (single Round Robin only): the category default,
-  // kept here once changed like capacity, and each bracket's effective
-  // target (its own value, else the category's; null = full).
-  const isSingleRoundRobin = /round robin/i.test(activeCategory?.format || '') && !/double round robin/i.test(activeCategory?.format || '');
-  const categoryGames = activeCategory ? (activeCategory.id in gamesByCat ? gamesByCat[activeCategory.id] : (activeCategory.games_per_team ?? null)) : null;
-  const bracketGames = useCallback((b) => (isSingleRoundRobin ? (b.games_per_team ?? categoryGames) : null), [isSingleRoundRobin, categoryGames]);
-
   // Per player/pair counts across this category's actual matchlist.
   const teamCounts = useMemo(() => matchCounts(categoryMatches).byTeam, [categoryMatches]);
   const isDoubleRR = /double round robin/i.test(activeCategory?.format || '');
   const activeTemplate = getCustomFormat(activeCategory?.format);
+
+  // Custom games per team (single Round Robin, or a match-template format
+  // like "RR:Custom Match 1" — both play a full round-robin schedule by
+  // default and can be capped to fewer games/team): the category default,
+  // kept here once changed like capacity, and each bracket's effective
+  // target (its own value, else the category's; null = full).
+  const isSingleRoundRobin = /round robin/i.test(activeCategory?.format || '') && !/double round robin/i.test(activeCategory?.format || '');
+  const gamesPerTeamApplies = isSingleRoundRobin || Boolean(activeTemplate);
+  const categoryGames = activeCategory ? (activeCategory.id in gamesByCat ? gamesByCat[activeCategory.id] : (activeCategory.games_per_team ?? null)) : null;
+  const bracketGames = useCallback((b) => (gamesPerTeamApplies ? (b.games_per_team ?? categoryGames) : null), [gamesPerTeamApplies, categoryGames]);
 
   const capacity = activeCategory ? (activeCategory.id in capacityByCat ? capacityByCat[activeCategory.id] : (activeCategory.max_teams_per_bracket ?? null)) : null;
 
@@ -530,10 +608,10 @@ export default function BracketsPage() {
       const teamIds = (bracketData[b.id]?.teams || []).map((t) => t.id);
       const inBracket = new Set(teamIds);
       const bracketMatches = poolMatches.filter((m) => m.bracket_id === b.id);
-      const games = isDouble || template ? null : effectiveGames(teamIds.length, bracketGames(b));
+      const games = isDouble ? null : effectiveGames(teamIds.length, bracketGames(b));
       if (template) {
         // A match-template format: only template matches without a live match count.
-        missingCount += missingTemplatePairs(template, b.letter, teamIds, bracketMatches).length;
+        missingCount += missingTemplatePairs(template, b.letter, teamIds, bracketMatches, games).length;
       } else if (games != null) {
         // A custom games-per-team bracket: the same plan Regenerate runs.
         const { add, remove } = planCustomAdjust(teamIds, bracketMatches, games);
@@ -774,14 +852,24 @@ export default function BracketsPage() {
           <h1 className="font-display text-2xl font-bold text-ink-900">Brackets</h1>
           <p className="text-sm text-ink-500">Draw brackets from approved players and track pool standings</p>
         </div>
-        {canRedraw && (
-          <button
-            onClick={() => (blockIfLocked() ? null : setAddPlayerOpen(true))}
-            className="flex shrink-0 items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-2 text-xs font-bold text-ink-600 transition hover:bg-ink-100"
-          >
-            <UserPlus size={14} /> Add Player
-          </button>
-        )}
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          {categories.length > 0 && (
+            <button
+              onClick={() => setBracketsListOpen(true)}
+              className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-2 text-xs font-bold text-ink-600 transition hover:bg-ink-100"
+            >
+              <Download size={14} /> Download Brackets List
+            </button>
+          )}
+          {canRedraw && (
+            <button
+              onClick={() => (blockIfLocked() ? null : setAddPlayerOpen(true))}
+              className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-2 text-xs font-bold text-ink-600 transition hover:bg-ink-100"
+            >
+              <UserPlus size={14} /> Add Player
+            </button>
+          )}
+        </div>
       </div>
 
       {!event ? (
@@ -884,26 +972,37 @@ export default function BracketsPage() {
                     >
                       <ListChecks size={12} /> Matchlist Preview
                     </button>
-                    {balance &&
-                      (balance.ready ? (
-                        <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200">
-                          <CheckCircle2 size={12} /> Brackets Ready
-                        </span>
-                      ) : (
-                        <span className="flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700 ring-1 ring-amber-200">
-                          <AlertTriangle size={12} /> Brackets Need Review
-                        </span>
-                      ))}
-                    {matchlistStatus?.needsUpdate ? (
-                      <span className="flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700 ring-1 ring-amber-200">
-                        <AlertTriangle size={12} /> Matchlist Needs Regeneration
+                    {balance?.ready && matchlistStatus && !matchlistStatus.needsUpdate ? (
+                      // Both individually-green states collapse into one pill —
+                      // two identical "you're good" badges next to each other is
+                      // noise, not information.
+                      <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200">
+                        <CheckCircle2 size={12} /> Ready to play
                       </span>
                     ) : (
-                      matchlistStatus && (
-                        <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200">
-                          <CheckCircle2 size={12} /> Matchlist up to date
-                        </span>
-                      )
+                      <>
+                        {balance &&
+                          (balance.ready ? (
+                            <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200">
+                              <CheckCircle2 size={12} /> Brackets Ready
+                            </span>
+                          ) : (
+                            <span className="flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700 ring-1 ring-amber-200">
+                              <AlertTriangle size={12} /> Brackets Need Review
+                            </span>
+                          ))}
+                        {matchlistStatus?.needsUpdate ? (
+                          <span className="flex items-center gap-1.5 rounded-full bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700 ring-1 ring-amber-200">
+                            <AlertTriangle size={12} /> Matchlist Needs Regeneration
+                          </span>
+                        ) : (
+                          matchlistStatus && (
+                            <span className="flex items-center gap-1.5 rounded-full bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700 ring-1 ring-emerald-200">
+                              <CheckCircle2 size={12} /> Matchlist up to date
+                            </span>
+                          )
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -957,63 +1056,36 @@ export default function BracketsPage() {
                   </div>
                 )}
 
-                {isSingleRoundRobin && poolsWithTeams && (
-                  <GamesPerTeamPanel
-                    key={activeCategory.id}
-                    pools={poolsWithTeams}
-                    categoryGames={categoryGames}
-                    canEdit={canMove}
-                    matchlistExists={Boolean(matchlistStatus)}
-                    onSave={handleSaveGames}
-                  />
-                )}
+                <MatchSettingsSection
+                  key={activeCategory.id}
+                  gamesPerTeamApplies={gamesPerTeamApplies}
+                  poolsWithTeams={poolsWithTeams}
+                  categoryGames={categoryGames}
+                  canMove={canMove}
+                  matchlistExists={Boolean(matchlistStatus)}
+                  onSaveGames={handleSaveGames}
+                  capacity={capacity}
+                  capacityInput={capacityInput}
+                  onCapacityInputChange={setCapacityInput}
+                  savingCapacity={savingCapacity}
+                  onSaveCapacity={handleSaveCapacity}
+                />
 
                 {canMove && (
-                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-ink-100 pt-4">
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        handleSaveCapacity();
-                      }}
-                      className="flex items-center gap-2"
+                  <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-ink-100 pt-4">
+                    <button
+                      onClick={() => (blockIfLocked() ? null : setBalanceOpen(true))}
+                      disabled={!poolsWithTeams}
+                      className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-100 disabled:opacity-50"
                     >
-                      <label htmlFor="max-per-bracket" className="text-xs font-semibold text-ink-600">
-                        Max teams per bracket
-                      </label>
-                      <input
-                        id="max-per-bracket"
-                        type="number"
-                        min={1}
-                        placeholder="No limit"
-                        value={capacityInput ?? capacity ?? ''}
-                        onChange={(e) => setCapacityInput(e.target.value)}
-                        className="w-20 rounded-lg border border-ink-200 px-2.5 py-1.5 text-sm tabular-nums focus:border-brand-500 focus:outline-none"
-                      />
-                      {capacityInput != null && String(capacityInput) !== String(capacity ?? '') && (
-                        <button
-                          type="submit"
-                          disabled={savingCapacity}
-                          className="rounded-full bg-ink-900 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-ink-800 disabled:opacity-50"
-                        >
-                          {savingCapacity ? 'Saving…' : 'Save'}
-                        </button>
-                      )}
-                    </form>
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        onClick={() => (blockIfLocked() ? null : setBalanceOpen(true))}
-                        disabled={!poolsWithTeams}
-                        className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-100 disabled:opacity-50"
-                      >
-                        <Scale size={12} /> Balance Brackets
-                      </button>
-                      <button
-                        onClick={handleRedrawClick}
-                        className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-100"
-                      >
-                        <Shuffle size={12} /> Randomize Again
-                      </button>
-                    </div>
+                      <Scale size={12} /> Balance Brackets
+                    </button>
+                    <button
+                      onClick={handleRedrawClick}
+                      className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-100"
+                    >
+                      <Shuffle size={12} /> Randomize Again
+                    </button>
                   </div>
                 )}
               </div>
@@ -1166,6 +1238,12 @@ export default function BracketsPage() {
       )}
 
       {previewOpen && activeCategory && <MatchlistPreviewModal category={activeCategory} onClose={() => setPreviewOpen(false)} />}
+
+      {bracketsListOpen && (
+        <Suspense fallback={null}>
+          <DownloadBracketsListModal event={event} categories={categories} activeCategoryId={activeCategory?.id} onClose={() => setBracketsListOpen(false)} />
+        </Suspense>
+      )}
 
       {balanceOpen && poolsWithTeams && (
         <BalanceBracketsModal

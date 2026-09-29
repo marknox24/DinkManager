@@ -373,11 +373,14 @@ export function planCustomAdjust(teamIds, matches, k) {
 // (with its position in the template); a match naming a generator's bye slot
 // (a number past teamCount + 1) is just a bye and isn't reported. A pair
 // listed twice keeps only its first match. teamIds must be in the bracket's
-// team order.
-export function planTemplateRounds(template, letter, teamIds) {
+// team order. Optional `games` (effectiveGames' output) caps it to that
+// team's first N rounds — every round plays each team at most once, so N
+// rounds is exactly N games/team, same idea as Round Robin's custom target.
+export function planTemplateRounds(template, letter, teamIds, games) {
   const source = template.overrides?.[letter] ?? template.rounds;
-  const rounds = typeof source === 'function' ? source(teamIds.length) : source;
+  const allRounds = typeof source === 'function' ? source(teamIds.length) : source;
   const generated = typeof source === 'function';
+  const rounds = games ? allRounds.slice(0, games) : allRounds;
   const seen = new Set();
   const skipped = [];
   let matchNo = 0;
@@ -407,8 +410,11 @@ export function planTemplateRounds(template, letter, teamIds) {
 // reuses the template, interleaved round by round across brackets (A's
 // round-1 matches, then B's, …) and coded <Letter><matchNo>, so a four
 // bracket category's Round 1 reads A1, A2, B1, B2, C1, C2, D1, D2.
-export function planTemplateMatches(template, brackets, teamsByBracket) {
-  const perBracket = brackets.map((b) => ({ bracket: b, ...planTemplateRounds(template, b.letter, teamsByBracket[b.id] || []) }));
+export function planTemplateMatches(template, brackets, teamsByBracket, gamesByBracket) {
+  const perBracket = brackets.map((b) => ({
+    bracket: b,
+    ...planTemplateRounds(template, b.letter, teamsByBracket[b.id] || [], gamesByBracket?.[b.id]),
+  }));
   const maxRounds = Math.max(0, ...perBracket.map((p) => p.rounds.length));
   const rows = [];
   for (let r = 0; r < maxRounds; r++) {
@@ -430,16 +436,16 @@ export function planTemplateMatches(template, brackets, teamsByBracket) {
 
 // How many matches a template gives a bracket of this many teams — the
 // "expected" figure shown before a matchlist is generated.
-export function expectedTemplateMatches(template, letter, teamCount) {
-  const { rounds } = planTemplateRounds(template, letter, Array.from({ length: teamCount }, (_, i) => `t${i}`));
+export function expectedTemplateMatches(template, letter, teamCount, games) {
+  const { rounds } = planTemplateRounds(template, letter, Array.from({ length: teamCount }, (_, i) => `t${i}`), games);
   return rounds.reduce((sum, r) => sum + r.matches.length, 0);
 }
 
 // What Regenerate should add to a template bracket's existing matchlist:
 // the template matches whose pair isn't already there (any status other
 // than canceled). Existing matches are never changed or removed here.
-export function missingTemplatePairs(template, letter, teamIds, existingMatches) {
+export function missingTemplatePairs(template, letter, teamIds, existingMatches, games) {
   const have = new Set(existingMatches.filter((m) => m.status !== 'canceled').map((m) => pairKey(m.team_a_id, m.team_b_id)));
-  const { rounds } = planTemplateRounds(template, letter, teamIds);
+  const { rounds } = planTemplateRounds(template, letter, teamIds, games);
   return rounds.flatMap((round) => round.matches.filter((m) => !have.has(pairKey(m.a, m.b))).map((m) => ({ ...m, round: round.number })));
 }

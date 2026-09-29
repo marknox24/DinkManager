@@ -3603,8 +3603,8 @@ declare
 begin
   v_event := bracket_edit_event(p_category_id);
   select format into v_format from categories where id = p_category_id;
-  if v_format is null or v_format !~* 'round robin' or v_format ~* 'double round robin' then
-    raise exception 'Games per team can only be customized for Round Robin categories';
+  if v_format is null or (v_format !~* 'round robin' and v_format !~* '^RR:') or v_format ~* 'double round robin' then
+    raise exception 'Games per team can only be customized for Round Robin or match-template categories';
   end if;
   if p_games is not null and p_games < 0 then
     raise exception 'Games per team can''t be negative';

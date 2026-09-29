@@ -1,6 +1,22 @@
-import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Activity, CheckCircle2, Download, FileSpreadsheet, ImageIcon, Lock, Pencil, QrCode, Shuffle, Trash2, Trophy, UserPlus, XCircle } from 'lucide-react';
+import {
+  Activity,
+  CheckCircle2,
+  ChevronDown,
+  Download,
+  FileSpreadsheet,
+  ImageIcon,
+  Lock,
+  Pencil,
+  QrCode,
+  Search,
+  Shuffle,
+  Trash2,
+  UserPlus,
+  X,
+  XCircle,
+} from 'lucide-react';
 import {
   createRegistration,
   createRegistrationsBulk,
@@ -19,6 +35,8 @@ import { useConfirm } from '../../../context/ConfirmContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import EditRegistrationModal from '../../../components/organizer/EditRegistrationModal';
 import AddPlayerModal from '../../../components/organizer/AddPlayerModal';
+import Modal from '../../../components/ui/Modal';
+import RegistrationStatusBadge, { STATUS_LABELS } from '../../../components/player/RegistrationStatusBadge';
 import { PLAN_LIMITS } from '../../../data/plans';
 
 // Lazy: both pull in xlsx/jspdf (via utils/excel.js and utils/pdf.js), which
@@ -27,25 +45,185 @@ import { PLAN_LIMITS } from '../../../data/plans';
 const ImportPlayersModal = lazy(() => import('../../../components/organizer/ImportPlayersModal'));
 const DownloadRegistrationsModal = lazy(() => import('../../../components/organizer/DownloadRegistrationsModal'));
 
-const STATUS_STYLES = {
-  pending: 'bg-amber-100 text-amber-800',
-  approved: 'bg-brand-100 text-brand-700',
-  denied: 'bg-rose-100 text-rose-600',
-  waitlisted: 'bg-violet-100 text-violet-700',
-};
+// Explicit order (not Object.entries(STATUS_LABELS), whose insertion order
+// puts "approved" before "waitlisted") — Pending -> Confirmed -> Waitlisted
+// -> Rejected reads as a natural progression, same order used on the
+// player dashboard's own status filter chips.
+const STATUS_FILTERS = [
+  ['all', 'All'],
+  ['pending', STATUS_LABELS.pending],
+  ['approved', STATUS_LABELS.approved],
+  ['waitlisted', STATUS_LABELS.waitlisted],
+  ['denied', STATUS_LABELS.denied],
+];
 
-// Event-day check-in badge — only shown once at least one slot has checked
-// in, so a normal not-yet-checked-in row doesn't get an extra pill next to
-// the approval status. Manual check-in itself now lives on its own tab.
-function checkinBadge(r) {
+// Tooltip text for the check-in dots below — the dots carry the at-a-glance
+// signal, this is just what shows up on hover for the exact detail.
+function checkinTitle(r) {
   const p1 = Boolean(r.player1_checked_in_at);
   const p2 = Boolean(r.player2_checked_in_at);
-  if (r.player2_name) {
-    if (p1 && p2) return { label: 'Both checked in', className: 'bg-brand-100 text-brand-700' };
-    if (p1 || p2) return { label: '1/2 checked in', className: 'bg-amber-100 text-amber-800' };
-    return null;
-  }
-  return p1 ? { label: 'Checked in', className: 'bg-brand-100 text-brand-700' } : null;
+  if (!r.player2_name) return p1 ? 'Checked in' : 'Not checked in yet';
+  if (p1 && p2) return 'Both checked in';
+  if (p1) return `${r.player_name} checked in — waiting on ${r.player2_name}`;
+  if (p2) return `${r.player2_name} checked in — waiting on ${r.player_name}`;
+  return 'Not checked in yet';
+}
+
+// One collapsible card per category. `catRegs` is every registration in this
+// category (used for the header's counts/plan-limit math, which must stay
+// accurate regardless of the active filter); `visibleRegs` is what the table
+// actually renders. `isCollapsed` already accounts for the "a filter/search
+// is active" override — the caller decides that, this component just draws
+// whatever it's told.
+function CategorySection({
+  cat,
+  catRegs,
+  visibleRegs,
+  approved,
+  capTone,
+  playerCap,
+  planLabel,
+  isCollapsed,
+  onToggle,
+  onDrawBrackets,
+  bracketAssignments,
+  onApprove,
+  onDeny,
+  onViewPhoto,
+  onEdit,
+  onRemove,
+  isFiltering,
+}) {
+  return (
+    <div className="overflow-hidden rounded-2xl border border-ink-100 bg-white shadow-sm">
+      <div className="flex items-center justify-between gap-3 border-b border-ink-100 bg-ink-50/70 px-5 py-3">
+        <button type="button" onClick={onToggle} className="flex flex-1 flex-wrap items-center gap-2 text-left">
+          <ChevronDown size={16} className={`shrink-0 text-ink-400 transition-transform duration-300 ease-out ${isCollapsed ? '' : 'rotate-180'}`} />
+          <span className="font-display text-sm font-bold text-ink-800">{cat.name}</span>
+          <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-ink-500 ring-1 ring-ink-200">
+            {catRegs.length} registered
+            {cat.max_slots ? ` · max ${cat.max_slots}` : ''}
+          </span>
+          {playerCap != null && (
+            <span
+              title={approved > playerCap ? `Over this event's ${planLabel} limit — added before the limit was enforced` : undefined}
+              className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${capTone}`}
+            >
+              {approved} approved · plan limit {playerCap}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={onDrawBrackets}
+          className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-50 px-3 py-1.5 text-[11px] font-bold text-brand-700 transition hover:bg-brand-100"
+        >
+          <Shuffle size={12} /> Draw brackets
+        </button>
+      </div>
+      <div className="grid transition-[grid-template-rows] duration-300 ease-out" style={{ gridTemplateRows: isCollapsed ? '0fr' : '1fr' }}>
+        <div className="overflow-hidden">
+          {catRegs.length === 0 ? (
+            <div className="px-5 py-8 text-center text-sm text-ink-400">No registrations yet.</div>
+          ) : visibleRegs.length === 0 ? (
+            <div className="px-5 py-8 text-center text-sm text-ink-400">
+              No registrations match your {isFiltering ? 'search or filter' : 'filter'}.
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[560px] text-sm">
+                <thead>
+                  <tr className="border-b border-ink-100 text-[11px] font-bold uppercase tracking-wide text-ink-400">
+                    <th className="px-4 py-2.5 text-left">Player</th>
+                    <th className="px-4 py-2.5 text-left">Club</th>
+                    <th className="px-4 py-2.5 text-left">Status</th>
+                    <th className="px-4 py-2.5 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {visibleRegs.map((r) => (
+                    <tr key={r.id} className="border-b border-ink-50">
+                      <td className="px-4 py-2.5">
+                        <div className="font-semibold text-ink-800">
+                          {r.player_name}
+                          {r.player2_name ? ` & ${r.player2_name}` : ''}
+                        </div>
+                        {(r.player_email || r.phone) && (
+                          <div className="text-xs text-ink-400">{[r.player_email, r.phone].filter(Boolean).join(' · ')}</div>
+                        )}
+                        {r.address && <div className="text-xs text-ink-400">{r.address}</div>}
+                      </td>
+                      <td className="px-4 py-2.5 text-ink-600">{r.club_name || '—'}</td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-1.5">
+                          <RegistrationStatusBadge status={r.status} />
+                          {bracketAssignments[r.id] && (
+                            <span
+                              title={`Bracket ${bracketAssignments[r.id]}`}
+                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-violet-100 text-[10px] font-bold text-violet-700"
+                            >
+                              {bracketAssignments[r.id]}
+                            </span>
+                          )}
+                          {r.status === 'approved' &&
+                            (r.player2_name ? (
+                              <span title={checkinTitle(r)} className="flex shrink-0 items-center gap-0.5">
+                                <span className={`h-2.5 w-2.5 rounded-full transition-colors duration-200 ${r.player1_checked_in_at ? 'bg-brand-600' : 'bg-ink-200'}`} />
+                                <span className={`h-2.5 w-2.5 rounded-full transition-colors duration-200 ${r.player2_checked_in_at ? 'bg-brand-600' : 'bg-ink-200'}`} />
+                              </span>
+                            ) : (
+                              <QrCode
+                                size={14}
+                                title={checkinTitle(r)}
+                                className={`shrink-0 transition-colors duration-200 ${r.player1_checked_in_at ? 'text-brand-600' : 'text-ink-200'}`}
+                              />
+                            ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex justify-end gap-1.5">
+                          {r.status !== 'approved' && (
+                            <button onClick={() => onApprove(r)} title="Approve" className="flex h-7 items-center justify-center gap-1 rounded-full bg-brand-50 px-2.5 text-xs font-bold text-brand-700 hover:bg-brand-100">
+                              <CheckCircle2 size={14} /> Approve
+                            </button>
+                          )}
+                          {r.status !== 'denied' && (
+                            <button
+                              onClick={() => onDeny(r)}
+                              disabled={Boolean(bracketAssignments[r.id])}
+                              title={bracketAssignments[r.id] ? 'Already placed in a bracket — remove them from the bracket first' : 'Deny'}
+                              className="flex h-7 w-7 items-center justify-center rounded-full bg-rose-50 text-rose-600 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-rose-50"
+                            >
+                              <XCircle size={14} />
+                            </button>
+                          )}
+                          {r.photo_path && (
+                            <button onClick={() => onViewPhoto(r)} title="View photo" className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-50 text-violet-600 hover:bg-violet-100">
+                              <ImageIcon size={13} />
+                            </button>
+                          )}
+                          <button onClick={() => onEdit(r)} title="Edit" className="flex h-7 w-7 items-center justify-center rounded-full bg-sky-50 text-sky-600 hover:bg-sky-100">
+                            <Pencil size={13} />
+                          </button>
+                          <button
+                            onClick={() => onRemove(r)}
+                            disabled={Boolean(bracketAssignments[r.id])}
+                            title={bracketAssignments[r.id] ? 'Already placed in a bracket — remove them from the bracket first' : 'Remove'}
+                            className="flex h-7 w-7 items-center justify-center rounded-full bg-ink-100 text-ink-500 hover:bg-ink-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-ink-100"
+                          >
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function RegistrationsPage() {
@@ -63,6 +241,10 @@ export default function RegistrationsPage() {
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [downloadModalOpen, setDownloadModalOpen] = useState(false);
+  const [photoPreview, setPhotoPreview] = useState(null); // { url, name }
+  const [collapsedCategoryIds, setCollapsedCategoryIds] = useState(() => new Set());
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [query, setQuery] = useState('');
 
   const reload = useCallback(async () => {
     try {
@@ -141,13 +323,26 @@ export default function RegistrationsPage() {
     }
   };
 
+  // Renders the signed URL inside an <img> in a lightbox rather than
+  // window.open()-ing it directly — Supabase Storage's response sets
+  // Content-Disposition in a way that made the browser download the file
+  // instead of displaying it. An <img src> load isn't subject to that.
   const viewPhoto = async (reg) => {
     try {
       const url = await getRegistrationFileUrl(reg.photo_path);
-      window.open(url, '_blank', 'noopener,noreferrer');
+      setPhotoPreview({ url, name: reg.player_name });
     } catch (e) {
       pushToast(e.message, 'error');
     }
+  };
+
+  const toggleCategory = (categoryId) => {
+    setCollapsedCategoryIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(categoryId)) next.delete(categoryId);
+      else next.add(categoryId);
+      return next;
+    });
   };
 
   const saveEdit = async (patch) => {
@@ -224,6 +419,23 @@ export default function RegistrationsPage() {
     }
   };
 
+  const statusCounts = useMemo(() => {
+    const counts = { all: registrations.length, pending: 0, approved: 0, waitlisted: 0, denied: 0 };
+    registrations.forEach((r) => {
+      if (counts[r.status] != null) counts[r.status] += 1;
+    });
+    return counts;
+  }, [registrations]);
+
+  const isFiltering = statusFilter !== 'all' || query.trim() !== '';
+
+  const matchesFilters = (r) => {
+    if (statusFilter !== 'all' && r.status !== statusFilter) return false;
+    const q = query.trim().toLowerCase();
+    if (q && !r.player_name.toLowerCase().includes(q)) return false;
+    return true;
+  };
+
   return (
     <EventWorkspaceLayout event={event}>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
@@ -268,153 +480,100 @@ export default function RegistrationsPage() {
       {!event ? (
         <div className="py-16 text-center text-sm text-ink-400">Loading…</div>
       ) : (
-        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_320px]">
-          <div className="flex flex-col gap-5">
-            {categories.map((cat) => {
-              const catRegs = registrations.filter((r) => r.category_id === cat.id);
-              const approved = approvedCount(cat.id);
-              const capTone =
-                playerCap == null
-                  ? ''
-                  : approved > playerCap
-                    ? 'bg-rose-50 text-rose-700 ring-rose-200'
-                    : approved === playerCap
-                      ? 'bg-amber-50 text-amber-700 ring-amber-200'
-                      : 'bg-white text-ink-500 ring-ink-200';
-              return (
-                <div key={cat.id} className="overflow-hidden rounded-2xl border border-ink-100 bg-white shadow-sm">
-                  <div className="flex items-center justify-between border-b border-ink-100 bg-ink-50/70 px-5 py-3">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="font-display text-sm font-bold text-ink-800">{cat.name}</span>
-                      <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-ink-500 ring-1 ring-ink-200">
-                        {catRegs.length} registered
-                        {cat.max_slots ? ` · max ${cat.max_slots}` : ''}
-                      </span>
-                      {playerCap != null && (
-                        <span
-                          title={approved > playerCap ? `Over this event's ${planLabel} limit — added before the limit was enforced` : undefined}
-                          className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ring-1 ${capTone}`}
-                        >
-                          {approved} approved · plan limit {playerCap}
-                        </span>
-                      )}
-                    </div>
-                    <button
-                      onClick={() => navigate(`/events/${eventId}/brackets`)}
-                      className="flex items-center gap-1.5 rounded-full bg-brand-50 px-3 py-1.5 text-[11px] font-bold text-brand-700 transition hover:bg-brand-100"
-                    >
-                      <Shuffle size={12} /> Draw brackets
-                    </button>
-                  </div>
-                  {catRegs.length === 0 ? (
-                    <div className="px-5 py-8 text-center text-sm text-ink-400">No registrations yet.</div>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full min-w-[560px] text-sm">
-                        <thead>
-                          <tr className="border-b border-ink-100 text-[11px] font-bold uppercase tracking-wide text-ink-400">
-                            <th className="px-4 py-2.5 text-left">Player</th>
-                            <th className="px-4 py-2.5 text-left">Club</th>
-                            <th className="px-4 py-2.5 text-left">Status</th>
-                            <th className="px-4 py-2.5 text-right">Actions</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {catRegs.map((r) => (
-                            <tr key={r.id} className="border-b border-ink-50">
-                              <td className="px-4 py-2.5">
-                                <div className="font-semibold text-ink-800">
-                                  {r.player_name}
-                                  {r.player2_name ? ` & ${r.player2_name}` : ''}
-                                </div>
-                                {(r.player_email || r.phone) && (
-                                  <div className="text-xs text-ink-400">{[r.player_email, r.phone].filter(Boolean).join(' · ')}</div>
-                                )}
-                                {r.address && <div className="text-xs text-ink-400">{r.address}</div>}
-                              </td>
-                              <td className="px-4 py-2.5 text-ink-600">{r.club_name || '—'}</td>
-                              <td className="px-4 py-2.5">
-                                <div className="flex flex-wrap items-center gap-1.5">
-                                  <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${STATUS_STYLES[r.status]}`}>{r.status}</span>
-                                  {bracketAssignments[r.id] && (
-                                    <span className="flex items-center gap-1 rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-bold text-violet-700">
-                                      <Trophy size={10} /> Bracket {bracketAssignments[r.id]}
-                                    </span>
-                                  )}
-                                  {checkinBadge(r) && (
-                                    <span className={`flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-bold ${checkinBadge(r).className}`}>
-                                      <QrCode size={10} /> {checkinBadge(r).label}
-                                    </span>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="px-4 py-2.5">
-                                <div className="flex justify-end gap-1.5">
-                                  {r.status !== 'approved' && (
-                                    <button onClick={() => setStatus(r, 'approved')} title="Approve" className="flex h-7 items-center justify-center gap-1 rounded-full bg-brand-50 px-2.5 text-xs font-bold text-brand-700 hover:bg-brand-100">
-                                      <CheckCircle2 size={14} /> Approve
-                                    </button>
-                                  )}
-                                  {r.status !== 'denied' && (
-                                    <button
-                                      onClick={() => setStatus(r, 'denied')}
-                                      disabled={Boolean(bracketAssignments[r.id])}
-                                      title={bracketAssignments[r.id] ? 'Already placed in a bracket — remove them from the bracket first' : 'Deny'}
-                                      className="flex h-7 w-7 items-center justify-center rounded-full bg-rose-50 text-rose-600 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-rose-50"
-                                    >
-                                      <XCircle size={14} />
-                                    </button>
-                                  )}
-                                  {r.photo_path && (
-                                    <button onClick={() => viewPhoto(r)} title="View photo" className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-50 text-violet-600 hover:bg-violet-100">
-                                      <ImageIcon size={13} />
-                                    </button>
-                                  )}
-                                  <button onClick={() => setEditingReg(r)} title="Edit" className="flex h-7 w-7 items-center justify-center rounded-full bg-sky-50 text-sky-600 hover:bg-sky-100">
-                                    <Pencil size={13} />
-                                  </button>
-                                  <button
-                                    onClick={() => removeRegistration(r)}
-                                    disabled={Boolean(bracketAssignments[r.id])}
-                                    title={bracketAssignments[r.id] ? 'Already placed in a bracket — remove them from the bracket first' : 'Remove'}
-                                    className="flex h-7 w-7 items-center justify-center rounded-full bg-ink-100 text-ink-500 hover:bg-ink-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-ink-100"
-                                  >
-                                    <Trash2 size={13} />
-                                  </button>
-                                </div>
-                              </td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            {categories.length === 0 && (
-              <div className="rounded-2xl border border-dashed border-ink-200 bg-white py-12 text-center text-sm text-ink-400">
-                Add categories in Edit event before players can register.
-              </div>
+        <>
+          <div className="relative mb-4">
+            <Search size={20} className="pointer-events-none absolute left-5 top-1/2 -translate-y-1/2 text-ink-300" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search a player by name…"
+              className="w-full rounded-2xl border-2 border-ink-200 bg-white py-4 pl-14 pr-14 text-base font-semibold text-ink-900 shadow-sm outline-none transition focus:border-brand-400 focus:ring-4 focus:ring-brand-100"
+            />
+            {query && (
+              <button
+                onClick={() => setQuery('')}
+                className="absolute right-4 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full text-ink-300 transition hover:bg-ink-100 hover:text-ink-600"
+              >
+                <X size={16} />
+              </button>
             )}
           </div>
 
-          <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm lg:sticky lg:top-6 lg:h-fit">
-            <div className="mb-3 flex items-center gap-2">
-              <Activity size={15} className="text-ink-400" />
-              <h3 className="font-display text-sm font-bold text-ink-800">Activity feed</h3>
-            </div>
-            <div className="flex max-h-[500px] flex-col gap-2.5 overflow-y-auto">
-              {activity.length === 0 && <p className="text-xs text-ink-400">Nothing yet.</p>}
-              {activity.map((a) => (
-                <div key={a.id} className="rounded-xl bg-ink-50 px-3 py-2 text-xs text-ink-600">
-                  <div>{a.message}</div>
-                  <div className="mt-0.5 text-[10px] text-ink-400">{new Date(a.created_at).toLocaleString()}</div>
+          <div className="mb-5 flex items-center gap-1 overflow-x-auto rounded-full bg-ink-50 p-1">
+            {STATUS_FILTERS.map(([id, label]) => (
+              <button
+                key={id}
+                onClick={() => setStatusFilter(id)}
+                className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-bold transition ${
+                  statusFilter === id ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500 hover:text-ink-700'
+                }`}
+              >
+                {label} ({statusCounts[id] ?? 0})
+              </button>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_320px]">
+            <div className="flex flex-col gap-5">
+              {categories.map((cat) => {
+                const catRegs = registrations.filter((r) => r.category_id === cat.id);
+                const visibleRegs = catRegs.filter(matchesFilters);
+                const approved = approvedCount(cat.id);
+                const capTone =
+                  playerCap == null
+                    ? ''
+                    : approved > playerCap
+                      ? 'bg-rose-50 text-rose-700 ring-rose-200'
+                      : approved === playerCap
+                        ? 'bg-amber-50 text-amber-700 ring-amber-200'
+                        : 'bg-white text-ink-500 ring-ink-200';
+                return (
+                  <CategorySection
+                    key={cat.id}
+                    cat={cat}
+                    catRegs={catRegs}
+                    visibleRegs={visibleRegs}
+                    approved={approved}
+                    capTone={capTone}
+                    playerCap={playerCap}
+                    planLabel={planLabel}
+                    isFiltering={isFiltering}
+                    isCollapsed={!isFiltering && collapsedCategoryIds.has(cat.id)}
+                    onToggle={() => toggleCategory(cat.id)}
+                    onDrawBrackets={() => navigate(`/events/${eventId}/brackets`)}
+                    bracketAssignments={bracketAssignments}
+                    onApprove={(r) => setStatus(r, 'approved')}
+                    onDeny={(r) => setStatus(r, 'denied')}
+                    onViewPhoto={viewPhoto}
+                    onEdit={setEditingReg}
+                    onRemove={removeRegistration}
+                  />
+                );
+              })}
+              {categories.length === 0 && (
+                <div className="rounded-2xl border border-dashed border-ink-200 bg-white py-12 text-center text-sm text-ink-400">
+                  Add categories in Edit event before players can register.
                 </div>
-              ))}
+              )}
+            </div>
+
+            <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm lg:sticky lg:top-6 lg:h-fit">
+              <div className="mb-3 flex items-center gap-2">
+                <Activity size={15} className="text-ink-400" />
+                <h3 className="font-display text-sm font-bold text-ink-800">Activity feed</h3>
+              </div>
+              <div className="flex max-h-[500px] flex-col gap-2.5 overflow-y-auto">
+                {activity.length === 0 && <p className="text-xs text-ink-400">Nothing yet.</p>}
+                {activity.map((a) => (
+                  <div key={a.id} className="rounded-xl bg-ink-50 px-3 py-2 text-xs text-ink-600">
+                    <div>{a.message}</div>
+                    <div className="mt-0.5 text-[10px] text-ink-400">{new Date(a.created_at).toLocaleString()}</div>
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
+        </>
       )}
 
       {editingReg && (
@@ -440,6 +599,13 @@ export default function RegistrationsPage() {
             onClose={() => setDownloadModalOpen(false)}
           />
         </Suspense>
+      )}
+
+      {photoPreview && (
+        <Modal open onClose={() => setPhotoPreview(null)} title="Registration photo" icon={ImageIcon}>
+          <p className="mb-3 text-xs text-ink-500">{photoPreview.name}</p>
+          <img src={photoPreview.url} alt="Registration" className="max-h-[70vh] w-full rounded-xl border border-ink-100 object-contain" />
+        </Modal>
       )}
     </EventWorkspaceLayout>
   );
