@@ -1187,7 +1187,7 @@ alter table registrations enable row level security;
 drop policy if exists "registrations_insert_public" on registrations;
 create policy "registrations_insert_public" on registrations for insert
   with check (
-    exists (select 1 from events e where e.id = registrations.event_id and e.is_published = true)
+    exists (select 1 from events e where e.id = registrations.event_id and e.is_published = true and e.status <> 'finished')
     and (player_id is null or player_id = auth.uid())
     and status = 'pending'
   );
@@ -1195,9 +1195,10 @@ create policy "registrations_insert_public" on registrations for insert
 -- Lets the organizer insert registrations directly (manual add + Excel
 -- import) regardless of is_published — additive alongside the policy above
 -- (permissive insert policies OR together). status <> 'finished' blocks
--- this specific (owner) insert path on a locked event; the public
--- self-registration policy above is left alone since it's already moot
--- (nobody registers for a finished tournament) — not worth gating.
+-- this (owner) insert path the same way it now blocks the public
+-- self-registration policy above — both closed once the event is done, so
+-- a player can't slip in through a stale bookmarked/shared register link
+-- and the organizer can't bulk-import onto a locked event either.
 drop policy if exists "registrations_insert_owner" on registrations;
 create policy "registrations_insert_owner" on registrations for insert
   with check (exists (select 1 from events e where e.id = registrations.event_id and (e.organizer_id = auth.uid() or has_event_permission(e.id, 'registrations')) and e.status <> 'finished'));
@@ -1394,11 +1395,18 @@ create trigger on_registration_created
   after insert on registrations
   for each row execute function log_registration_activity();
 
+-- Also writes a player-facing row into player_notifications below (when the
+-- registration carries a real player_id) alongside the existing organizer-
+-- facing activity_log row — two different audiences, same trigger, since
+-- both need to fire on the exact same status transition.
 create or replace function log_registration_status_change()
 returns trigger
 language plpgsql
 security definer set search_path = public
 as $$
+declare
+  cat_name text;
+  ev_name text;
 begin
   if new.status is distinct from old.status then
     insert into activity_log (event_id, message)
@@ -1409,6 +1417,25 @@ begin
         when 'waitlisted' then 'moved to the waiting list'
         else new.status
       end);
+
+    if new.player_id is not null then
+      select name into cat_name from categories where id = new.category_id;
+      select name into ev_name from events where id = new.event_id;
+      -- new_status is stored structured (not just embedded in the message)
+      -- so the frontend's approval pop-up can filter for 'approved'
+      -- directly, without parsing message text.
+      insert into player_notifications (player_id, event_id, registration_id, kind, message, new_status)
+      values (new.player_id, new.event_id, new.id, 'status_change',
+        'Your registration for ' || coalesce(cat_name, 'a category') || ' in ' || coalesce(ev_name, 'the tournament') ||
+        ' is now ' ||
+        case new.status
+          when 'approved' then 'confirmed'
+          when 'denied' then 'rejected'
+          when 'waitlisted' then 'waitlisted'
+          else new.status
+        end || '.',
+        new.status);
+    end if;
   end if;
   return new;
 end;
@@ -1418,6 +1445,110 @@ drop trigger if exists on_registration_status_change on registrations;
 create trigger on_registration_status_change
   after update on registrations
   for each row execute function log_registration_status_change();
+
+-- ----------------------------------------------------------------------------
+-- PLAYER NOTIFICATIONS  (player-facing feed: registration status changes and
+-- event reschedule/cancellation/date changes for events they're registered
+-- in — distinct from activity_log, which is organizer-facing only, and from
+-- admin_activity, which is platform-admin-only. Read-only via RLS; every
+-- write goes through the security-definer trigger functions below or the
+-- mark_notifications_read() RPC, never a raw client insert/update.)
+-- ----------------------------------------------------------------------------
+create table if not exists player_notifications (
+  id uuid primary key default gen_random_uuid(),
+  player_id uuid not null references auth.users(id) on delete cascade,
+  event_id uuid not null references events(id) on delete cascade,
+  -- Nullable: an event-level cancel/reschedule notification is written once
+  -- per affected player (see notify_players_of_event_change below), not once
+  -- per registration row, so a player with 2+ categories in the same event
+  -- doesn't get duplicate notifications for one organizer action.
+  registration_id uuid references registrations(id) on delete set null,
+  kind text not null check (kind in ('status_change', 'event_updated', 'event_cancelled')),
+  message text not null,
+  -- Only set for kind = 'status_change' (registrations.status's own values:
+  -- pending/approved/denied/waitlisted) — lets the frontend's approval
+  -- pop-up filter for 'approved' directly instead of parsing message text.
+  new_status text,
+  read_at timestamptz,
+  created_at timestamptz not null default now()
+);
+alter table player_notifications add column if not exists new_status text;
+alter table player_notifications enable row level security;
+create index if not exists player_notifications_player_idx on player_notifications (player_id, created_at desc);
+
+drop policy if exists "player_notifications_select_own" on player_notifications;
+create policy "player_notifications_select_own" on player_notifications for select
+  using (auth.uid() = player_id);
+
+-- The player's only write path — marks their own unread notifications read.
+-- No insert/update/delete RLS policy exists on this table at all; this
+-- security-definer function is the sole legitimate write surface for a
+-- client, with player_id = auth.uid() as the real ownership guard inside
+-- the function body (not the RLS layer, which is bypassed by security
+-- definer).
+create or replace function mark_notifications_read(p_ids uuid[])
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update player_notifications
+  set read_at = now()
+  where id = any(p_ids) and player_id = auth.uid() and read_at is null;
+$$;
+
+revoke execute on function mark_notifications_read(uuid[]) from public, anon;
+grant execute on function mark_notifications_read(uuid[]) to authenticated;
+
+-- Notifies every registered (non-denied) player when an event they're in
+-- gets cancelled, marked rescheduled, or has its dates actually move.
+-- Deliberately ignores every other column edit (name/description/rules/etc)
+-- via the is distinct from guards below, so an organizer tidying up copy
+-- never spams players with irrelevant notifications.
+create or replace function notify_players_of_event_change()
+returns trigger
+language plpgsql
+security definer set search_path = public
+as $$
+declare
+  v_message text;
+  v_kind text;
+begin
+  -- Nothing to notify about for an event that was never, and still isn't,
+  -- published (no player could have a real stake in it yet).
+  if not (old.is_published or new.is_published) then
+    return new;
+  end if;
+
+  if new.status = 'cancelled' and old.status is distinct from 'cancelled' then
+    v_kind := 'event_cancelled';
+    v_message := '"' || new.name || '" has been cancelled.';
+  elsif (new.status = 'rescheduled' and old.status is distinct from 'rescheduled')
+     or new.start_date is distinct from old.start_date
+     or new.end_date is distinct from old.end_date then
+    v_kind := 'event_updated';
+    v_message := '"' || new.name || '" dates changed to ' || coalesce(new.start_date::text, 'TBD') ||
+      case when new.end_date is not null and new.end_date is distinct from new.start_date
+        then ' – ' || new.end_date::text else '' end || '.';
+  else
+    return new;
+  end if;
+
+  -- One row per distinct player, not per registration — see the comment on
+  -- player_notifications.registration_id above.
+  insert into player_notifications (player_id, event_id, kind, message)
+  select distinct r.player_id, new.id, v_kind, v_message
+  from registrations r
+  where r.event_id = new.id and r.player_id is not null and r.status <> 'denied';
+
+  return new;
+end;
+$$;
+
+drop trigger if exists on_event_player_notify on events;
+create trigger on_event_player_notify
+  after update on events
+  for each row execute function notify_players_of_event_change();
 
 -- ----------------------------------------------------------------------------
 -- SPONSORS  (shown on the Preview Screen; organizer-managed, never public)

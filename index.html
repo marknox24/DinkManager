@@ -10,33 +10,75 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
-    <title>Tournament Management Software for Community Sports | DinkManager</title>
+    <!-- These are the defaults; src/hooks/useSeo.js swaps them per page (and
+         keeps its DEFAULTS in sync with the title/description here). -->
+    <title>Pickleball Tournament Software &amp; Bracket Maker | DinkManager</title>
     <meta
       name="description"
-      content="Run tournaments with registration, brackets, scheduling, score sheets, results and more — all in one place. Pay per event with no monthly commitment."
+      content="Run pickleball tournaments in one place — online registration, automatic brackets, match scheduling, live scores and results. Pay per event, no monthly fees."
     />
+    <link rel="canonical" href="https://dinkmanager.com/" />
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="DinkManager" />
-    <meta property="og:title" content="Tournament Management Software for Community Sports | DinkManager" />
+    <meta property="og:locale" content="en_PH" />
+    <meta property="og:title" content="Pickleball Tournament Software &amp; Bracket Maker | DinkManager" />
     <meta
       property="og:description"
-      content="Run tournaments with registration, brackets, scheduling, score sheets, results and more — all in one place. Pay per event with no monthly commitment."
+      content="Run pickleball tournaments in one place — online registration, automatic brackets, match scheduling, live scores and results. Pay per event, no monthly fees."
     />
     <!-- Link previews (Facebook, Messenger, Viber, X, Slack...) need an
          absolute image URL; public/og-image.png is 1200x630, the size they all
-         crop to. Update the domain here if the site moves to its own. -->
-    <meta property="og:url" content="https://dinkmanager.vercel.app/" />
-    <meta property="og:image" content="https://dinkmanager.vercel.app/og-image.png" />
+         crop to. -->
+    <meta property="og:url" content="https://dinkmanager.com/" />
+    <meta property="og:image" content="https://dinkmanager.com/og-image.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="DinkManager logo — pickleball tournament software" />
+    <meta property="og:image:alt" content="DinkManager — pickleball tournament software" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:image" content="https://dinkmanager.vercel.app/og-image.png" />
-    <meta name="twitter:title" content="Tournament Management Software for Community Sports | DinkManager" />
+    <meta name="twitter:image" content="https://dinkmanager.com/og-image.png" />
+    <meta name="twitter:title" content="Pickleball Tournament Software &amp; Bracket Maker | DinkManager" />
     <meta
       name="twitter:description"
-      content="Run tournaments with registration, brackets, scheduling, score sheets, results and more — all in one place. Pay per event with no monthly commitment."
+      content="Run pickleball tournaments in one place — online registration, automatic brackets, match scheduling, live scores and results. Pay per event, no monthly fees."
     />
+    <!-- Sitewide structured data. Plan prices mirror src/data/plans.js. -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@graph": [
+          {
+            "@type": "Organization",
+            "@id": "https://dinkmanager.com/#organization",
+            "name": "DinkManager",
+            "url": "https://dinkmanager.com/",
+            "logo": "https://dinkmanager.com/icons/icon-512.png",
+            "email": "support@dinkmanager.com"
+          },
+          {
+            "@type": "WebSite",
+            "@id": "https://dinkmanager.com/#website",
+            "name": "DinkManager",
+            "url": "https://dinkmanager.com/",
+            "publisher": { "@id": "https://dinkmanager.com/#organization" }
+          },
+          {
+            "@type": "SoftwareApplication",
+            "name": "DinkManager",
+            "url": "https://dinkmanager.com/",
+            "applicationCategory": "SportsApplication",
+            "operatingSystem": "Web",
+            "description": "Pickleball tournament management software: online registration, automatic brackets, match scheduling, live scores, check-in and results.",
+            "publisher": { "@id": "https://dinkmanager.com/#organization" },
+            "offers": [
+              { "@type": "Offer", "name": "Free Trial", "price": "0", "priceCurrency": "PHP" },
+              { "@type": "Offer", "name": "Starter", "price": "699", "priceCurrency": "PHP" },
+              { "@type": "Offer", "name": "Pro", "price": "899", "priceCurrency": "PHP" },
+              { "@type": "Offer", "name": "Business", "price": "1099", "priceCurrency": "PHP" }
+            ]
+          }
+        ]
+      }
+    </script>
   </head>
   <body>
     <div id="root"></div>

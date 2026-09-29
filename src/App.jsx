@@ -1,6 +1,7 @@
-import { lazy, Suspense } from 'react';
-import { Route, Routes } from 'react-router-dom';
+import { lazy, Suspense, useEffect } from 'react';
+import { Route, Routes, useLocation } from 'react-router-dom';
 import { isSupabaseConfigured } from './lib/supabaseClient';
+import { trackPageView } from './lib/analytics';
 import { ToastProvider } from './context/ToastContext';
 import { AuthProvider } from './context/AuthContext';
 import { ConfirmProvider } from './components/ui/ConfirmProvider';
@@ -23,6 +24,9 @@ const LoginPage = lazy(() => import('./pages/auth/LoginPage'));
 const SignupPage = lazy(() => import('./pages/auth/SignupPage'));
 const ForgotPasswordPage = lazy(() => import('./pages/auth/ForgotPasswordPage'));
 const ResetPasswordPage = lazy(() => import('./pages/auth/ResetPasswordPage'));
+const VerifyEmailPage = lazy(() => import('./pages/auth/VerifyEmailPage'));
+const PrivacyPolicyPage = lazy(() => import('./pages/legal/PrivacyPolicyPage'));
+const TermsPage = lazy(() => import('./pages/legal/TermsPage'));
 const PlayerLoginPage = lazy(() => import('./pages/player/PlayerLoginPage'));
 const PlayerSignupPage = lazy(() => import('./pages/player/PlayerSignupPage'));
 const PlayerDashboardPage = lazy(() => import('./pages/player/PlayerDashboardPage'));
@@ -73,6 +77,18 @@ function Protected({ children, role, requireAdmin }) {
   );
 }
 
+// Pages are lazy-loaded and set their own <title> once mounted (useSeo), so
+// the page view waits briefly for that before reporting — and is dropped if
+// the user navigates again first.
+function AnalyticsPageViews() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    const timer = setTimeout(() => trackPageView(pathname), 700);
+    return () => clearTimeout(timer);
+  }, [pathname]);
+  return null;
+}
+
 function AppRoutes() {
   return (
     <Suspense fallback={<RouteFallback />}>
@@ -82,6 +98,9 @@ function AppRoutes() {
         <Route path="/signup" element={<RequireSupabase><SignupPage /></RequireSupabase>} />
         <Route path="/forgot-password" element={<RequireSupabase><ForgotPasswordPage /></RequireSupabase>} />
         <Route path="/reset-password" element={<RequireSupabase><ResetPasswordPage /></RequireSupabase>} />
+        <Route path="/verify-email" element={<RequireSupabase><VerifyEmailPage /></RequireSupabase>} />
+        <Route path="/privacy" element={<PrivacyPolicyPage />} />
+        <Route path="/terms" element={<TermsPage />} />
         <Route path="/player/login" element={<RequireSupabase><PlayerLoginPage /></RequireSupabase>} />
         <Route path="/player/signup" element={<RequireSupabase><PlayerSignupPage /></RequireSupabase>} />
         <Route path="/player/dashboard" element={<Protected role="player"><PlayerDashboardPage /></Protected>} />
@@ -170,6 +189,7 @@ export default function App() {
     <ToastProvider>
       <ConfirmProvider>
         <AuthProvider>
+          <AnalyticsPageViews />
           <AppRoutes />
           <ToastStack />
         </AuthProvider>

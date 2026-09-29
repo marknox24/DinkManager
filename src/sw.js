@@ -19,8 +19,13 @@ registerRoute(({ url }) => url.hostname.endsWith('.supabase.co'), new NetworkOnl
 
 // SPA fallback: a hard reload on a deep route like /events/:id/matchlist
 // still boots the app shell offline instead of hitting a browser error
-// page, mirroring vercel.json's catch-all rewrite for online navigation.
-registerRoute(new NavigationRoute(createHandlerBoundToURL('/index.html')));
+// page, mirroring vercel.json's catch-all rewrite for online navigation —
+// including its exceptions (the sitemap function, robots.txt, /api).
+registerRoute(
+  new NavigationRoute(createHandlerBoundToURL('/index.html'), {
+    denylist: [/^\/sitemap\.xml$/, /^\/robots\.txt$/, /^\/api\//],
+  })
+);
 
 registerRoute(
   ({ url }) => url.hostname === 'fonts.googleapis.com' || url.hostname === 'fonts.gstatic.com',

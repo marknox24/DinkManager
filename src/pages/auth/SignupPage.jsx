@@ -6,12 +6,19 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import AuthSplitLayout from '../../components/auth/AuthSplitLayout';
 import RoleToggle from '../../components/auth/RoleToggle';
+import CheckInboxPanel from '../../components/auth/CheckInboxPanel';
 import SocialLoginButtons, { SOCIAL_LOGIN_ENABLED } from '../../components/auth/SocialLoginButtons';
 import { isDuplicateEmailError, isDuplicateSignupResponse } from '../../utils/authErrors';
 import { PAID_PLAN_ORDER, PLAN_LIMITS } from '../../data/plans';
 import { rememberPlan } from '../../utils/pendingPlan';
+import useSeo from '../../hooks/useSeo';
 
 export default function SignupPage() {
+  useSeo({
+    title: 'Create an Organizer Account — Run Pickleball Tournaments | DinkManager',
+    description: 'Sign up free and run your first pickleball tournament with online registration, brackets, scheduling and live scores. Pay per event.',
+    path: '/signup',
+  });
   const { signUp } = useAuth();
   const { pushToast } = useToast();
   const navigate = useNavigate();
@@ -28,6 +35,7 @@ export default function SignupPage() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [sent, setSent] = useState(false);
 
   const pushDuplicateEmailToast = () =>
     pushToast(
@@ -67,12 +75,19 @@ export default function SignupPage() {
       return;
     }
     if (!data.session) {
-      pushToast('Check your email to confirm your account, then sign in.', 'success');
-      navigate('/login');
+      setSent(true);
       return;
     }
     navigate('/dashboard', { replace: true });
   };
+
+  if (sent) {
+    return (
+      <AuthSplitLayout>
+        <CheckInboxPanel email={email} onChangeEmail={() => setSent(false)} loginPath="/login" />
+      </AuthSplitLayout>
+    );
+  }
 
   return (
     <AuthSplitLayout>
@@ -151,6 +166,17 @@ export default function SignupPage() {
         >
           <UserPlus size={15} /> {submitting ? 'Creating account…' : 'Create account'}
         </button>
+        <p className="text-center text-xs text-ink-400">
+          By creating an account, you agree to our{' '}
+          <Link to="/terms" className="font-semibold text-ink-600 hover:text-ink-900">
+            Terms of Service
+          </Link>{' '}
+          and{' '}
+          <Link to="/privacy" className="font-semibold text-ink-600 hover:text-ink-900">
+            Privacy Policy
+          </Link>
+          .
+        </p>
       </form>
 
       {SOCIAL_LOGIN_ENABLED && (

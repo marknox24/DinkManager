@@ -20,3 +20,22 @@ export function formatDateRange(start, end, fallback = 'Dates TBD') {
   if (start && end && start !== end) return `${fmt(start)} – ${fmt(end)}`;
   return fmt(start || end);
 }
+
+export function formatRelativeTime(dateString) {
+  const diffMs = new Date(dateString).getTime() - Date.now();
+  const diffSec = Math.round(diffMs / 1000);
+  const units = [
+    ['year', 31536000],
+    ['month', 2592000],
+    ['week', 604800],
+    ['day', 86400],
+    ['hour', 3600],
+    ['minute', 60],
+  ];
+  for (const [unit, secs] of units) {
+    if (Math.abs(diffSec) >= secs) {
+      return new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(Math.round(diffSec / secs), unit);
+    }
+  }
+  return 'just now';
+}

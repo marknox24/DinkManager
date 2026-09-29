@@ -9,10 +9,12 @@ import AuthSplitLayout from '../../components/auth/AuthSplitLayout';
 import RoleToggle from '../../components/auth/RoleToggle';
 import SocialLoginButtons, { SOCIAL_LOGIN_ENABLED } from '../../components/auth/SocialLoginButtons';
 import { rememberPlan } from '../../utils/pendingPlan';
+import useSeo from '../../hooks/useSeo';
 
 const REMEMBER_KEY = 'dinkmanager_remembered_organizer_email';
 
 export default function LoginPage() {
+  useSeo({ title: 'Sign in | DinkManager', noindex: true });
   const { signIn, signOut, getAal, refreshAal, mfaListFactors, mfaChallenge, mfaVerify } = useAuth();
   const { pushToast } = useToast();
   const navigate = useNavigate();

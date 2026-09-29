@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import Logo from '../ui/Logo';
 
 const COLUMNS = [
@@ -24,13 +24,34 @@ const COLUMNS = [
     links: [
       { label: 'About', href: '#' },
       { label: 'Contact', href: '#' },
-      { label: 'Terms', href: '#' },
-      { label: 'Privacy', href: '#' },
+      { label: 'Terms', href: '/terms' },
+      { label: 'Privacy', href: '/privacy' },
     ],
   },
 ];
 
+// Section anchors (#pricing etc.) only exist on the landing page, where the
+// smooth-scroll hook intercepts bare "#…" links — elsewhere (e.g. /privacy)
+// they need the "/" prefix to navigate back to the landing page first.
+function FooterLink({ href, onLanding, children }) {
+  const className = 'text-sm text-ink-600 transition hover:text-ink-900';
+  if (href.startsWith('/')) {
+    return (
+      <Link to={href} className={className}>
+        {children}
+      </Link>
+    );
+  }
+  const resolved = href.startsWith('#') && href.length > 1 && !onLanding ? `/${href}` : href;
+  return (
+    <a href={resolved} className={className}>
+      {children}
+    </a>
+  );
+}
+
 export default function MarketingFooter() {
+  const onLanding = useLocation().pathname === '/';
   return (
     <footer className="border-t border-ink-100 bg-white py-14">
       <div className="mx-auto max-w-6xl px-4">
@@ -49,9 +70,9 @@ export default function MarketingFooter() {
               <ul className="mt-3 flex flex-col gap-2.5">
                 {col.links.map((l) => (
                   <li key={l.label}>
-                    <a href={l.href} className="text-sm text-ink-600 transition hover:text-ink-900">
+                    <FooterLink href={l.href} onLanding={onLanding}>
                       {l.label}
-                    </a>
+                    </FooterLink>
                   </li>
                 ))}
               </ul>

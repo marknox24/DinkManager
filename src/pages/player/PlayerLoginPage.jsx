@@ -7,10 +7,12 @@ import { useToast } from '../../context/ToastContext';
 import AuthSplitLayout from '../../components/auth/AuthSplitLayout';
 import RoleToggle from '../../components/auth/RoleToggle';
 import SocialLoginButtons, { SOCIAL_LOGIN_ENABLED } from '../../components/auth/SocialLoginButtons';
+import useSeo from '../../hooks/useSeo';
 
 const REMEMBER_KEY = 'dinkmanager_remembered_player_email';
 
 export default function PlayerLoginPage() {
+  useSeo({ title: 'Player sign in | DinkManager', noindex: true });
   const { signIn, signOut, getAal, refreshAal, mfaListFactors, mfaChallenge, mfaVerify } = useAuth();
   const { pushToast } = useToast();
   const navigate = useNavigate();

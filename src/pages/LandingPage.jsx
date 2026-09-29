@@ -1,4 +1,5 @@
 import useSmoothScroll from '../hooks/useSmoothScroll';
+import useSeo from '../hooks/useSeo';
 import MarketingNav from '../components/marketing/MarketingNav';
 import Hero from '../components/marketing/Hero';
 import TrustBar from '../components/marketing/TrustBar';
@@ -19,6 +20,7 @@ import MarketingFooter from '../components/marketing/MarketingFooter';
 
 export default function LandingPage() {
   useSmoothScroll();
+  useSeo({ path: '/' });
 
   return (
     <div className="bg-white">

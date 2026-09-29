@@ -13,6 +13,7 @@ import StatusBadge from '../../components/organizer/StatusBadge';
 import GettingStartedChecklist from '../../components/organizer/GettingStartedChecklist';
 import WelcomeOnboardingModal from '../../components/organizer/WelcomeOnboardingModal';
 import PricingPromptModal from '../../components/organizer/PricingPromptModal';
+import PlanApprovedModal from '../../components/organizer/PlanApprovedModal';
 import AccountTypeCard from '../../components/ui/AccountTypeCard';
 
 // Where a staffer's event card should link to — their first granted nav
@@ -20,6 +21,13 @@ import AccountTypeCard from '../../components/ui/AccountTypeCard';
 // anyone not granted that toggle.
 function firstAllowedNavId(staff) {
   return EVENT_PERMISSIONS.find((p) => p.navId && staff[p.column])?.navId || 'overview';
+}
+
+// Includes plan_activated_at in the key so a LATER approval (e.g. an
+// upgrade from Starter to Pro) shows its own fresh pop-up even though the
+// event's first approval was already acknowledged.
+function seenKeyFor(event) {
+  return `dm_plan_approved_seen_${event.id}_${event.plan_activated_at}`;
 }
 
 export default function DashboardPage() {
@@ -35,6 +43,9 @@ export default function DashboardPage() {
   const [showWelcome, setShowWelcome] = useState(false);
   // The pricing pop-up (null = closed, otherwise { plan } to pre-select).
   const [pricing, setPricing] = useState(null);
+  // Events with an unacknowledged plan approval — almost always 0 or 1, but
+  // kept as a queue in case more than one approval landed between logins.
+  const [approvedQueue, setApprovedQueue] = useState([]);
   const welcomeDeferred = useRef(false);
 
   const maxEvents = profile?.max_events ?? null;
@@ -62,6 +73,8 @@ export default function DashboardPage() {
         setEvents(myEvents);
         setStaffedEvents(staffed);
         const isStaffOnly = myEvents.length === 0 && staffed.length > 0;
+
+        setApprovedQueue(myEvents.filter((e) => e.plan !== 'free' && e.plan_activated_at && localStorage.getItem(seenKeyFor(e)) !== '1'));
 
         // The pricing pop-up. A plan picked on the website (?plan= or
         // remembered through sign-up — see utils/pendingPlan) always opens it
@@ -125,6 +138,18 @@ export default function DashboardPage() {
       welcomeDeferred.current = false;
       setShowWelcome(true);
     }
+  };
+
+  const dismissApproval = () => {
+    const [current, ...rest] = approvedQueue;
+    if (current) localStorage.setItem(seenKeyFor(current), '1');
+    setApprovedQueue(rest);
+  };
+
+  const updateApprovedEvent = () => {
+    const current = approvedQueue[0];
+    dismissApproval();
+    if (current) navigate(`/events/${current.id}/edit`);
   };
 
   const handleCreate = async () => {
@@ -362,6 +387,10 @@ export default function DashboardPage() {
             handleCreate();
           }}
         />
+      )}
+
+      {approvedQueue.length > 0 && !pricing && !showWelcome && (
+        <PlanApprovedModal event={approvedQueue[0]} onClose={dismissApproval} onUpdateEvent={updateApprovedEvent} />
       )}
     </OrganizerLayout>
   );

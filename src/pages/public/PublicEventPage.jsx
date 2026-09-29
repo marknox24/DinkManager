@@ -34,11 +34,15 @@ import {
   listCategoryCounts,
   listSponsors,
 } from '../../data/eventsApi';
+import { getMyRegistrationsForEvent } from '../../data/playerApi';
 import { COURT_TYPES } from '../../data/constants';
 import { formatDateRange } from '../../utils/format';
 import { usableCourts } from '../../utils/courts';
 import { useToast } from '../../context/ToastContext';
+import { useAuth } from '../../context/AuthContext';
+import useSeo, { SITE_URL } from '../../hooks/useSeo';
 import StatusBadge from '../../components/organizer/StatusBadge';
+import RegistrationStatusBadge from '../../components/player/RegistrationStatusBadge';
 
 const CONTACT_ICONS = { Phone, Email: Mail, Website: Globe };
 const COURT_TYPE_ICONS = { indoor: Home, outdoor: Sun, mixed: CloudSun };
@@ -57,7 +61,7 @@ function FactTile({ icon: Icon, sub, label }) {
   );
 }
 
-function CategoryCard({ cat, count, onViewDetails }) {
+function CategoryCard({ cat, count, closed, myReg, onViewDetails }) {
   const [expanded, setExpanded] = useState(false);
   const activeCount = count?.active_count || 0;
   const full = cat.max_slots != null && activeCount >= cat.max_slots;
@@ -66,11 +70,16 @@ function CategoryCard({ cat, count, onViewDetails }) {
 
   return (
     <div className="hover-lift flex flex-col rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-1.5">
         <span className="font-semibold text-ink-900">{cat.name}</span>
-        <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${full ? 'bg-amber-100 text-amber-800' : 'bg-brand-50 text-brand-700'}`}>
-          {full ? 'Waiting list' : 'Open'}
+        <span
+          className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${
+            closed ? 'bg-ink-100 text-ink-500' : full ? 'bg-amber-100 text-amber-800' : 'bg-brand-50 text-brand-700'
+          }`}
+        >
+          {closed ? 'Closed' : full ? 'Waiting list' : 'Open'}
         </span>
+        {myReg && <RegistrationStatusBadge status={myReg.status} />}
       </div>
       <div className="mt-1 text-xs text-ink-500">
         {cat.match_type} &middot; {cat.format} &middot; {cat.fee_amount > 0 ? `${cat.fee_amount} ${cat.fee_currency}` : 'Free'}
@@ -99,15 +108,17 @@ function CategoryCard({ cat, count, onViewDetails }) {
       )}
       <button
         onClick={() => onViewDetails(cat)}
-        className="mt-3 flex items-center justify-center gap-1.5 rounded-full bg-brand-600 px-4 py-2 text-center text-xs font-bold text-white shadow-sm transition hover:bg-brand-700"
+        className={`mt-3 flex items-center justify-center gap-1.5 rounded-full px-4 py-2 text-center text-xs font-bold shadow-sm transition ${
+          closed ? 'bg-ink-100 text-ink-600 hover:bg-ink-200' : 'bg-brand-600 text-white hover:bg-brand-700'
+        }`}
       >
-        <ShieldCheck size={13} /> View qualification &amp; register
+        <ShieldCheck size={13} /> {closed ? 'View division details' : 'View qualification & register'}
       </button>
     </div>
   );
 }
 
-function CategoryDetailModal({ cat, count, linkBase, onClose }) {
+function CategoryDetailModal({ cat, count, linkBase, closed, myReg, onClose }) {
   const activeCount = count?.active_count || 0;
   const full = cat.max_slots != null && activeCount >= cat.max_slots;
   const qualification = cat.qualification || [];
@@ -117,9 +128,14 @@ function CategoryDetailModal({ cat, count, linkBase, onClose }) {
     <Modal open onClose={onClose} title={cat.name} icon={Trophy} maxWidth="max-w-xl">
       <div className="flex flex-col gap-5">
         <div className="flex flex-wrap items-center gap-2">
-          <span className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${full ? 'bg-amber-100 text-amber-800' : 'bg-brand-50 text-brand-700'}`}>
-            {full ? 'Waiting list' : 'Open'}
+          <span
+            className={`rounded-full px-2.5 py-1 text-[11px] font-bold ${
+              closed ? 'bg-ink-100 text-ink-500' : full ? 'bg-amber-100 text-amber-800' : 'bg-brand-50 text-brand-700'
+            }`}
+          >
+            {closed ? 'Closed' : full ? 'Waiting list' : 'Open'}
           </span>
+          {myReg && <RegistrationStatusBadge status={myReg.status} />}
           <span className="text-xs text-ink-500">
             {cat.match_type} &middot; {cat.format} &middot; {cat.fee_amount > 0 ? `${cat.fee_amount} ${cat.fee_currency}` : 'Free'}
             {cat.max_slots ? ` · ${activeCount}/${cat.max_slots} slots` : ''}
@@ -181,26 +197,110 @@ function CategoryDetailModal({ cat, count, linkBase, onClose }) {
           </div>
         )}
 
-        <Link
-          to={`${linkBase}/register?category=${cat.id}`}
-          className="block rounded-full bg-brand-600 px-5 py-3 text-center text-sm font-bold text-white shadow-sm transition hover:bg-brand-700"
-        >
-          {full ? 'Join waiting list' : 'Register for this division'}
-        </Link>
+        {myReg && (
+          <p className="text-xs text-ink-500">
+            You already have a <span className="font-semibold text-ink-700">{myReg.status}</span> registration in this division.
+          </p>
+        )}
+
+        {closed ? (
+          <div className="rounded-2xl bg-ink-50 px-5 py-3 text-center text-sm font-semibold text-ink-500">
+            This event has ended — registration is closed.
+          </div>
+        ) : (
+          <Link
+            to={`${linkBase}/register?category=${cat.id}`}
+            className="block rounded-full bg-brand-600 px-5 py-3 text-center text-sm font-bold text-white shadow-sm transition hover:bg-brand-700"
+          >
+            {full ? 'Join waiting list' : 'Register for this division'}
+          </Link>
+        )}
       </div>
     </Modal>
   );
 }
 
+// "SideOut Premier Pickleball Cebu - Alang Alang, Mandaue City" -> "Mandaue City"
+function cityOf(address) {
+  const parts = (address || '').split(',').map((p) => p.trim()).filter(Boolean);
+  return parts[parts.length - 1] || '';
+}
+
+function truncate(text, max) {
+  const clean = (text || '').replace(/\s+/g, ' ').trim();
+  return clean.length > max ? `${clean.slice(0, max - 1).trimEnd()}…` : clean;
+}
+
+const EVENT_STATUS_SCHEMA = {
+  cancelled: 'https://schema.org/EventCancelled',
+  rescheduled: 'https://schema.org/EventRescheduled',
+};
+
+// schema.org SportsEvent — makes the page eligible for Google's event
+// listings. Google requires name, startDate and a location with an address.
+function eventJsonLd(event, categories, path) {
+  if (!event.start_date || !event.location_address) return null;
+  const url = `${SITE_URL}${path}`;
+  const paid = categories.filter((c) => c.fee_amount != null && c.fee_currency);
+  const currencies = new Set(paid.map((c) => c.fee_currency));
+  const amounts = paid.map((c) => Number(c.fee_amount));
+  return {
+    '@context': 'https://schema.org',
+    '@type': 'SportsEvent',
+    name: event.name,
+    sport: 'Pickleball',
+    description: truncate(event.description, 500) || undefined,
+    url,
+    image: event.cover_photo_path ? [getEventMediaUrl(event.cover_photo_path)] : undefined,
+    startDate: event.start_date,
+    endDate: event.end_date || event.start_date,
+    eventStatus: EVENT_STATUS_SCHEMA[event.status] || 'https://schema.org/EventScheduled',
+    eventAttendanceMode: 'https://schema.org/OfflineEventAttendanceMode',
+    location: { '@type': 'Place', name: event.location_address, address: event.location_address },
+    organizer: { '@type': 'Organization', name: event.organizer_name || 'DinkManager tournament organizer', url },
+    offers:
+      paid.length > 0 && currencies.size === 1
+        ? {
+            '@type': 'AggregateOffer',
+            lowPrice: Math.min(...amounts),
+            highPrice: Math.max(...amounts),
+            priceCurrency: paid[0].fee_currency,
+            url: `${url}#divisions`,
+            availability: event.status === 'finished' ? 'https://schema.org/SoldOut' : 'https://schema.org/InStock',
+          }
+        : undefined,
+  };
+}
+
+function eventSeo(event, categories, { token, slug }) {
+  // Private share links must never be indexed; neither should a missing event.
+  if (token || event === null) return { title: 'Tournament | DinkManager', noindex: true };
+  if (!event) return { path: `/e/${slug}` };
+  const path = `/e/${event.slug}`;
+  const city = cityOf(event.location_address);
+  const when = formatDateRange(event.start_date, event.end_date, '');
+  const lead = ['Pickleball tournament', when && `on ${when}`, event.location_address && `at ${event.location_address}`].filter(Boolean).join(' ');
+  const divisions = categories.length > 0 ? ` ${categories.length} division${categories.length === 1 ? '' : 's'}.` : '';
+  return {
+    title: `${event.name} — Pickleball Tournament${city ? ` in ${city}` : ''} | DinkManager`,
+    description: truncate(`${lead}.${divisions} ${event.description || 'View divisions, fees and prizes, and register online.'}`, 160),
+    path,
+    image: event.cover_photo_path ? getEventMediaUrl(event.cover_photo_path) : undefined,
+    jsonLd: eventJsonLd(event, categories, path),
+  };
+}
+
 export default function PublicEventPage() {
   const { slug, token } = useParams();
   const { pushToast } = useToast();
+  const { user } = useAuth();
   const [event, setEvent] = useState(undefined);
   const [categories, setCategories] = useState([]);
   const [counts, setCounts] = useState([]);
   const [sponsors, setSponsors] = useState([]);
   const [descExpanded, setDescExpanded] = useState(false);
   const [selectedCategoryId, setSelectedCategoryId] = useState(null);
+  const [myRegsByCategory, setMyRegsByCategory] = useState({});
 
   const linkBase = token ? `/t/${token}` : `/e/${slug}`;
 
@@ -216,6 +316,27 @@ export default function PublicEventPage() {
       })
       .catch(() => setEvent(null));
   }, [slug, token]);
+
+  // Only when a player is signed in, and only for this one event — shows
+  // "you're already registered" per division without touching the public,
+  // anonymous-reachable load above.
+  useEffect(() => {
+    if (!user || !event?.id) return;
+    getMyRegistrationsForEvent(user.id, event.id)
+      .then((regs) => {
+        const map = {};
+        // A player registering twice in the same category (allowed today,
+        // nothing blocks it) shows their most relevant one — prefer a
+        // non-denied entry over a denied one.
+        regs.forEach((r) => {
+          if (!map[r.category_id] || map[r.category_id].status === 'denied') map[r.category_id] = r;
+        });
+        setMyRegsByCategory(map);
+      })
+      .catch(() => {});
+  }, [user, event?.id]);
+
+  useSeo(eventSeo(event, categories, { token, slug }));
 
   if (event === undefined) {
     return <div className="flex min-h-screen items-center justify-center bg-[#f3f6f8] text-sm text-ink-400">Loading…</div>;
@@ -355,7 +476,7 @@ export default function PublicEventPage() {
                 <Share2 size={14} /> Share
               </button>
               <a href="#divisions" className="rounded-full bg-brand-600 px-5 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700">
-                Register now
+                {event.status === 'finished' ? 'View divisions' : 'Register now'}
               </a>
               {slotsInfo && (
                 <div className="flex w-full items-center gap-2 sm:w-auto">
@@ -401,7 +522,7 @@ export default function PublicEventPage() {
               </span>
               <div>
                 <h2 className="font-display text-base font-bold text-ink-900">Divisions</h2>
-                <p className="text-xs text-ink-500">Choose a division to register.</p>
+                <p className="text-xs text-ink-500">{event.status === 'finished' ? 'This event has ended — registration is closed.' : 'Choose a division to register.'}</p>
               </div>
             </div>
             {prizeCount > 0 && (
@@ -418,6 +539,8 @@ export default function PublicEventPage() {
                   key={cat.id}
                   cat={cat}
                   count={counts.find((c) => c.category_id === cat.id)}
+                  closed={event.status === 'finished'}
+                  myReg={myRegsByCategory[cat.id]}
                   onViewDetails={(c) => setSelectedCategoryId(c.id)}
                 />
               ))}
@@ -531,7 +654,7 @@ export default function PublicEventPage() {
 
       <div className="fixed inset-x-0 bottom-0 z-10 border-t border-ink-100 bg-white px-4 py-3 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] lg:hidden">
         <a href="#divisions" className="block rounded-full bg-brand-600 px-5 py-2.5 text-center text-sm font-bold text-white shadow-sm transition hover:bg-brand-700">
-          Register now
+          {event.status === 'finished' ? 'View divisions' : 'Register now'}
         </a>
       </div>
 
@@ -540,6 +663,8 @@ export default function PublicEventPage() {
           cat={selectedCategory}
           count={counts.find((c) => c.category_id === selectedCategory.id)}
           linkBase={linkBase}
+          closed={event.status === 'finished'}
+          myReg={myRegsByCategory[selectedCategory.id]}
           onClose={() => setSelectedCategoryId(null)}
         />
       )}

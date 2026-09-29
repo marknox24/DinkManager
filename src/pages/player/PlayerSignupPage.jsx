@@ -6,10 +6,17 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import AuthSplitLayout from '../../components/auth/AuthSplitLayout';
 import RoleToggle from '../../components/auth/RoleToggle';
+import CheckInboxPanel from '../../components/auth/CheckInboxPanel';
 import SocialLoginButtons, { SOCIAL_LOGIN_ENABLED } from '../../components/auth/SocialLoginButtons';
 import { isDuplicateEmailError, isDuplicateSignupResponse } from '../../utils/authErrors';
+import useSeo from '../../hooks/useSeo';
 
 export default function PlayerSignupPage() {
+  useSeo({
+    title: 'Create a Player Account — Track Your Pickleball Tournaments | DinkManager',
+    description: 'Create a free player account to register for pickleball tournaments and follow your registrations, brackets and results in one place.',
+    path: '/player/signup',
+  });
   const { signUp } = useAuth();
   const { pushToast } = useToast();
   const navigate = useNavigate();
@@ -17,6 +24,7 @@ export default function PlayerSignupPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [sent, setSent] = useState(false);
 
   const pushDuplicateEmailToast = () =>
     pushToast(
@@ -56,12 +64,19 @@ export default function PlayerSignupPage() {
       return;
     }
     if (!data.session) {
-      pushToast('Check your email to confirm your account, then sign in.', 'success');
-      navigate('/player/login');
+      setSent(true);
       return;
     }
     navigate('/player/dashboard', { replace: true });
   };
+
+  if (sent) {
+    return (
+      <AuthSplitLayout>
+        <CheckInboxPanel email={email} onChangeEmail={() => setSent(false)} loginPath="/player/login" />
+      </AuthSplitLayout>
+    );
+  }
 
   return (
     <AuthSplitLayout>
@@ -111,6 +126,17 @@ export default function PlayerSignupPage() {
         >
           <UserPlus size={15} /> {submitting ? 'Creating account…' : 'Create account'}
         </button>
+        <p className="text-center text-xs text-ink-400">
+          By creating an account, you agree to our{' '}
+          <Link to="/terms" className="font-semibold text-ink-600 hover:text-ink-900">
+            Terms of Service
+          </Link>{' '}
+          and{' '}
+          <Link to="/privacy" className="font-semibold text-ink-600 hover:text-ink-900">
+            Privacy Policy
+          </Link>
+          .
+        </p>
       </form>
 
       {SOCIAL_LOGIN_ENABLED && (

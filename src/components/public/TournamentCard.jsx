@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { CalendarDays, Image as ImageIcon, MapPin } from 'lucide-react';
+import { CalendarDays, CheckCircle2, Image as ImageIcon, MapPin } from 'lucide-react';
 import StatusBadge from '../organizer/StatusBadge';
 import { getEventMediaUrl } from '../../data/eventsApi';
 import { formatDateRange } from '../../utils/format';
@@ -8,7 +8,11 @@ import { formatDateRange } from '../../utils/format';
 // (public "browse all tournaments" page) and the player dashboard's
 // "Available Tournaments" preview, so both always show the same fields
 // (name, dates, location, status) instead of drifting into two versions.
-export default function TournamentCard({ event }) {
+// myRegistrations is optional (array of {category_id, status} for this
+// event) — omitted entirely for anonymous visitors, who have nothing to
+// show here.
+export default function TournamentCard({ event, myRegistrations }) {
+  const regCount = myRegistrations?.length || 0;
   return (
     <Link
       to={`/e/${event.slug}`}
@@ -26,6 +30,11 @@ export default function TournamentCard({ event }) {
           <h2 className="font-display text-base font-bold leading-snug text-ink-900">{event.name}</h2>
           <StatusBadge status={event.status} />
         </div>
+        {regCount > 0 && (
+          <span className="mb-2 inline-flex w-fit items-center gap-1 rounded-full bg-brand-50 px-2.5 py-1 text-[11px] font-bold text-brand-700">
+            <CheckCircle2 size={12} /> Registered{regCount > 1 ? ` · ${regCount} categories` : ''}
+          </span>
+        )}
         <div className="flex items-center gap-1.5 text-xs text-ink-500">
           <CalendarDays size={13} /> {formatDateRange(event.start_date, event.end_date)}
         </div>

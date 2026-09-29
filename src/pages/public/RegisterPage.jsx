@@ -140,6 +140,27 @@ export default function RegisterPage() {
     );
   }
 
+  // Mirrors registrations_insert_public's with check in schema.sql (status
+  // <> 'finished') — this is the UI half, so a stale/bookmarked/shared
+  // register link shows a clear reason instead of a form that would fail
+  // to submit. A signed-out visitor lands here from PublicEventPage.jsx's
+  // own gating too, but a direct link needs its own check.
+  if (event.status === 'finished') {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-[#f3f6f8] px-4">
+        <div className="w-full max-w-md rounded-3xl border border-ink-100 bg-white p-8 text-center shadow-sm">
+          <h1 className="font-display text-lg font-bold text-ink-900">Registration closed</h1>
+          <p className="mt-2 text-sm text-ink-600">
+            <strong>{event.name}</strong> has already ended, so registration is no longer open.
+          </p>
+          <Link to={linkBase} className="mt-5 inline-block text-sm font-semibold text-brand-600">
+            ← Back to event page
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   if (submitted) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#f3f6f8] px-4">
@@ -313,6 +334,19 @@ export default function RegisterPage() {
               </button>
             )}
           </div>
+          {step === steps.length - 1 && (
+            <p className="mt-4 text-center text-[11px] leading-relaxed text-ink-400">
+              By submitting, you agree to share these details with the event organizer to process your registration, as described in our{' '}
+              <Link to="/privacy" className="font-semibold text-ink-600 hover:text-ink-900">
+                Privacy Policy
+              </Link>{' '}
+              and{' '}
+              <Link to="/terms" className="font-semibold text-ink-600 hover:text-ink-900">
+                Terms
+              </Link>
+              .
+            </p>
+          )}
         </div>
       </div>
     </div>

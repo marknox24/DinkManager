@@ -5,13 +5,7 @@ import Modal from '../ui/Modal';
 import Logo from '../ui/Logo';
 import { useToast } from '../../context/ToastContext';
 import { downloadNodeAsPdf } from '../../utils/pdf';
-
-const STATUS_STYLES = {
-  pending: 'bg-amber-100 text-amber-800',
-  approved: 'bg-brand-100 text-brand-700',
-  denied: 'bg-rose-100 text-rose-600',
-  waitlisted: 'bg-violet-100 text-violet-700',
-};
+import RegistrationStatusBadge from '../player/RegistrationStatusBadge';
 
 function teamName(r) {
   return r.player2_name ? `${r.player_name} & ${r.player2_name}` : r.player_name;
@@ -167,7 +161,7 @@ export default function DownloadRegistrationsModal({ event, categories, registra
                             <td className="py-1.5 pr-2 text-ink-600">{r.club_name || '—'}</td>
                             <td className="py-1.5 pr-2 text-ink-500">{[r.player_email, r.phone].filter(Boolean).join(' · ') || '—'}</td>
                             <td className="py-1.5">
-                              <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${STATUS_STYLES[r.status]}`}>{r.status}</span>
+                              <RegistrationStatusBadge status={r.status} />
                             </td>
                           </tr>
                         ))}

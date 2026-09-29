@@ -41,6 +41,7 @@ import {
   updateRegistrationField,
   uploadEventMedia,
   getEventMediaUrl,
+  generateUniqueSlug,
 } from '../../data/eventsApi';
 import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
@@ -171,7 +172,22 @@ export default function EventEditorPage() {
         return;
       }
     }
-    await saveField({ is_published: !event.is_published });
+    const patch = { is_published: !event.is_published };
+    // Every event starts life as "Untitled Tournament" with a matching
+    // placeholder slug that never followed later renames — so publish is
+    // the moment to give the public URL real words (better for Google and
+    // for people reading a shared link). Only while it's still the
+    // placeholder — a real slug is never touched. (Caveat: republishing an
+    // older event that went live under a placeholder slug moves its URL.)
+    const trimmedName = (event.name || '').trim();
+    if (!event.is_published && event.slug?.startsWith('untitled-tournament') && trimmedName && trimmedName.toLowerCase() !== 'untitled tournament') {
+      try {
+        patch.slug = await generateUniqueSlug(trimmedName);
+      } catch {
+        // Keep the placeholder slug rather than block publishing.
+      }
+    }
+    await saveField(patch);
     pushToast(event.is_published ? 'Event unpublished' : 'Event published — the public page is live', 'success');
   };
 

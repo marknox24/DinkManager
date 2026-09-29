@@ -24,8 +24,8 @@ function HeroCopy() {
         Build communities.
       </h1>
       <p className="mt-5 max-w-xl text-balance text-base text-ink-200 sm:text-lg">
-        Registration, brackets, scheduling, score sheets, results and more
-        &mdash; all in one place.
+        Pickleball tournament software for registration, brackets,
+        scheduling, score sheets, results and more &mdash; all in one place.
       </p>
       <div className="mt-8 flex flex-col items-center gap-3 sm:flex-row">
         <Link

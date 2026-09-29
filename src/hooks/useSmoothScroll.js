@@ -10,9 +10,33 @@ gsap.registerPlugin(ScrollTrigger);
 // `position: sticky` and IntersectionObserver-based reveals elsewhere on
 // the page keep working unmodified — this only changes how scroll input
 // gets there.
+// Arriving from another page at /#pricing (footer on /privacy, the plan
+// link in event Settings): the sections render after the lazy page chunk
+// and hero settle, so the browser's own hash jump fires before the target
+// exists. Retry until it does, then scroll there.
+function scrollToInitialHash(scrollTo) {
+  const id = window.location.hash.slice(1);
+  if (!id) return () => {};
+  let timer;
+  let tries = 0;
+  const attempt = () => {
+    const target = document.getElementById(id);
+    if (target) {
+      scrollTo(target);
+      return;
+    }
+    tries += 1;
+    if (tries < 20) timer = setTimeout(attempt, 150);
+  };
+  timer = setTimeout(attempt, 300);
+  return () => clearTimeout(timer);
+}
+
 export default function useSmoothScroll() {
   useEffect(() => {
-    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return undefined;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      return scrollToInitialHash((target) => target.scrollIntoView());
+    }
 
     // anchors:true measures the target against Lenis's cached content
     // height at construction time — on this page that's captured before the
@@ -41,7 +65,13 @@ export default function useSmoothScroll() {
     gsap.ticker.add(tick);
     gsap.ticker.lagSmoothing(0);
 
+    const cancelHashScroll = scrollToInitialHash((target) => {
+      lenis.resize();
+      lenis.scrollTo(target, { offset: 0, immediate: true });
+    });
+
     return () => {
+      cancelHashScroll();
       gsap.ticker.remove(tick);
       lenis.off('scroll', onScroll);
       document.removeEventListener('click', onClick);

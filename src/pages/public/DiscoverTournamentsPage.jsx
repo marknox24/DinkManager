@@ -4,18 +4,47 @@ import { Search, Trophy, X } from 'lucide-react';
 import Logo from '../../components/ui/Logo';
 import TournamentCard from '../../components/public/TournamentCard';
 import { getPublishedEvents } from '../../data/eventsApi';
+import { listMyRegistrationSummaries } from '../../data/playerApi';
 import { useToast } from '../../context/ToastContext';
+import { useAuth } from '../../context/AuthContext';
+import useSeo from '../../hooks/useSeo';
 
 export default function DiscoverTournamentsPage() {
+  useSeo({
+    title: 'Upcoming Pickleball Tournaments — Find & Register | DinkManager',
+    description:
+      'Browse upcoming pickleball tournaments, check divisions, fees and prizes, and register online in minutes.',
+    path: '/tournaments',
+  });
   const { pushToast } = useToast();
+  const { user } = useAuth();
   const [events, setEvents] = useState(null);
   const [query, setQuery] = useState('');
+  const [myRegsByEvent, setMyRegsByEvent] = useState({});
 
   useEffect(() => {
     getPublishedEvents()
       .then(setEvents)
       .catch((e) => pushToast(e.message, 'error'));
   }, [pushToast]);
+
+  // Anonymous visitors have nothing to show here — this only runs for a
+  // signed-in visitor (any role; registrations.player_id isn't role-gated).
+  useEffect(() => {
+    if (!user) {
+      setMyRegsByEvent({});
+      return;
+    }
+    listMyRegistrationSummaries(user.id)
+      .then((regs) => {
+        const map = {};
+        regs.forEach((r) => {
+          (map[r.event_id] ||= []).push(r);
+        });
+        setMyRegsByEvent(map);
+      })
+      .catch(() => setMyRegsByEvent({}));
+  }, [user]);
 
   const filtered = useMemo(() => {
     if (!events) return null;
@@ -81,7 +110,7 @@ export default function DiscoverTournamentsPage() {
         {filtered && filtered.length > 0 && (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {filtered.map((event) => (
-              <TournamentCard key={event.id} event={event} />
+              <TournamentCard key={event.id} event={event} myRegistrations={myRegsByEvent[event.id]} />
             ))}
           </div>
         )}

@@ -1,0 +1,19 @@
+# Public pages (landing, /tournaments, published events at /e/..., legal)
+# are crawlable. Signed-in app areas, private share links (/t/...) and
+# one-off flow pages are not — there's nothing useful to rank there.
+User-agent: *
+Allow: /
+Disallow: /dashboard
+Disallow: /events/
+Disallow: /admin
+Disallow: /account
+Disallow: /player/dashboard
+Disallow: /t/
+Disallow: /e/*/register
+Disallow: /e/*/checkin
+Disallow: /subscribe/
+Disallow: /verify-email
+Disallow: /reset-password
+Disallow: /forgot-password
+
+Sitemap: https://dinkmanager.com/sitemap.xml

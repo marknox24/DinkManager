@@ -210,7 +210,13 @@ export function AuthProvider({ children }) {
       approveSubscriptionRequest: (requestId) =>
         invokeAdminFunction('approve-subscription-request', { requestId, origin: window.location.origin }),
       signUp: (email, password, displayName, role = 'organizer') =>
-        supabase.auth.signUp({ email, password, options: { data: { display_name: displayName, role } } }),
+        supabase.auth.signUp({
+          email,
+          password,
+          options: { data: { display_name: displayName, role }, emailRedirectTo: `${window.location.origin}/verify-email` },
+        }),
+      resendVerificationEmail: (email) =>
+        supabase.auth.resend({ type: 'signup', email, options: { emailRedirectTo: `${window.location.origin}/verify-email` } }),
       signIn: (email, password) => supabase.auth.signInWithPassword({ email, password }),
       signInWithOAuth: (provider, role = 'organizer') => {
         sessionStorage.setItem(OAUTH_ROLE_KEY, role);
