@@ -2,12 +2,14 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Award,
+  Calendar,
   Check,
   ChevronLeft,
   ChevronRight,
   Cloud,
   CloudUpload,
   Copy,
+  CreditCard,
   ExternalLink,
   FileText,
   Gavel,
@@ -490,13 +492,20 @@ export default function EventEditorPage() {
                     )
                   }
                 >
-                  <div className={`${inputClass} cursor-not-allowed bg-ink-50 text-ink-600`} aria-readonly="true">
-                    {(PLAN_LIMITS[event.plan] ?? PLAN_LIMITS.free).label} — up to {event.entitlement_categories ?? 'unlimited'}{' '}
-                    categories, {event.entitlement_players_per_category} players/cat,{' '}
-                    {event.entitlement_courts} courts
+                  <div className="flex items-center gap-2.5 rounded-xl border border-ink-200 bg-ink-50 px-3.5 py-2.5">
+                    <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-white text-brand-600 ring-1 ring-ink-200">
+                      <CreditCard size={14} />
+                    </span>
+                    <div className="min-w-0 leading-tight">
+                      <div className="text-sm font-bold text-ink-800">{(PLAN_LIMITS[event.plan] ?? PLAN_LIMITS.free).label}</div>
+                      <div className="text-xs text-ink-500">
+                        Up to {event.entitlement_categories ?? 'unlimited'} categories &middot; {event.entitlement_players_per_category} players/cat &middot;{' '}
+                        {event.entitlement_courts} courts
+                      </div>
+                    </div>
                   </div>
                 </FormField>
-                <FormField label="Location / address">
+                <FormField label="Location / address" className="sm:col-span-2">
                   <input
                     defaultValue={event.location_address || ''}
                     onBlur={(e) => saveField({ location_address: e.target.value })}
@@ -504,6 +513,12 @@ export default function EventEditorPage() {
                     className={inputClass}
                   />
                 </FormField>
+                {!datesLocked && (
+                  <div className="flex items-center gap-2 border-t border-ink-100 pt-4 sm:col-span-2">
+                    <Calendar size={13} className="text-ink-400" />
+                    <span className="text-xs font-bold uppercase tracking-wide text-ink-400">Event dates</span>
+                  </div>
+                )}
                 {datesLocked ? (
                   <div className="sm:col-span-2 rounded-2xl border border-amber-200 bg-amber-50 p-4">
                     <div className="flex items-start gap-3">
