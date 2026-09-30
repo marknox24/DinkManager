@@ -59,6 +59,7 @@ import ContactAdminModal from '../../components/organizer/ContactAdminModal';
 import { formatDateRange } from '../../utils/format';
 import ImageDropzone from '../../components/ui/ImageDropzone';
 import AccordionItem from '../../components/ui/Accordion';
+import FormattableTextarea from '../../components/ui/FormattableTextarea';
 import FaqEditor from '../../components/organizer/FaqEditor';
 import { parseFaqItems, serializeFaqItems } from '../../utils/faq';
 import { COURT_TYPES } from '../../data/constants';
@@ -655,7 +656,7 @@ export default function EventEditorPage() {
                     defaultOpen
                     filled={!!event.description}
                   >
-                    <textarea
+                    <FormattableTextarea
                       defaultValue={event.description || ''}
                       onBlur={(e) => saveField({ description: e.target.value })}
                       placeholder="Welcome players to a weekend of competitive pickleball! Describe the vibe, skill levels welcome, and what makes this tournament worth signing up for."

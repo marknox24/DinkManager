@@ -56,6 +56,14 @@ async function fetchEvent(column, value) {
   return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
 }
 
+// Strips the **bold** / *italic* markers src/utils/richText.jsx renders on
+// the public page — this endpoint only ever produces plain-text meta content,
+// so the raw markers must not show up as literal asterisks.
+function stripRichText(text) {
+  if (!text) return text;
+  return text.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/\*([^*]+)\*/g, '$1');
+}
+
 function eventMediaUrl(path) {
   const url = process.env.VITE_SUPABASE_URL;
   if (!url || !path) return null;
@@ -107,7 +115,7 @@ export default async function handler(req, res) {
   const when = formatDateRange(event.start_date, event.end_date);
   const lead = ['Pickleball tournament', when && `on ${when}`, event.location_address && `at ${event.location_address}`].filter(Boolean).join(' ');
   const title = `${event.name} — Pickleball Tournament${city ? ` in ${city}` : ''} | DinkManager`;
-  const description = truncate(`${lead}. ${event.description || 'View divisions, fees and prizes, and register online.'}`, 160);
+  const description = truncate(`${lead}. ${stripRichText(event.description) || 'View divisions, fees and prizes, and register online.'}`, 160);
   const image = (event.cover_photo_path && eventMediaUrl(event.cover_photo_path)) || FALLBACK_IMAGE;
   // Token links are private share links: give them their own real preview
   // (the link itself is already the credential) but keep them out of search

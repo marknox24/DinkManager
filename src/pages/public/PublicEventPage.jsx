@@ -49,6 +49,7 @@ import useSeo, { SITE_URL } from '../../hooks/useSeo';
 import StatusBadge from '../../components/organizer/StatusBadge';
 import RegistrationStatusBadge from '../../components/player/RegistrationStatusBadge';
 import { copyToClipboard } from '../../utils/clipboard';
+import { renderRichText, stripRichText } from '../../utils/richText';
 
 const CONTACT_ICONS = { Phone, Email: Mail, Website: Globe };
 const COURT_TYPE_ICONS = { indoor: Home, outdoor: Sun, mixed: CloudSun };
@@ -255,7 +256,7 @@ function eventJsonLd(event, categories, path) {
     '@type': 'SportsEvent',
     name: event.name,
     sport: 'Pickleball',
-    description: truncate(event.description, 500) || undefined,
+    description: truncate(stripRichText(event.description), 500) || undefined,
     url,
     image: event.cover_photo_path ? [getEventMediaUrl(event.cover_photo_path)] : undefined,
     startDate: event.start_date,
@@ -289,7 +290,7 @@ function eventSeo(event, categories, { token, slug }) {
   const divisions = categories.length > 0 ? ` ${categories.length} division${categories.length === 1 ? '' : 's'}.` : '';
   return {
     title: `${event.name} — Pickleball Tournament${city ? ` in ${city}` : ''} | DinkManager`,
-    description: truncate(`${lead}.${divisions} ${event.description || 'View divisions, fees and prizes, and register online.'}`, 160),
+    description: truncate(`${lead}.${divisions} ${stripRichText(event.description) || 'View divisions, fees and prizes, and register online.'}`, 160),
     path,
     image: event.cover_photo_path ? getEventMediaUrl(event.cover_photo_path) : undefined,
     jsonLd: eventJsonLd(event, categories, path),
@@ -505,7 +506,7 @@ export default function PublicEventPage() {
 
             {event.description && (
               <div className="mt-4">
-                <p className={`whitespace-pre-line text-sm leading-relaxed text-ink-600 ${descExpanded ? '' : 'line-clamp-3'}`}>{event.description}</p>
+                <p className={`whitespace-pre-line text-sm leading-relaxed text-ink-600 ${descExpanded ? '' : 'line-clamp-3'}`}>{renderRichText(event.description)}</p>
                 {longDescription && (
                   <button onClick={() => setDescExpanded((e) => !e)} className="mt-1 text-xs font-bold text-brand-600 hover:text-brand-700">
                     {descExpanded ? 'Show less' : 'Read more'}
@@ -569,7 +570,7 @@ export default function PublicEventPage() {
                       {s.content.map((p) => (
                         <div key={p.label}>
                           <h4 className="mb-1 text-[11px] font-bold uppercase tracking-wide text-ink-400">{p.label}</h4>
-                          <p className="whitespace-pre-line text-sm leading-relaxed text-ink-600">{p.text}</p>
+                          <p className="whitespace-pre-line text-sm leading-relaxed text-ink-600">{renderRichText(p.text)}</p>
                         </div>
                       ))}
                     </div>
@@ -578,7 +579,7 @@ export default function PublicEventPage() {
                   ) : s.id === 'roster' ? (
                     <RegisteredPlayersTab event={event} categories={categories} />
                   ) : (
-                    <p className="whitespace-pre-line text-sm leading-relaxed text-ink-600">{s.content}</p>
+                    <p className="whitespace-pre-line text-sm leading-relaxed text-ink-600">{renderRichText(s.content)}</p>
                   ),
               }))}
             />
