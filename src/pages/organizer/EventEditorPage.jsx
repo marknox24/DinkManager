@@ -212,7 +212,29 @@ export default function EventEditorPage() {
     try {
       const cat = await createCategory(
         eventId,
-        { name: `Category ${categories.length + 1}`, match_type: 'Singles', format: 'Round Robin', fee_amount: 0, fee_currency: 'PHP' },
+        // Round Robin (the default format below) and Double Round Robin both
+        // want a knockout stage after pools far more often than not, so new
+        // categories start with it already on, with a real, valid ladder
+        // (4 pools, A×C/B×D, top 2 advance — the same fallback
+        // PlayoffStagesEditor itself opens to) rather than just the flag —
+        // playoff_enabled=true with no pool pairs derives an "Invalid setup"
+        // ladder, which would be a broken-looking default. The organizer can
+        // still turn it off or reshape it in the Playoffs section. Never
+        // overrides an existing saved category's own choice; this only
+        // affects a freshly created one.
+        {
+          name: `Category ${categories.length + 1}`,
+          match_type: 'Singles',
+          format: 'Round Robin',
+          fee_amount: 0,
+          fee_currency: 'PHP',
+          playoff_enabled: true,
+          playoff_pool_count: 4,
+          playoff_pool_pairs: [
+            ['A', 'C'],
+            ['B', 'D'],
+          ],
+        },
         categories.length
       );
       setCategories((prev) => [...prev, cat]);
