@@ -1284,6 +1284,56 @@ create trigger enforce_player_entitlement
   before insert or update on registrations
   for each row execute function enforce_player_entitlement();
 
+-- A player may register for as many DIFFERENT categories as they like,
+-- just not twice for the SAME one — checked case-insensitively against
+-- both player_name and player2_name on either side, since a doubles
+-- partner shouldn't be able to double up either. Only counts non-denied
+-- rows: a denied registration doesn't block trying again. Skips
+-- re-validation on an UPDATE that doesn't touch name/category (so
+-- approving/denying/checking in an existing row is never re-checked) —
+-- the same convention enforce_player_entitlement uses above.
+create or replace function check_registration_duplicate_player()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_existing_name text;
+  v_category_name text;
+begin
+  if tg_op = 'UPDATE' and new.player_name = old.player_name and coalesce(new.player2_name, '') = coalesce(old.player2_name, '') and new.category_id = old.category_id then
+    return new;
+  end if;
+
+  select r.player_name into v_existing_name
+  from registrations r
+  where r.category_id = new.category_id
+    and r.id <> new.id
+    and r.status <> 'denied'
+    and (
+      lower(trim(r.player_name)) = lower(trim(new.player_name))
+      or (new.player2_name is not null and lower(trim(r.player_name)) = lower(trim(new.player2_name)))
+      or (r.player2_name is not null and lower(trim(r.player2_name)) = lower(trim(new.player_name)))
+      or (new.player2_name is not null and r.player2_name is not null and lower(trim(r.player2_name)) = lower(trim(new.player2_name)))
+    )
+  limit 1;
+
+  if v_existing_name is not null then
+    select name into v_category_name from categories where id = new.category_id;
+    raise exception 'A player named "%" is already registered for %.', v_existing_name, coalesce(v_category_name, 'this category')
+      using errcode = 'check_violation';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists registrations_check_duplicate_player on registrations;
+create trigger registrations_check_duplicate_player
+  before insert or update on registrations
+  for each row execute function check_registration_duplicate_player();
+
 -- Public (anonymous) event-day check-in. RLS is row-level only — without
 -- narrowing anon's UPDATE grant down to just these two columns first, this
 -- policy would let a crafted request rewrite player_name/status/etc. on any

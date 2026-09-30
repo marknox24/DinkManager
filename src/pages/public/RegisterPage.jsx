@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { CheckCircle2, ChevronLeft, ChevronRight, IdCard, Loader2, Receipt, UploadCloud, Users } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, IdCard, Loader2, Receipt, UploadCloud, Users } from 'lucide-react';
 import {
   getEventMediaUrl,
   getPublicEventByShareToken,
   getPublicEventBySlug,
+  getPublicEventRoster,
   listCategories,
   listRegistrationFields,
   submitRegistration,
@@ -49,6 +50,8 @@ export default function RegisterPage() {
   const [paymentProofPath, setPaymentProofPath] = useState(null);
   const [paymentProofPreviewUrl, setPaymentProofPreviewUrl] = useState(null);
   const [uploadingPaymentProof, setUploadingPaymentProof] = useState(false);
+  const [duplicateError, setDuplicateError] = useState(null);
+  const [checkingDuplicate, setCheckingDuplicate] = useState(false);
 
   useEffect(() => {
     const load = token ? getPublicEventByShareToken(token) : getPublicEventBySlug(slug);
@@ -65,6 +68,13 @@ export default function RegisterPage() {
   useEffect(() => {
     if (isPlayer && user?.email && !email) setEmail(user.email);
   }, [isPlayer, user?.email, email]);
+
+  // Clears a stale "already registered" message the moment the player
+  // changes the name(s) or category it was about — never leaves a
+  // resolved-but-still-displayed error sitting on screen.
+  useEffect(() => {
+    setDuplicateError(null);
+  }, [player1Name, player2Name, categoryId]);
 
   const steps = useMemo(() => {
     const s = ['Category', 'Your details'];
@@ -179,6 +189,46 @@ export default function RegisterPage() {
     }
   };
 
+  // A courtesy check, not the enforcement — the registrations table has its
+  // own trigger (check_registration_duplicate_player in schema.sql) that's
+  // the real gate, since registration is anonymous and two tabs submitting
+  // at once could otherwise both pass a client-side check. This just saves
+  // a player from filling out the whole form (ID photo, payment proof...)
+  // only to find out at the very end that they already registered — reads
+  // the same public, non-denied roster the "Registered Players" tab uses,
+  // so it can never see who was denied (that shouldn't block a retry).
+  const handleNext = async () => {
+    if (steps[step] !== 'Your details') {
+      setStep((s) => s + 1);
+      return;
+    }
+    setDuplicateError(null);
+    setCheckingDuplicate(true);
+    try {
+      const roster = await getPublicEventRoster(event.id, categoryId);
+      const norm = (s) => (s || '').trim().toLowerCase();
+      const p1 = norm(player1Name);
+      const p2 = isDoubles ? norm(player2Name) : '';
+      const dup = roster.find((r) => {
+        const rp1 = norm(r.player_name);
+        const rp2 = norm(r.player2_name);
+        return rp1 === p1 || (p2 && rp1 === p2) || (rp2 && rp2 === p1) || (p2 && rp2 && rp2 === p2);
+      });
+      if (dup) {
+        setDuplicateError(
+          `${dup.player_name}${dup.player2_name ? ` & ${dup.player2_name}` : ''} is already registered for ${selectedCategory?.name || 'this category'}.`
+        );
+        return;
+      }
+    } catch {
+      // Roster check failed (offline, etc.) — don't block the player on a
+      // courtesy check; the trigger still catches a real duplicate at submit.
+    } finally {
+      setCheckingDuplicate(false);
+    }
+    setStep((s) => s + 1);
+  };
+
   if (event === undefined) {
     return <div className="flex min-h-screen items-center justify-center bg-[#f3f6f8] text-sm text-ink-400">Loading…</div>;
   }
@@ -289,6 +339,11 @@ export default function RegisterPage() {
                 <FormField label="Player 2 name">
                   <input value={player2Name} onChange={(e) => setPlayer2Name(e.target.value)} className={inputClass} />
                 </FormField>
+              )}
+              {duplicateError && (
+                <div className="flex items-start gap-2 rounded-xl bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-700">
+                  <AlertTriangle size={14} className="mt-0.5 shrink-0" /> {duplicateError}
+                </div>
               )}
               <FormField label="Email">
                 <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className={inputClass} />
@@ -413,11 +468,11 @@ export default function RegisterPage() {
             </button>
             {step < steps.length - 1 ? (
               <button
-                onClick={() => setStep((s) => s + 1)}
-                disabled={!canProceedFromStep(step)}
+                onClick={handleNext}
+                disabled={!canProceedFromStep(step) || checkingDuplicate}
                 className="flex items-center gap-1.5 rounded-full bg-brand-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:bg-ink-200 disabled:text-ink-400"
               >
-                Next <ChevronRight size={14} />
+                {checkingDuplicate ? <Loader2 size={14} className="animate-spin" /> : <>Next <ChevronRight size={14} /></>}
               </button>
             ) : (
               <button
