@@ -1168,6 +1168,10 @@ alter table registrations add column if not exists photo_path text;
 -- needed, its policies are keyed on the path prefix, not the column.
 alter table registrations add column if not exists payment_proof_path text;
 
+-- Doubles categories require an ID photo from EACH player, not one shared
+-- photo — photo_path is player 1's, this is player 2's (null for singles).
+alter table registrations add column if not exists player2_photo_path text;
+
 -- Links a registration to the signed-in player who submitted it. Nullable —
 -- anonymous registration remains fully supported; this only adds tracking
 -- for players who choose to sign in.

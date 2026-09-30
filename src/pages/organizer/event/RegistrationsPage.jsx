@@ -199,8 +199,17 @@ function CategorySection({
                           )}
                           {r.photo_path && (
                             <button
-                              onClick={() => onViewPhoto(r, 'photo_path', 'ID Photo')}
-                              title="View ID photo"
+                              onClick={() => onViewPhoto(r, 'photo_path', r.player2_name ? 'Player 1 ID' : 'ID Photo')}
+                              title={r.player2_name ? 'View Player 1 ID' : 'View ID photo'}
+                              className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-50 text-violet-600 hover:bg-violet-100"
+                            >
+                              <ImageIcon size={13} />
+                            </button>
+                          )}
+                          {r.player2_photo_path && (
+                            <button
+                              onClick={() => onViewPhoto(r, 'player2_photo_path', 'Player 2 ID')}
+                              title="View Player 2 ID"
                               className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-50 text-violet-600 hover:bg-violet-100"
                             >
                               <ImageIcon size={13} />

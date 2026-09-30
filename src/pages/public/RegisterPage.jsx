@@ -5,7 +5,6 @@ import {
   getEventMediaUrl,
   getPublicEventByShareToken,
   getPublicEventBySlug,
-  getRegistrationFileUrl,
   listCategories,
   listRegistrationFields,
   submitRegistration,
@@ -40,9 +39,12 @@ export default function RegisterPage() {
   const [address, setAddress] = useState('');
   const [customValues, setCustomValues] = useState({});
   const [uploadingField, setUploadingField] = useState(null);
-  const [photoPath, setPhotoPath] = useState(null);
-  const [photoPreviewUrl, setPhotoPreviewUrl] = useState(null);
-  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [player1PhotoPath, setPlayer1PhotoPath] = useState(null);
+  const [player1PhotoPreviewUrl, setPlayer1PhotoPreviewUrl] = useState(null);
+  const [uploadingPlayer1Photo, setUploadingPlayer1Photo] = useState(false);
+  const [player2PhotoPath, setPlayer2PhotoPath] = useState(null);
+  const [player2PhotoPreviewUrl, setPlayer2PhotoPreviewUrl] = useState(null);
+  const [uploadingPlayer2Photo, setUploadingPlayer2Photo] = useState(false);
   const [termsAgreed, setTermsAgreed] = useState(false);
   const [paymentProofPath, setPaymentProofPath] = useState(null);
   const [paymentProofPreviewUrl, setPaymentProofPreviewUrl] = useState(null);
@@ -78,7 +80,8 @@ export default function RegisterPage() {
     if (steps[i] === 'Category') return !!categoryId;
     if (steps[i] === 'Your details') {
       const namesOk = isDoubles ? player1Name.trim() && player2Name.trim() : player1Name.trim();
-      return namesOk && /\S+@\S+\.\S+/.test(email) && !!photoPath && termsAgreed;
+      const photosOk = isDoubles ? !!player1PhotoPath && !!player2PhotoPath : !!player1PhotoPath;
+      return namesOk && /\S+@\S+\.\S+/.test(email) && !!phone.trim() && photosOk && termsAgreed;
     }
     if (steps[i] === 'More info') return fields.every((f) => !f.required || (customValues[f.id] && String(customValues[f.id]).trim()));
     if (steps[i] === 'Payment') return !!paymentProofPath;
@@ -98,31 +101,53 @@ export default function RegisterPage() {
     }
   };
 
-  const handlePhotoChange = async (file) => {
+  // Previews are a local object URL from the File itself, never a fetched
+  // signed URL — the registration-uploads bucket's read policy only allows
+  // the organizer/staff to read back a registration's files, never the
+  // anonymous player who just uploaded them, so calling
+  // getRegistrationFileUrl() here would 404 ("Object not found", Storage's
+  // generic error for both "missing" and "not allowed"). The upload itself
+  // still goes through normally; only the preview source changes.
+  const handlePlayer1PhotoChange = async (file) => {
     if (!file) return;
-    setUploadingPhoto(true);
+    setPlayer1PhotoPreviewUrl(URL.createObjectURL(file));
+    setUploadingPlayer1Photo(true);
     try {
       const { path } = await uploadRegistrationFile(event.id, file);
-      const url = await getRegistrationFileUrl(path);
-      setPhotoPath(path);
-      setPhotoPreviewUrl(url);
+      setPlayer1PhotoPath(path);
     } catch (e) {
       pushToast(e.message, 'error');
+      setPlayer1PhotoPreviewUrl(null);
     } finally {
-      setUploadingPhoto(false);
+      setUploadingPlayer1Photo(false);
+    }
+  };
+
+  const handlePlayer2PhotoChange = async (file) => {
+    if (!file) return;
+    setPlayer2PhotoPreviewUrl(URL.createObjectURL(file));
+    setUploadingPlayer2Photo(true);
+    try {
+      const { path } = await uploadRegistrationFile(event.id, file);
+      setPlayer2PhotoPath(path);
+    } catch (e) {
+      pushToast(e.message, 'error');
+      setPlayer2PhotoPreviewUrl(null);
+    } finally {
+      setUploadingPlayer2Photo(false);
     }
   };
 
   const handlePaymentProofChange = async (file) => {
     if (!file) return;
+    setPaymentProofPreviewUrl(URL.createObjectURL(file));
     setUploadingPaymentProof(true);
     try {
       const { path } = await uploadRegistrationFile(event.id, file);
-      const url = await getRegistrationFileUrl(path);
       setPaymentProofPath(path);
-      setPaymentProofPreviewUrl(url);
     } catch (e) {
       pushToast(e.message, 'error');
+      setPaymentProofPreviewUrl(null);
     } finally {
       setUploadingPaymentProof(false);
     }
@@ -137,12 +162,13 @@ export default function RegisterPage() {
         player_name: player1Name.trim(),
         player2_name: isDoubles ? player2Name.trim() : null,
         player_email: email.trim(),
-        phone: phone.trim() || null,
+        phone: phone.trim(),
         club_name: clubName.trim() || null,
         address: address.trim() || null,
         custom_field_values: customValues,
         player_id: isPlayer ? user.id : null,
-        photo_path: photoPath,
+        photo_path: player1PhotoPath,
+        player2_photo_path: isDoubles ? player2PhotoPath : null,
         payment_proof_path: paymentProofPath,
       });
       setSubmitted(true);
@@ -280,7 +306,7 @@ export default function RegisterPage() {
               <FormField label="Email">
                 <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} className={inputClass} />
               </FormField>
-              <FormField label="Phone number" hint="Optional — the fastest way for the organizer to reach you.">
+              <FormField label="Phone number *" hint="Required — the fastest way for the organizer to reach you.">
                 <input type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} className={inputClass} />
               </FormField>
               <FormField label="Club name" hint="Optional — helps the organizer balance brackets.">
@@ -289,21 +315,38 @@ export default function RegisterPage() {
               <FormField label="Address" hint="Optional">
                 <input value={address} onChange={(e) => setAddress(e.target.value)} className={inputClass} />
               </FormField>
-              <FormField label="ID photo *" hint="Required — for identity confirmation.">
+              <FormField label={isDoubles ? 'Player 1 ID photo *' : 'ID photo *'} hint="Required — for identity confirmation.">
                 <ImageDropzone
-                  imagePath={photoPath}
-                  getUrl={() => photoPreviewUrl}
-                  onUpload={handlePhotoChange}
-                  uploading={uploadingPhoto}
+                  imagePath={player1PhotoPath}
+                  getUrl={() => player1PhotoPreviewUrl}
+                  onUpload={handlePlayer1PhotoChange}
+                  uploading={uploadingPlayer1Photo}
                   onRemove={() => {
-                    setPhotoPath(null);
-                    setPhotoPreviewUrl(null);
+                    setPlayer1PhotoPath(null);
+                    setPlayer1PhotoPreviewUrl(null);
                   }}
                   className="h-32 w-full"
                   emptyIcon={IdCard}
                   emptyLabel="Choose photo"
                 />
               </FormField>
+              {isDoubles && (
+                <FormField label="Player 2 ID photo *" hint="Required — for identity confirmation.">
+                  <ImageDropzone
+                    imagePath={player2PhotoPath}
+                    getUrl={() => player2PhotoPreviewUrl}
+                    onUpload={handlePlayer2PhotoChange}
+                    uploading={uploadingPlayer2Photo}
+                    onRemove={() => {
+                      setPlayer2PhotoPath(null);
+                      setPlayer2PhotoPreviewUrl(null);
+                    }}
+                    className="h-32 w-full"
+                    emptyIcon={IdCard}
+                    emptyLabel="Choose photo"
+                  />
+                </FormField>
+              )}
               <label className="flex items-start gap-2 text-sm text-ink-600">
                 <input
                   type="checkbox"
