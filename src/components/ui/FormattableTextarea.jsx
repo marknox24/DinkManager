@@ -3,7 +3,10 @@ import { Bold, Italic } from 'lucide-react';
 
 // Wraps the current selection (or inserts a placeholder at the cursor) with
 // a marker, matching the **bold** / *italic* syntax src/utils/richText.jsx
-// renders back out on the public pages.
+// renders back out on the public pages. Writes straight to the DOM node so
+// the formatting and cursor position land in one synchronous step — safe
+// even for a controlled textarea, since the value we set here is exactly
+// what the onChange below feeds back into React state on the same tick.
 function wrapSelection(textarea, marker) {
   const { selectionStart, selectionEnd, value } = textarea;
   const selected = value.slice(selectionStart, selectionEnd) || 'text';
@@ -13,18 +16,23 @@ function wrapSelection(textarea, marker) {
   const newStart = selectionStart + marker.length;
   textarea.setSelectionRange(newStart, newStart + selected.length);
   textarea.focus();
+  return textarea.value;
 }
 
-// Plain uncontrolled textarea (defaultValue + onBlur, same as every other
-// long-text field in EventEditorPage.jsx) with a tiny Bold/Italic toolbar on
-// top. onMouseDown (not onClick) + preventDefault on the toolbar buttons
-// keeps focus in the textarea so the selection survives the click.
-export default function FormattableTextarea({ defaultValue, onBlur, placeholder, className, rows }) {
+// Drop-in replacement for a plain <textarea> with a Bold/Italic toolbar on
+// top — works as either controlled (value + onChange, e.g. CategoryEditor.jsx)
+// or uncontrolled (defaultValue only, e.g. EventEditorPage.jsx), matching
+// whichever pattern the caller already uses. onMouseDown (not onClick) +
+// preventDefault on the toolbar buttons keeps focus/selection in the
+// textarea so formatting a selection doesn't lose it.
+export default function FormattableTextarea({ value, defaultValue, onChange, onBlur, placeholder, className, rows }) {
   const ref = useRef(null);
 
   const format = (marker) => (e) => {
     e.preventDefault();
-    if (ref.current) wrapSelection(ref.current, marker);
+    if (!ref.current) return;
+    const next = wrapSelection(ref.current, marker);
+    onChange?.({ target: { value: next } });
   };
 
   return (
@@ -47,7 +55,7 @@ export default function FormattableTextarea({ defaultValue, onBlur, placeholder,
           <Italic size={13} />
         </button>
       </div>
-      <textarea ref={ref} defaultValue={defaultValue} onBlur={onBlur} placeholder={placeholder} className={className} rows={rows} />
+      <textarea ref={ref} value={value} defaultValue={defaultValue} onChange={onChange} onBlur={onBlur} placeholder={placeholder} className={className} rows={rows} />
     </div>
   );
 }

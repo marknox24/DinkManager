@@ -7,6 +7,7 @@ import { useToast } from '../../context/ToastContext';
 import FormField, { inputClass, textareaClass } from '../ui/FormField';
 import Select from '../ui/Select';
 import ImageDropzone from '../ui/ImageDropzone';
+import FormattableTextarea from '../ui/FormattableTextarea';
 import PlayoffStagesEditor from './PlayoffStagesEditor';
 import QualificationEditor from './QualificationEditor';
 
@@ -106,7 +107,7 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete, de
         <div className="flex flex-col gap-3 border-t border-ink-100 bg-ink-50/40 p-4">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto]">
             <FormField label="Description" hint="Explain the skill level / qualification for this category, e.g. Intermediate, DUPR 3.0-3.5">
-              <textarea
+              <FormattableTextarea
                 value={local.description || ''}
                 onChange={(e) => set('description', e.target.value)}
                 onBlur={() => commit({ description: local.description })}

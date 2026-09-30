@@ -94,7 +94,7 @@ function CategoryCard({ cat, count, closed, myReg, onViewDetails }) {
       </div>
       {cat.description && (
         <div className="mt-2">
-          <p className={`whitespace-pre-line text-xs text-ink-600 ${expanded ? '' : 'line-clamp-3'}`}>{cat.description}</p>
+          <p className={`whitespace-pre-line text-xs text-ink-600 ${expanded ? '' : 'line-clamp-3'}`}>{renderRichText(cat.description)}</p>
           {longDescription && (
             <button onClick={() => setExpanded((e) => !e)} className="mt-1 text-[11px] font-bold text-brand-600 hover:text-brand-700">
               {expanded ? 'Show less' : 'Read more'}
@@ -159,7 +159,7 @@ function CategoryDetailModal({ cat, count, linkBase, closed, myReg, onClose }) {
                 className="mb-3 max-h-[70vh] w-full rounded-xl border border-ink-100 object-contain"
               />
             )}
-            {cat.description && <p className="whitespace-pre-line text-sm leading-relaxed text-ink-600">{cat.description}</p>}
+            {cat.description && <p className="whitespace-pre-line text-sm leading-relaxed text-ink-600">{renderRichText(cat.description)}</p>}
           </div>
         )}
 

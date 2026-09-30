@@ -15,6 +15,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import FormField, { inputClass } from '../../components/ui/FormField';
 import ImageDropzone from '../../components/ui/ImageDropzone';
+import { renderRichText } from '../../utils/richText';
 
 export default function RegisterPage() {
   const { slug, token } = useParams();
@@ -319,7 +320,7 @@ export default function RegisterPage() {
                   <div className="text-xs text-ink-500">
                     {cat.match_type} &middot; {cat.fee_amount > 0 ? `${cat.fee_amount} ${cat.fee_currency}` : 'Free'}
                   </div>
-                  {cat.description && <div className="mt-1.5 whitespace-pre-line text-xs text-ink-600">{cat.description}</div>}
+                  {cat.description && <div className="mt-1.5 whitespace-pre-line text-xs text-ink-600">{renderRichText(cat.description)}</div>}
                 </button>
               ))}
             </div>
