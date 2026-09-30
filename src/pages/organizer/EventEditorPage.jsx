@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   Award,
@@ -63,6 +63,11 @@ import { parseFaqItems, serializeFaqItems } from '../../utils/faq';
 import { COURT_TYPES } from '../../data/constants';
 import { PLAN_LIMITS } from '../../data/plans';
 
+// Lazy: pulls in qrcode + html-to-image, deferred until the organizer
+// actually opens the share modal (same reasoning as the Brackets List
+// export's lazy modal elsewhere in the app).
+const ShareEventQrModal = lazy(() => import('../../components/organizer/ShareEventQrModal'));
+
 const STATUS_OPTIONS = ['upcoming', 'ongoing', 'finished', 'cancelled', 'rescheduled'];
 
 const STEPS = [
@@ -124,6 +129,7 @@ export default function EventEditorPage() {
   const [now] = useState(() => Date.now());
   const [requestChangeOpen, setRequestChangeOpen] = useState(false);
   const [contactAdminOpen, setContactAdminOpen] = useState(false);
+  const [qrModalOpen, setQrModalOpen] = useState(false);
 
   // Shared by every plan-limit block point in this page (categories, courts)
   // — offers "Upgrade Event" (navigates to this event's Settings page and
@@ -399,6 +405,14 @@ export default function EventEditorPage() {
                 <>
                   <span>&middot;</span>
                   <span className="flex items-center gap-1 font-semibold text-ink-400">Private — manage the share link in Settings</span>
+                </>
+              )}
+              {event.is_published && (
+                <>
+                  <span>&middot;</span>
+                  <button onClick={() => setQrModalOpen(true)} className="flex items-center gap-1 font-semibold text-brand-600">
+                    <QrCode size={11} /> Share QR
+                  </button>
                 </>
               )}
             </div>
@@ -923,6 +937,11 @@ export default function EventEditorPage() {
 
       {requestChangeOpen && <RequestDateChangeModal event={event} onClose={() => setRequestChangeOpen(false)} onSubmitted={() => setRequestChangeOpen(false)} />}
       {contactAdminOpen && <ContactAdminModal event={event} onClose={() => setContactAdminOpen(false)} onSubmitted={() => setContactAdminOpen(false)} />}
+      {qrModalOpen && (
+        <Suspense fallback={null}>
+          <ShareEventQrModal event={event} onClose={() => setQrModalOpen(false)} />
+        </Suspense>
+      )}
     </OrganizerLayout>
   );
 }
