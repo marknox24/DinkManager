@@ -13,6 +13,7 @@ import {
   LayoutGrid,
   Mail,
   MapPin,
+  Medal,
   Phone,
   QrCode,
   ShieldCheck,
@@ -149,8 +150,52 @@ function CategoryDetailModal({ cat, count, linkBase, closed, myReg, onClose }) {
           </span>
         </div>
 
+        {(cat.prize_champion || cat.prize_runner_up || cat.prize_second_runner_up) && (
+          <div className="overflow-hidden rounded-2xl border border-amber-200 bg-gradient-to-b from-amber-50 to-white">
+            <div className="flex items-center gap-1.5 border-b border-amber-100 bg-amber-50/70 px-4 py-2.5">
+              <Trophy size={13} className="text-amber-600" />
+              <h4 className="text-[11px] font-bold uppercase tracking-wide text-amber-800">Prizes up for grabs</h4>
+            </div>
+            <div className="flex flex-col divide-y divide-amber-100/70 px-4">
+              {cat.prize_champion && (
+                <div className="flex items-center gap-3 py-2.5">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-amber-300 to-amber-500 text-amber-950 shadow-sm ring-2 ring-amber-200">
+                    <Medal size={18} strokeWidth={2.3} />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-amber-700">Champion</div>
+                    <div className="truncate text-lg font-extrabold text-ink-900">{cat.prize_champion}</div>
+                  </div>
+                </div>
+              )}
+              {cat.prize_runner_up && (
+                <div className="flex items-center gap-3 py-2.5">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-slate-200 to-slate-400 text-slate-700">
+                    <Medal size={16} strokeWidth={2.3} />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-ink-400">Runner-up</div>
+                    <div className="truncate text-base font-bold text-ink-800">{cat.prize_runner_up}</div>
+                  </div>
+                </div>
+              )}
+              {cat.prize_second_runner_up && (
+                <div className="flex items-center gap-3 py-2.5">
+                  <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-orange-300 to-orange-500 text-orange-950">
+                    <Medal size={16} strokeWidth={2.3} />
+                  </span>
+                  <div className="min-w-0">
+                    <div className="text-[10px] font-bold uppercase tracking-wide text-ink-400">2nd Runner-up</div>
+                    <div className="truncate text-base font-bold text-ink-800">{cat.prize_second_runner_up}</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {(cat.image_path || cat.description) && (
-          <div>
+          <div className="rounded-2xl border border-ink-100 bg-ink-50/40 p-4">
             <h4 className="mb-1.5 text-[11px] font-bold uppercase tracking-wide text-ink-400">About this division</h4>
             {cat.image_path && (
               <img
@@ -160,19 +205,6 @@ function CategoryDetailModal({ cat, count, linkBase, closed, myReg, onClose }) {
               />
             )}
             {cat.description && <p className="whitespace-pre-line text-sm leading-relaxed text-ink-600">{renderRichText(cat.description)}</p>}
-          </div>
-        )}
-
-        {(cat.prize_champion || cat.prize_runner_up || cat.prize_second_runner_up) && (
-          <div>
-            <h4 className="mb-1.5 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-ink-400">
-              <Trophy size={12} /> Prizes
-            </h4>
-            <ul className="flex flex-col gap-1 text-sm text-ink-700">
-              {cat.prize_champion && <li>🏆 {cat.prize_champion}</li>}
-              {cat.prize_runner_up && <li>🥈 {cat.prize_runner_up}</li>}
-              {cat.prize_second_runner_up && <li>🥉 {cat.prize_second_runner_up}</li>}
-            </ul>
           </div>
         )}
 
