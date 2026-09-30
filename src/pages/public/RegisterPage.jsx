@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, IdCard, Loader2, Receipt, UploadCloud, Users } from 'lucide-react';
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, IdCard, Loader2, Receipt, UploadCloud, Users } from 'lucide-react';
 import {
   getEventMediaUrl,
   getPublicEventByShareToken,
@@ -309,24 +309,38 @@ export default function RegisterPage() {
 
           {currentLabel === 'Category' && (
             <div className="flex flex-col gap-2">
-              {categories.map((cat) => (
-                <button
-                  key={cat.id}
-                  onClick={() => setCategoryId(cat.id)}
-                  className={`rounded-xl border p-3 text-left text-sm transition ${
-                    categoryId === cat.id ? 'border-brand-500 bg-brand-50/60 ring-1 ring-brand-300' : 'border-ink-200 hover:bg-ink-50'
-                  }`}
-                >
-                  {cat.image_path && (
-                    <img src={getEventMediaUrl(cat.image_path)} alt="" className="mb-2 h-28 w-full rounded-lg object-cover" />
-                  )}
-                  <div className="font-semibold text-ink-900">{cat.name}</div>
-                  <div className="text-xs text-ink-500">
-                    {cat.match_type} &middot; {cat.fee_amount > 0 ? `${cat.fee_amount} ${cat.fee_currency}` : 'Free'}
+              {categories.map((cat) => {
+                const selected = categoryId === cat.id;
+                return (
+                  <div
+                    key={cat.id}
+                    className={`overflow-hidden rounded-xl border transition-colors ${
+                      selected ? 'border-brand-500 bg-brand-50/60 ring-1 ring-brand-300' : 'border-ink-200 hover:bg-ink-50'
+                    }`}
+                  >
+                    <button type="button" onClick={() => setCategoryId(cat.id)} className="flex w-full items-center gap-3 p-3 text-left text-sm">
+                      {cat.image_path && <img src={getEventMediaUrl(cat.image_path)} alt="" className="h-10 w-10 shrink-0 rounded-lg object-cover" />}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate font-semibold text-ink-900">{cat.name}</div>
+                        <div className="text-xs text-ink-500">
+                          {cat.match_type} &middot; {cat.fee_amount > 0 ? `${cat.fee_amount} ${cat.fee_currency}` : 'Free'}
+                        </div>
+                      </div>
+                      <ChevronDown size={16} className={`shrink-0 text-ink-400 transition-transform ${selected ? 'rotate-180' : ''}`} />
+                    </button>
+                    <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: selected ? '1fr' : '0fr' }}>
+                      <div className="overflow-hidden">
+                        {(cat.image_path || cat.description) && (
+                          <div className="px-3 pb-3">
+                            {cat.image_path && <img src={getEventMediaUrl(cat.image_path)} alt="" className="mb-2 h-28 w-full rounded-lg object-cover" />}
+                            {cat.description && <div className="whitespace-pre-line text-xs text-ink-600">{renderRichText(cat.description)}</div>}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                  {cat.description && <div className="mt-1.5 whitespace-pre-line text-xs text-ink-600">{renderRichText(cat.description)}</div>}
-                </button>
-              ))}
+                );
+              })}
             </div>
           )}
 
