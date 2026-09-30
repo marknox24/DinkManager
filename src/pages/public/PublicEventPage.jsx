@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { lazy, Suspense, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import {
   Award,
@@ -14,6 +14,7 @@ import {
   Mail,
   MapPin,
   Phone,
+  QrCode,
   ShieldCheck,
   Share2,
   Sun,
@@ -27,6 +28,9 @@ import Tabs from '../../components/ui/Tabs';
 import Modal from '../../components/ui/Modal';
 import FaqAccordion from '../../components/ui/FaqAccordion';
 import RegisteredPlayersTab from '../../components/public/RegisteredPlayersTab';
+// Lazy: pulls in qrcode + html-to-image, deferred until a visitor actually
+// opens the QR modal (same reasoning as the organizer editor's Share QR).
+const ShareEventQrModal = lazy(() => import('../../components/organizer/ShareEventQrModal'));
 import {
   getEventMediaUrl,
   getPublicEventByShareToken,
@@ -302,6 +306,7 @@ export default function PublicEventPage() {
   const [descExpanded, setDescExpanded] = useState(false);
   const [selectedCategoryId, setSelectedCategoryId] = useState(null);
   const [myRegsByCategory, setMyRegsByCategory] = useState({});
+  const [qrModalOpen, setQrModalOpen] = useState(false);
 
   const linkBase = token ? `/t/${token}` : `/e/${slug}`;
 
@@ -476,6 +481,13 @@ export default function PublicEventPage() {
                 className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-2 text-xs font-bold text-ink-700 transition hover:bg-ink-50"
               >
                 <Share2 size={14} /> Share
+              </button>
+              <button
+                onClick={() => setQrModalOpen(true)}
+                title="Share via QR code"
+                className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-2 text-xs font-bold text-ink-700 transition hover:bg-ink-50"
+              >
+                <QrCode size={14} /> QR code
               </button>
               <a href="#divisions" className="rounded-full bg-brand-600 px-5 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700">
                 {event.status === 'finished' ? 'View divisions' : 'Register now'}
@@ -671,6 +683,12 @@ export default function PublicEventPage() {
           myReg={myRegsByCategory[selectedCategory.id]}
           onClose={() => setSelectedCategoryId(null)}
         />
+      )}
+
+      {qrModalOpen && (
+        <Suspense fallback={null}>
+          <ShareEventQrModal event={event} shareUrl={window.location.href} onClose={() => setQrModalOpen(false)} />
+        </Suspense>
       )}
     </div>
   );

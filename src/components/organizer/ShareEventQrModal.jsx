@@ -31,7 +31,12 @@ async function generateQr(url) {
   });
 }
 
-export default function ShareEventQrModal({ event, onClose }) {
+// shareUrl is optional — the organizer's editor page has no single
+// "current URL" to fall back on (it's viewing /events/:id/edit, not the
+// shareable link itself), so it computes the right public/private variant
+// from `event`. The public event page IS already that link, so it just
+// passes window.location.href straight through instead.
+export default function ShareEventQrModal({ event, shareUrl: shareUrlProp, onClose }) {
   const { pushToast } = useToast();
   const [theme] = useState(randomTheme);
   const [qrDataUrl, setQrDataUrl] = useState(null);
@@ -39,7 +44,7 @@ export default function ShareEventQrModal({ event, onClose }) {
   const paperRef = useRef(null);
 
   const shareUrl =
-    event.visibility === 'private' ? `${window.location.origin}/t/${event.share_token}` : `${window.location.origin}/e/${event.slug}`;
+    shareUrlProp || (event.visibility === 'private' ? `${window.location.origin}/t/${event.share_token}` : `${window.location.origin}/e/${event.slug}`);
 
   useEffect(() => {
     let cancelled = false;
