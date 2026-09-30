@@ -10,6 +10,7 @@ import {
   Lock,
   Pencil,
   QrCode,
+  Receipt,
   Search,
   Shuffle,
   Trash2,
@@ -197,8 +198,21 @@ function CategorySection({
                             </button>
                           )}
                           {r.photo_path && (
-                            <button onClick={() => onViewPhoto(r)} title="View photo" className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-50 text-violet-600 hover:bg-violet-100">
+                            <button
+                              onClick={() => onViewPhoto(r, 'photo_path', 'ID Photo')}
+                              title="View ID photo"
+                              className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-50 text-violet-600 hover:bg-violet-100"
+                            >
                               <ImageIcon size={13} />
+                            </button>
+                          )}
+                          {r.payment_proof_path && (
+                            <button
+                              onClick={() => onViewPhoto(r, 'payment_proof_path', 'Payment Proof')}
+                              title="View payment proof"
+                              className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
+                            >
+                              <Receipt size={13} />
                             </button>
                           )}
                           <button onClick={() => onEdit(r)} title="Edit" className="flex h-7 w-7 items-center justify-center rounded-full bg-sky-50 text-sky-600 hover:bg-sky-100">
@@ -327,10 +341,12 @@ export default function RegistrationsPage() {
   // window.open()-ing it directly — Supabase Storage's response sets
   // Content-Disposition in a way that made the browser download the file
   // instead of displaying it. An <img src> load isn't subject to that.
-  const viewPhoto = async (reg) => {
+  // field/label pick which of a registration's two possible images to show
+  // (ID photo vs. payment proof) — same lightbox, different source column.
+  const viewPhoto = async (reg, field, label) => {
     try {
-      const url = await getRegistrationFileUrl(reg.photo_path);
-      setPhotoPreview({ url, name: reg.player_name });
+      const url = await getRegistrationFileUrl(reg[field]);
+      setPhotoPreview({ url, name: reg.player_name, label });
     } catch (e) {
       pushToast(e.message, 'error');
     }
@@ -602,7 +618,7 @@ export default function RegistrationsPage() {
       )}
 
       {photoPreview && (
-        <Modal open onClose={() => setPhotoPreview(null)} title="Registration photo" icon={ImageIcon}>
+        <Modal open onClose={() => setPhotoPreview(null)} title={photoPreview.label || 'Registration photo'} icon={ImageIcon}>
           <p className="mb-3 text-xs text-ink-500">{photoPreview.name}</p>
           <img src={photoPreview.url} alt="Registration" className="max-h-[70vh] w-full rounded-xl border border-ink-100 object-contain" />
         </Modal>

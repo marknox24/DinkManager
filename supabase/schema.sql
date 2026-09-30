@@ -1162,6 +1162,12 @@ alter table registrations add column if not exists phone text;
 alter table registrations add column if not exists address text;
 alter table registrations add column if not exists photo_path text;
 
+-- Screenshot/photo the player attaches on the registration form's Payment
+-- step as proof they paid the registration fee. Same registration-uploads
+-- bucket and event-id-prefixed path as photo_path — no new storage policy
+-- needed, its policies are keyed on the path prefix, not the column.
+alter table registrations add column if not exists payment_proof_path text;
+
 -- Links a registration to the signed-in player who submitted it. Nullable —
 -- anonymous registration remains fully supported; this only adds tracking
 -- for players who choose to sign in.

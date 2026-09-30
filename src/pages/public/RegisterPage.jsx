@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useParams, useSearchParams } from 'react-router-dom';
-import { CheckCircle2, ChevronLeft, ChevronRight, Loader2, UploadCloud, Users } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, ChevronRight, IdCard, Loader2, Receipt, UploadCloud, Users } from 'lucide-react';
 import {
   getEventMediaUrl,
   getPublicEventByShareToken,
   getPublicEventBySlug,
+  getRegistrationFileUrl,
   listCategories,
   listRegistrationFields,
   submitRegistration,
@@ -12,7 +13,8 @@ import {
 } from '../../data/eventsApi';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import FormField, { inputClass, textareaClass } from '../../components/ui/FormField';
+import FormField, { inputClass } from '../../components/ui/FormField';
+import ImageDropzone from '../../components/ui/ImageDropzone';
 
 export default function RegisterPage() {
   const { slug, token } = useParams();
@@ -36,11 +38,15 @@ export default function RegisterPage() {
   const [phone, setPhone] = useState('');
   const [clubName, setClubName] = useState('');
   const [address, setAddress] = useState('');
-  const [question, setQuestion] = useState('');
   const [customValues, setCustomValues] = useState({});
   const [uploadingField, setUploadingField] = useState(null);
   const [photoPath, setPhotoPath] = useState(null);
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState(null);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [termsAgreed, setTermsAgreed] = useState(false);
+  const [paymentProofPath, setPaymentProofPath] = useState(null);
+  const [paymentProofPreviewUrl, setPaymentProofPreviewUrl] = useState(null);
+  const [uploadingPaymentProof, setUploadingPaymentProof] = useState(false);
 
   useEffect(() => {
     const load = token ? getPublicEventByShareToken(token) : getPublicEventBySlug(slug);
@@ -72,9 +78,10 @@ export default function RegisterPage() {
     if (steps[i] === 'Category') return !!categoryId;
     if (steps[i] === 'Your details') {
       const namesOk = isDoubles ? player1Name.trim() && player2Name.trim() : player1Name.trim();
-      return namesOk && /\S+@\S+\.\S+/.test(email);
+      return namesOk && /\S+@\S+\.\S+/.test(email) && !!photoPath && termsAgreed;
     }
     if (steps[i] === 'More info') return fields.every((f) => !f.required || (customValues[f.id] && String(customValues[f.id]).trim()));
+    if (steps[i] === 'Payment') return !!paymentProofPath;
     return true;
   };
 
@@ -96,11 +103,28 @@ export default function RegisterPage() {
     setUploadingPhoto(true);
     try {
       const { path } = await uploadRegistrationFile(event.id, file);
+      const url = await getRegistrationFileUrl(path);
       setPhotoPath(path);
+      setPhotoPreviewUrl(url);
     } catch (e) {
       pushToast(e.message, 'error');
     } finally {
       setUploadingPhoto(false);
+    }
+  };
+
+  const handlePaymentProofChange = async (file) => {
+    if (!file) return;
+    setUploadingPaymentProof(true);
+    try {
+      const { path } = await uploadRegistrationFile(event.id, file);
+      const url = await getRegistrationFileUrl(path);
+      setPaymentProofPath(path);
+      setPaymentProofPreviewUrl(url);
+    } catch (e) {
+      pushToast(e.message, 'error');
+    } finally {
+      setUploadingPaymentProof(false);
     }
   };
 
@@ -116,10 +140,10 @@ export default function RegisterPage() {
         phone: phone.trim() || null,
         club_name: clubName.trim() || null,
         address: address.trim() || null,
-        question_to_organizer: question.trim() || null,
         custom_field_values: customValues,
         player_id: isPlayer ? user.id : null,
         photo_path: photoPath,
+        payment_proof_path: paymentProofPath,
       });
       setSubmitted(true);
     } catch (e) {
@@ -265,16 +289,40 @@ export default function RegisterPage() {
               <FormField label="Address" hint="Optional">
                 <input value={address} onChange={(e) => setAddress(e.target.value)} className={inputClass} />
               </FormField>
-              <FormField label="Question to the organizer" hint="Optional">
-                <textarea value={question} onChange={(e) => setQuestion(e.target.value)} className={textareaClass} />
+              <FormField label="ID photo *" hint="Required — for identity confirmation.">
+                <ImageDropzone
+                  imagePath={photoPath}
+                  getUrl={() => photoPreviewUrl}
+                  onUpload={handlePhotoChange}
+                  uploading={uploadingPhoto}
+                  onRemove={() => {
+                    setPhotoPath(null);
+                    setPhotoPreviewUrl(null);
+                  }}
+                  className="h-32 w-full"
+                  emptyIcon={IdCard}
+                  emptyLabel="Choose photo"
+                />
               </FormField>
-              <FormField label="Photo" hint="Optional — e.g. a recent photo or proof of skill level/ranking">
-                <label className="flex cursor-pointer items-center gap-2 rounded-xl border border-dashed border-ink-300 px-3.5 py-3 text-xs font-semibold text-ink-500 transition hover:border-brand-400">
-                  {uploadingPhoto ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />}
-                  {photoPath ? 'Photo uploaded — click to replace' : 'Choose photo'}
-                  <input type="file" accept="image/*" className="hidden" onChange={(e) => handlePhotoChange(e.target.files?.[0])} />
-                </label>
-              </FormField>
+              <label className="flex items-start gap-2 text-sm text-ink-600">
+                <input
+                  type="checkbox"
+                  checked={termsAgreed}
+                  onChange={(e) => setTermsAgreed(e.target.checked)}
+                  className="mt-0.5 h-4 w-4 shrink-0 rounded border-ink-300 text-brand-600 focus:ring-brand-400"
+                />
+                <span>
+                  I agree to the{' '}
+                  <Link to="/terms" className="font-semibold text-ink-600 hover:text-ink-900">
+                    Terms
+                  </Link>{' '}
+                  and{' '}
+                  <Link to="/privacy" className="font-semibold text-ink-600 hover:text-ink-900">
+                    Privacy Policy
+                  </Link>
+                  .
+                </span>
+              </label>
             </div>
           )}
 
@@ -302,9 +350,26 @@ export default function RegisterPage() {
           )}
 
           {currentLabel === 'Payment' && (
-            <div className="flex flex-col items-center gap-3 text-center">
-              <img src={getEventMediaUrl(event.payment_qr_path)} alt="Payment QR" className="h-56 w-56 rounded-2xl border border-ink-200 object-contain" />
-              <p className="text-xs text-ink-500">Scan to pay the registration fee, then submit your registration.</p>
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-col items-center gap-3 text-center">
+                <img src={getEventMediaUrl(event.payment_qr_path)} alt="Payment QR" className="h-56 w-56 rounded-2xl border border-ink-200 object-contain" />
+                <p className="text-xs text-ink-500">Scan to pay the registration fee, then attach proof of payment below.</p>
+              </div>
+              <FormField label="Proof of payment *" hint="Required — upload a screenshot or photo of your payment confirmation.">
+                <ImageDropzone
+                  imagePath={paymentProofPath}
+                  getUrl={() => paymentProofPreviewUrl}
+                  onUpload={handlePaymentProofChange}
+                  uploading={uploadingPaymentProof}
+                  onRemove={() => {
+                    setPaymentProofPath(null);
+                    setPaymentProofPreviewUrl(null);
+                  }}
+                  className="h-32 w-full"
+                  emptyIcon={Receipt}
+                  emptyLabel="Choose photo"
+                />
+              </FormField>
             </div>
           )}
 
@@ -334,19 +399,6 @@ export default function RegisterPage() {
               </button>
             )}
           </div>
-          {step === steps.length - 1 && (
-            <p className="mt-4 text-center text-[11px] leading-relaxed text-ink-400">
-              By submitting, you agree to share these details with the event organizer to process your registration, as described in our{' '}
-              <Link to="/privacy" className="font-semibold text-ink-600 hover:text-ink-900">
-                Privacy Policy
-              </Link>{' '}
-              and{' '}
-              <Link to="/terms" className="font-semibold text-ink-600 hover:text-ink-900">
-                Terms
-              </Link>
-              .
-            </p>
-          )}
         </div>
       </div>
     </div>
