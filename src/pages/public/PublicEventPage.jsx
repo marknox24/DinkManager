@@ -453,9 +453,6 @@ export default function PublicEventPage() {
               <Link to="/tournaments" className="text-xs font-semibold text-ink-300 hover:text-white">
                 Browse tournaments
               </Link>
-              <Link to="/player/login" className="text-xs font-semibold text-ink-300 hover:text-white">
-                Player sign in
-              </Link>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-3">

@@ -8,12 +8,12 @@ export default function RoleToggle({ value, mode = 'login' }) {
   const targets =
     mode === 'login' ? { organizer: '/login', player: '/player/login' } : { organizer: '/signup', player: '/player/signup' };
 
+  // Player sign-in/sign-up is hidden for now — no discoverable path to it
+  // from the organizer side. Direct links to /player/login and
+  // /player/signup still work; this only removes this switcher's option.
   return (
     <div className="mb-6 inline-flex w-full rounded-full bg-ink-100 p-1">
-      {[
-        { key: 'organizer', label: 'Organizer' },
-        { key: 'player', label: 'Player' },
-      ].map((opt) => (
+      {[{ key: 'organizer', label: 'Organizer' }].map((opt) => (
         <button
           key={opt.key}
           type="button"

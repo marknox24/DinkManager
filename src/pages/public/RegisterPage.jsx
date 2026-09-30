@@ -229,19 +229,6 @@ export default function RegisterPage() {
           <Link to={linkBase} className="mt-5 inline-block text-sm font-semibold text-brand-600">
             ← Back to event page
           </Link>
-          {!isPlayer && (
-            <p className="mt-4 text-xs text-ink-400">
-              Want to track this registration?{' '}
-              <Link to="/player/login" className="font-semibold text-brand-600">
-                Sign in
-              </Link>{' '}
-              or{' '}
-              <Link to="/player/signup" className="font-semibold text-brand-600">
-                create a player account
-              </Link>
-              .
-            </p>
-          )}
         </div>
       </div>
     );
