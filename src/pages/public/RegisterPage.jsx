@@ -28,7 +28,11 @@ export default function RegisterPage() {
   const [event, setEvent] = useState(undefined);
   const [categories, setCategories] = useState([]);
   const [fields, setFields] = useState([]);
-  const [step, setStep] = useState(0);
+  // Arriving with ?category=X (from the division modal's "Register for this
+  // division" button) means the category choice is already made — skip the
+  // redundant re-pick and land straight on the form. A bare /register link
+  // (no category param) still starts at the category-picker step.
+  const [step, setStep] = useState(searchParams.get('category') ? 1 : 0);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
