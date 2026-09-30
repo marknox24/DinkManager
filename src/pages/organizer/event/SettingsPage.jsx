@@ -6,6 +6,7 @@ import { addChangeRequestMessage, listChangeRequestMessages, listMyChangeRequest
 import { CURRENCIES, COURT_TYPES } from '../../../data/constants';
 import { PLAN_LIMITS } from '../../../data/plans';
 import { usableCourts } from '../../../utils/courts';
+import { copyToClipboard } from '../../../utils/clipboard';
 import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
@@ -299,11 +300,15 @@ export default function SettingsPage() {
     }
   };
 
-  const copyShareLink = () => {
+  const copyShareLink = async () => {
     const url = `${window.location.origin}/t/${event.share_token}`;
-    navigator.clipboard.writeText(url);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    const ok = await copyToClipboard(url);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } else {
+      pushToast('Could not copy link', 'error');
+    }
   };
 
   const rotateShareLink = async () => {

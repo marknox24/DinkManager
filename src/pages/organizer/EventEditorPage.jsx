@@ -26,6 +26,7 @@ import {
   Trophy,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { copyToClipboard } from '../../utils/clipboard';
 import HintsTour from '../../components/ui/HintsTour';
 import {
   createCategory,
@@ -374,10 +375,10 @@ export default function EventEditorPage() {
 
   const removeQr = () => saveField({ payment_qr_path: null });
 
-  const copyPublicLink = () => {
+  const copyPublicLink = async () => {
     const url = `${window.location.origin}/e/${event.slug}`;
-    navigator.clipboard.writeText(url);
-    pushToast('Public link copied', 'success');
+    const ok = await copyToClipboard(url);
+    pushToast(ok ? 'Public link copied' : 'Could not copy link', ok ? 'success' : 'error');
   };
 
   // Mirrors events_update_owner's with check in schema.sql: 48h after

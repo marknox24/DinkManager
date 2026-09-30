@@ -5,6 +5,7 @@ import { Copy, Download, Loader2, QrCode } from 'lucide-react';
 import Modal from '../ui/Modal';
 import { useToast } from '../../context/ToastContext';
 import { formatDateRange } from '../../utils/format';
+import { copyToClipboard } from '../../utils/clipboard';
 
 // Same 4-brand-color palette (and per-open random pick) as
 // DownloadBracketsListModal.jsx — kept as its own small copy here rather
@@ -56,9 +57,9 @@ export default function ShareEventQrModal({ event, shareUrl: shareUrlProp, onClo
     };
   }, [shareUrl]);
 
-  const copyLink = () => {
-    navigator.clipboard.writeText(shareUrl);
-    pushToast('Link copied', 'success');
+  const copyLink = async () => {
+    const ok = await copyToClipboard(shareUrl);
+    pushToast(ok ? 'Link copied' : 'Could not copy link', ok ? 'success' : 'error');
   };
 
   const downloadQr = async () => {

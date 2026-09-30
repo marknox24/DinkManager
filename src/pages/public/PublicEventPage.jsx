@@ -48,6 +48,7 @@ import { useAuth } from '../../context/AuthContext';
 import useSeo, { SITE_URL } from '../../hooks/useSeo';
 import StatusBadge from '../../components/organizer/StatusBadge';
 import RegistrationStatusBadge from '../../components/player/RegistrationStatusBadge';
+import { copyToClipboard } from '../../utils/clipboard';
 
 const CONTACT_ICONS = { Phone, Email: Mail, Website: Globe };
 const COURT_TYPE_ICONS = { indoor: Home, outdoor: Sun, mixed: CloudSun };
@@ -357,11 +358,9 @@ export default function PublicEventPage() {
     );
   }
 
-  const handleShare = () => {
-    navigator.clipboard
-      .writeText(window.location.href)
-      .then(() => pushToast('Link copied', 'success'))
-      .catch(() => pushToast('Could not copy link', 'error'));
+  const handleShare = async () => {
+    const ok = await copyToClipboard(window.location.href);
+    pushToast(ok ? 'Link copied' : 'Could not copy link', ok ? 'success' : 'error');
   };
 
   const policyContent = [
