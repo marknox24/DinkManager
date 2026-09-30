@@ -26,6 +26,7 @@ import Logo from '../../components/ui/Logo';
 import Tabs from '../../components/ui/Tabs';
 import Modal from '../../components/ui/Modal';
 import FaqAccordion from '../../components/ui/FaqAccordion';
+import RegisteredPlayersTab from '../../components/public/RegisteredPlayersTab';
 import {
   getEventMediaUrl,
   getPublicEventByShareToken,
@@ -372,6 +373,7 @@ export default function PublicEventPage() {
     { id: 'policies', label: 'Policies', content: policyContent.length > 0 ? policyContent : null },
     { id: 'announcements', label: 'Announcements', content: event.announcements },
     { id: 'faq', label: 'FAQ', content: event.faq },
+    { id: 'roster', label: 'Registered Players', content: true },
   ].filter((s) => s.content);
 
   const matchTypes = [...new Set(categories.map((c) => c.match_type).filter(Boolean))];
@@ -565,6 +567,8 @@ export default function PublicEventPage() {
                     </div>
                   ) : s.id === 'faq' ? (
                     <FaqAccordion raw={s.content} />
+                  ) : s.id === 'roster' ? (
+                    <RegisteredPlayersTab event={event} categories={categories} />
                   ) : (
                     <p className="whitespace-pre-line text-sm leading-relaxed text-ink-600">{s.content}</p>
                   ),

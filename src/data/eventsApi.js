@@ -212,6 +212,18 @@ export async function getPublishedEvents() {
   return data;
 }
 
+// Public roster for the "Registered Players" tab — pending, approved, and
+// waitlisted only (denied is excluded server-side by public_event_roster,
+// never client-side). categoryId omitted/null returns every category.
+export async function getPublicEventRoster(eventId, categoryId) {
+  const { data, error } = await supabase.rpc('public_event_roster', {
+    p_event_id: eventId,
+    p_category_id: categoryId || null,
+  });
+  if (error) throw error;
+  return data;
+}
+
 // Toggles an event public/private. Switching to private for the first time
 // mints a share token (kept stable across later toggles so a link the
 // organizer already sent out keeps working).

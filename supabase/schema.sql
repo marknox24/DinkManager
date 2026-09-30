@@ -1359,6 +1359,42 @@ where e.is_published = true and r.status = 'approved';
 
 grant select on public_checkin_roster to anon, authenticated;
 
+-- Public roster for the event page's "Registered Players" tab. Unlike
+-- public_checkin_roster (approved-only, check-in columns), this exposes
+-- pending/approved/waitlisted registrations with status + club_name +
+-- created_at — but never 'denied' ones, and never email/phone/address/
+-- photo/custom_field_values. security definer, but the column list and
+-- both the is_published and status filters are hard-coded in the query
+-- body (not parameters), so a caller cannot widen either — same safety
+-- shape as public_published_events() below. p_category_id null = all
+-- categories (denied still excluded either way).
+create or replace function public_event_roster(p_event_id uuid, p_category_id uuid default null)
+returns table (
+  id uuid,
+  category_id uuid,
+  player_name text,
+  player2_name text,
+  club_name text,
+  status text,
+  created_at timestamptz
+)
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select r.id, r.category_id, r.player_name, r.player2_name, r.club_name, r.status, r.created_at
+  from registrations r
+  join events e on e.id = r.event_id
+  where e.id = p_event_id
+    and e.is_published = true
+    and r.status <> 'denied'
+    and (p_category_id is null or r.category_id = p_category_id)
+  order by r.created_at desc;
+$$;
+
+grant execute on function public_event_roster(uuid, uuid) to anon, authenticated;
+
 -- ----------------------------------------------------------------------------
 -- ACTIVITY LOG  (organizer-facing feed; written by triggers, read by owner)
 -- ----------------------------------------------------------------------------
