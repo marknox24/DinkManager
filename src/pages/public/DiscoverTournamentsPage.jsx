@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { Search, Trophy, X } from 'lucide-react';
 import Logo from '../../components/ui/Logo';
 import TournamentCard from '../../components/public/TournamentCard';
@@ -63,6 +64,9 @@ export default function DiscoverTournamentsPage() {
               </span>
               <span className="text-xs font-semibold uppercase tracking-wide text-ink-300">DinkManager Tournament</span>
             </div>
+            <Link to="/" className="text-xs font-semibold text-ink-300 hover:text-white">
+              ← Back to website
+            </Link>
           </div>
           <h1 className="font-display text-2xl font-bold sm:text-3xl">Browse tournaments</h1>
           <p className="mt-1 text-sm text-ink-300">Find a pickleball tournament and register to play.</p>
