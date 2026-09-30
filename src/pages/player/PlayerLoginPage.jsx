@@ -97,6 +97,9 @@ export default function PlayerLoginPage() {
     <AuthSplitLayout>
       {step === 'credentials' ? (
         <>
+          <Link to="/" className="mb-4 inline-flex w-fit items-center gap-1 text-xs font-semibold text-ink-500 hover:text-ink-800">
+            ← Back to website
+          </Link>
           <div className="mb-6 flex flex-col items-center text-center">
             <Logo size={44} />
             <h1 className="mt-3 font-display text-xl font-bold text-ink-900">Welcome back</h1>
