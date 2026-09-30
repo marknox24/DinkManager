@@ -1,6 +1,16 @@
 {
   "rewrites": [
     { "source": "/sitemap.xml", "destination": "/api/sitemap" },
+    {
+      "source": "/e/:slug",
+      "has": [{ "type": "header", "key": "user-agent", "value": ".*(facebookexternalhit|Facebot|Twitterbot|LinkedInBot|Slackbot|WhatsApp|TelegramBot|Discordbot|Pinterest|redditbot|SkypeUriPreview|Viber|line-poker|vkShare|Applebot|Googlebot|bingbot).*" }],
+      "destination": "/api/event-meta?slug=:slug"
+    },
+    {
+      "source": "/t/:token",
+      "has": [{ "type": "header", "key": "user-agent", "value": ".*(facebookexternalhit|Facebot|Twitterbot|LinkedInBot|Slackbot|WhatsApp|TelegramBot|Discordbot|Pinterest|redditbot|SkypeUriPreview|Viber|line-poker|vkShare|Applebot|Googlebot|bingbot).*" }],
+      "destination": "/api/event-meta?token=:token"
+    },
     { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }
