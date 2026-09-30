@@ -3,7 +3,16 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import { CalendarDays, Files, HandHelping, Image as ImageIcon, MapPin, Plus, Settings2, Sparkles, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { createEvent, duplicateEvent, getEventMediaUrl, getOnboardingProgress, listMyEvents, listMyPendingPlanRequests, listStaffedEvents } from '../../data/eventsApi';
+import {
+  createEvent,
+  duplicateEvent,
+  getEventMediaUrl,
+  getCoverPhotoObjectPosition,
+  getOnboardingProgress,
+  listMyEvents,
+  listMyPendingPlanRequests,
+  listStaffedEvents,
+} from '../../data/eventsApi';
 import { PAID_PLAN_ORDER, PLAN_LIMITS } from '../../data/plans';
 import { clearPendingPlan, pendingPlan } from '../../utils/pendingPlan';
 import { EVENT_PERMISSIONS } from '../../data/permissions';
@@ -254,7 +263,12 @@ export default function DashboardPage() {
               className="hover-lift animate-rise-in flex flex-col overflow-hidden rounded-2xl border border-ink-100 bg-white text-left shadow-sm"
             >
               {event.cover_photo_path ? (
-                <img src={getEventMediaUrl(event.cover_photo_path)} alt="" className="h-32 w-full object-cover" />
+                <img
+                  src={getEventMediaUrl(event.cover_photo_path)}
+                  alt=""
+                  className="h-32 w-full object-cover"
+                  style={{ objectPosition: getCoverPhotoObjectPosition(event) }}
+                />
               ) : (
                 <div className="flex h-32 w-full items-center justify-center bg-gradient-to-br from-brand-50 to-brand-100 text-brand-300">
                   <ImageIcon size={26} />
@@ -335,7 +349,12 @@ export default function DashboardPage() {
                 className="hover-lift animate-rise-in flex flex-col overflow-hidden rounded-2xl border border-ink-100 bg-white text-left shadow-sm"
               >
                 {event.cover_photo_path ? (
-                  <img src={getEventMediaUrl(event.cover_photo_path)} alt="" className="h-32 w-full object-cover" />
+                  <img
+                    src={getEventMediaUrl(event.cover_photo_path)}
+                    alt=""
+                    className="h-32 w-full object-cover"
+                    style={{ objectPosition: getCoverPhotoObjectPosition(event) }}
+                  />
                 ) : (
                   <div className="flex h-32 w-full items-center justify-center bg-gradient-to-br from-brand-50 to-brand-100 text-brand-300">
                     <ImageIcon size={26} />

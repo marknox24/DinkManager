@@ -636,6 +636,13 @@ export function getEventMediaUrl(path) {
   return data.publicUrl;
 }
 
+// CSS object-position for an event's cover photo, from the focal point set
+// in BannerFocalPointPicker. Defaults to center (50/50), matching how the
+// photo already looked before the focal point existed.
+export function getCoverPhotoObjectPosition(event) {
+  return `${event?.cover_photo_focal_x ?? 50}% ${event?.cover_photo_focal_y ?? 50}%`;
+}
+
 // ---------------------------------------------------------------------------
 // SUBSCRIPTION REQUESTS  (manual/QR payment flow — see supabase/schema.sql's
 // "SUBSCRIPTION REQUESTS" section and supabase/functions/approve-subscription-request)

@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import { CalendarDays, CheckCircle2, Image as ImageIcon, MapPin } from 'lucide-react';
 import StatusBadge from '../organizer/StatusBadge';
-import { getEventMediaUrl } from '../../data/eventsApi';
+import { getEventMediaUrl, getCoverPhotoObjectPosition } from '../../data/eventsApi';
 import { formatDateRange } from '../../utils/format';
 
 // A published-tournament summary card — shared by DiscoverTournamentsPage.jsx
@@ -19,7 +19,12 @@ export default function TournamentCard({ event, myRegistrations }) {
       className="hover-lift flex flex-col overflow-hidden rounded-2xl border border-ink-100 bg-white text-left shadow-sm"
     >
       {event.cover_photo_path ? (
-        <img src={getEventMediaUrl(event.cover_photo_path)} alt="" className="h-32 w-full object-cover" />
+        <img
+          src={getEventMediaUrl(event.cover_photo_path)}
+          alt=""
+          className="h-32 w-full object-cover"
+          style={{ objectPosition: getCoverPhotoObjectPosition(event) }}
+        />
       ) : (
         <div className="flex h-32 w-full items-center justify-center bg-gradient-to-br from-brand-50 to-brand-100 text-brand-300">
           <ImageIcon size={26} />

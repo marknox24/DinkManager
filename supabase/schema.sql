@@ -189,6 +189,18 @@ create table if not exists events (
 
 alter table events add column if not exists match_duration_minutes integer not null default 18;
 alter table events add column if not exists cover_photo_path text;
+-- Focal point (percentage, 0-100, default 50/50 = center) for cover_photo_path.
+-- The same cover photo renders at several different aspect ratios across the
+-- app (dashboard card, discover card, the public event hero at different
+-- ratios on mobile vs desktop) — a fixed crop rectangle only looks right at
+-- one of those; a focal point lets every object-cover spot stay correct via
+-- CSS object-position, with no image re-processing needed.
+alter table events add column if not exists cover_photo_focal_x numeric not null default 50;
+alter table events add column if not exists cover_photo_focal_y numeric not null default 50;
+alter table events drop constraint if exists events_cover_photo_focal_x_check;
+alter table events add constraint events_cover_photo_focal_x_check check (cover_photo_focal_x >= 0 and cover_photo_focal_x <= 100);
+alter table events drop constraint if exists events_cover_photo_focal_y_check;
+alter table events add constraint events_cover_photo_focal_y_check check (cover_photo_focal_y >= 0 and cover_photo_focal_y <= 100);
 alter table events add column if not exists currency text not null default 'USD';
 alter table events add column if not exists include_sponsors_in_earnings boolean not null default false;
 alter table events add column if not exists visibility text not null default 'public';
@@ -2361,13 +2373,20 @@ create policy "categories_delete_owner" on categories for delete
 -- security-definer function, same reason as is_admin_user()/
 -- has_event_permission() above.
 -- ----------------------------------------------------------------------------
-create or replace function public_published_events()
+-- Postgres won't let create or replace function change a function's OUT
+-- parameter list (the columns added for the focal point below), so this has
+-- to be dropped and recreated rather than replaced in place.
+drop function if exists public_published_events();
+
+create function public_published_events()
 returns table (
   id uuid,
   slug text,
   name text,
   status text,
   cover_photo_path text,
+  cover_photo_focal_x numeric,
+  cover_photo_focal_y numeric,
   location_address text,
   start_date date,
   end_date date
@@ -2377,7 +2396,7 @@ security definer
 set search_path = public
 stable
 as $$
-  select e.id, e.slug, e.name, e.status, e.cover_photo_path, e.location_address, e.start_date, e.end_date
+  select e.id, e.slug, e.name, e.status, e.cover_photo_path, e.cover_photo_focal_x, e.cover_photo_focal_y, e.location_address, e.start_date, e.end_date
   from events e
   join profiles p on p.id = e.organizer_id
   where e.is_published = true

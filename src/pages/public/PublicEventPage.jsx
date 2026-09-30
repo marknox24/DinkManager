@@ -34,6 +34,7 @@ import RegisteredPlayersTab from '../../components/public/RegisteredPlayersTab';
 const ShareEventQrModal = lazy(() => import('../../components/organizer/ShareEventQrModal'));
 import {
   getEventMediaUrl,
+  getCoverPhotoObjectPosition,
   getPublicEventByShareToken,
   getPublicEventBySlug,
   listCategories,
@@ -497,7 +498,12 @@ export default function PublicEventPage() {
       <main className="mx-auto flex max-w-6xl flex-col gap-5 px-4 py-6 sm:px-6 sm:py-8">
         <div className="overflow-hidden rounded-2xl border border-ink-100 bg-white shadow-sm">
           {event.cover_photo_path ? (
-            <img src={getEventMediaUrl(event.cover_photo_path)} alt="" className="h-56 w-full object-cover sm:h-72" />
+            <img
+              src={getEventMediaUrl(event.cover_photo_path)}
+              alt=""
+              className="h-56 w-full object-cover sm:h-72"
+              style={{ objectPosition: getCoverPhotoObjectPosition(event) }}
+            />
           ) : (
             <div className="flex h-48 w-full items-center justify-center bg-gradient-to-br from-brand-50 to-brand-100 text-brand-300 sm:h-64">
               <ImageIcon size={32} />

@@ -58,6 +58,7 @@ import RequestDateChangeModal from '../../components/organizer/RequestDateChange
 import ContactAdminModal from '../../components/organizer/ContactAdminModal';
 import { formatDateRange } from '../../utils/format';
 import ImageDropzone from '../../components/ui/ImageDropzone';
+import BannerFocalPointPicker from '../../components/organizer/BannerFocalPointPicker';
 import AccordionItem from '../../components/ui/Accordion';
 import FormattableTextarea from '../../components/ui/FormattableTextarea';
 import FaqEditor from '../../components/organizer/FaqEditor';
@@ -648,6 +649,16 @@ export default function EventEditorPage() {
                     emptyIcon={ImagePlus}
                     emptyLabel="Upload photo"
                   />
+                  {event.cover_photo_path && !uploadingCover && (
+                    <div className="mt-3">
+                      <BannerFocalPointPicker
+                        imageUrl={getEventMediaUrl(event.cover_photo_path)}
+                        focalX={event.cover_photo_focal_x ?? 50}
+                        focalY={event.cover_photo_focal_y ?? 50}
+                        onChange={(x, y) => saveField({ cover_photo_focal_x: x, cover_photo_focal_y: y })}
+                      />
+                    </div>
+                  )}
                 </FormField>
                 <div className="flex flex-col gap-2.5">
                   <AccordionItem
