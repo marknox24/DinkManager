@@ -4,7 +4,7 @@ import Modal from '../ui/Modal';
 import Switch from '../ui/Switch';
 import Select from '../ui/Select';
 import FormField, { inputClass } from '../ui/FormField';
-import { deriveLadder, expandFirstStageSlots, readPlan, unpairedPools } from '../../data/playoffApi';
+import { deriveLadder, expandFirstStageSlots, expandSinglePoolSlots, readPlan, unpairedPools } from '../../data/playoffApi';
 
 // Same visual language as RandomizerModal's bracket cards, so a pool looks
 // the same everywhere it shows up in the app.
@@ -57,11 +57,19 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
   const [thirdPlace, setThirdPlace] = useState(initial.playoff_third_place);
 
   const handlePoolCountChange = (value) => {
+    const parsed = parseInt(value, 10) || 1;
+    // A single pool seeds its own top-N into the bracket — no crossover
+    // partner needed, so it's exempt from the even-count rule below.
+    if (parsed <= 1) {
+      setPoolCount(1);
+      setPairs([]);
+      return;
+    }
     // Rounded to even: pool pairing always needs an even count, and the
     // input's step={2} only constrains the spinner arrows, not typed values
     // — an odd count here used to leave one pool permanently unpaired (and
     // silently excluded from the knockout stage) with no error shown.
-    const n = Math.max(2, Math.round((parseInt(value, 10) || 2) / 2) * 2);
+    const n = Math.max(2, Math.round(parsed / 2) * 2);
     setPoolCount(n);
     setPairs(defaultPairs(n));
   };
@@ -78,14 +86,18 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
     });
   };
 
-  const ladder = useMemo(() => deriveLadder({ poolPairs: pairs, advancePerPool: advance, thirdPlace }), [pairs, advance, thirdPlace]);
-  const firstStageSlots = useMemo(() => expandFirstStageSlots(pairs, advance), [pairs, advance]);
+  const ladder = useMemo(() => deriveLadder({ poolCount, poolPairs: pairs, advancePerPool: advance, thirdPlace }), [poolCount, pairs, advance, thirdPlace]);
+  const firstStageSlots = useMemo(
+    () => (poolCount === 1 ? expandSinglePoolSlots('A', advance) : expandFirstStageSlots(pairs, advance)),
+    [poolCount, pairs, advance]
+  );
   const allLetters = useMemo(() => Array.from({ length: poolCount }, (_, i) => letterAt(i)), [poolCount]);
   // Belt-and-suspenders: deriveLadder only checks pairs against each other,
   // not against every pool that's supposed to exist — a plan saved before
   // poolCount was forced even (or loaded from a stale record) could still
-  // leave one pool out entirely.
-  const missing = useMemo(() => unpairedPools(allLetters, pairs), [allLetters, pairs]);
+  // leave one pool out entirely. Not applicable to a single pool — there's
+  // nothing for it to be paired with.
+  const missing = useMemo(() => (poolCount === 1 ? [] : unpairedPools(allLetters, pairs)), [poolCount, allLetters, pairs]);
 
   const canSave = !enabled || (ladder.valid && missing.length === 0);
 
@@ -124,12 +136,13 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
 
             <div className="grid grid-cols-2 gap-3">
               <FormField label="Number of pools">
-                <input type="number" min={2} step={2} value={poolCount} onChange={(e) => handlePoolCountChange(e.target.value)} className={inputClass} />
+                <input type="number" min={1} step={2} value={poolCount} onChange={(e) => handlePoolCountChange(e.target.value)} className={inputClass} />
               </FormField>
               <FormField label="Advance per pool">
                 <Select value={advance} onChange={(e) => setAdvance(parseInt(e.target.value, 10))} className={inputClass}>
                   <option value={1}>Top 1 (winner)</option>
                   <option value={2}>Top 2</option>
+                  <option value={4}>Top 4</option>
                 </Select>
               </FormField>
             </div>
@@ -142,6 +155,7 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
               <Switch checked={thirdPlace} onChange={setThirdPlace} />
             </div>
 
+            {poolCount > 1 && (
             <div className="mt-4">
               <div className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-500">Pool crossover</div>
               <p className="mb-2 text-xs text-ink-400">Which pools feed into each other for the first knockout round.</p>
@@ -168,6 +182,7 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
                 ))}
               </div>
             </div>
+            )}
           </div>
 
           {/* Right: a live, always-in-sync preview of the resulting ladder. */}
@@ -207,9 +222,17 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
                         {firstStageSlots.map((slot, si) => (
                           <span key={si} className="flex items-center gap-1 rounded-full bg-ink-50 px-2 py-1 text-[11px] font-semibold text-ink-600">
                             <ListChecks size={11} className="text-ink-300" />
-                            {slot.a.letter}
-                            {slot.a.rank} vs {slot.b.letter}
-                            {slot.b.rank}
+                            {poolCount === 1 ? (
+                              <>
+                                {slot.a.rank} vs {slot.b.rank}
+                              </>
+                            ) : (
+                              <>
+                                {slot.a.letter}
+                                {slot.a.rank} vs {slot.b.letter}
+                                {slot.b.rank}
+                              </>
+                            )}
                           </span>
                         ))}
                       </div>

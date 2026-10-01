@@ -298,9 +298,11 @@ export default function MatchListPage() {
   // straight away; only the first knockout stage — fed by pool letters that
   // weren't necessarily known when the playoff plan was set up in Event
   // Details — gets a confirm dialog first (see PlayoffCrossoverConfirmModal).
+  // A single-pool plan has no crossover to confirm (nothing to pair the
+  // lone pool with), so it skips straight to generating.
   const handleGenerateStageClick = (level) => {
     const isFirstStage = playoffStatus[0]?.kind === level.kind;
-    if (isFirstStage) {
+    if (isFirstStage && activeCategory.playoff_pool_count !== 1) {
       setConfirmingLevel(level);
       return;
     }

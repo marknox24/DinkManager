@@ -38,7 +38,29 @@ export function matchLevelLabel(match) {
 // documented tradeoffs on non-power-of-2 / larger pool counts), so anything
 // bigger comes back invalid with a concrete message rather than silently
 // producing an unsupported stage.
-export function deriveLadder({ poolPairs, advancePerPool, thirdPlace }) {
+export function deriveLadder({ poolCount, poolPairs, advancePerPool, thirdPlace }) {
+  // A single, self-contained pool seeds its own top-N into the bracket —
+  // no crossover partner needed. Capped at top-4/semifinal (not extended to
+  // an 8-team quarterfinal bracket) to match the same "out of scope for v1"
+  // ceiling the multi-pool path below already applies.
+  if (poolCount === 1) {
+    if (advancePerPool < 2) {
+      return { valid: false, error: 'Advance at least 2 players from the pool to form a knockout bracket.', levels: [] };
+    }
+    const firstRoundMatches = advancePerPool / 2;
+    const isPowerOfTwo = Number.isInteger(firstRoundMatches) && firstRoundMatches > 0 && (firstRoundMatches & (firstRoundMatches - 1)) === 0;
+    if (!isPowerOfTwo || firstRoundMatches > 2) {
+      return { valid: false, error: `Top ${advancePerPool} advancing from one pool doesn't fit a knockout bracket. Use 2 or 4.`, levels: [] };
+    }
+    if (firstRoundMatches === 1) {
+      return { valid: true, error: null, levels: [{ kind: 'final', label: PLAYOFF_STAGES.final.label, matchCount: 1 }] };
+    }
+    const levels = [{ kind: 'semifinal', label: PLAYOFF_STAGES.semifinal.label, matchCount: 2 }];
+    if (thirdPlace) levels.push({ kind: 'third_place', label: PLAYOFF_STAGES.third_place.label, matchCount: 1 });
+    levels.push({ kind: 'final', label: PLAYOFF_STAGES.final.label, matchCount: 1 });
+    return { valid: true, error: null, levels };
+  }
+
   const pairs = poolPairs || [];
   if (pairs.length === 0) {
     return { valid: false, error: 'Choose at least one pool pair to cross over into the knockout stage.', levels: [] };
@@ -109,6 +131,18 @@ export function expandFirstStageSlots(poolPairs, advancePerPool) {
   return slots;
 }
 
+// Standard single-elimination seeding within one unpaired pool: 1v4 and 2v3
+// for top-4 (so the top 2 seeds can only meet in the final, not the
+// semifinal), or 1v2 for top-2. The single-pool counterpart to
+// expandFirstStageSlots, which only knows how to pair two distinct pools.
+export function expandSinglePoolSlots(letter, advancePerPool) {
+  const slots = [];
+  for (let i = 0; i < advancePerPool / 2; i++) {
+    slots.push({ a: { letter, rank: i + 1 }, b: { letter, rank: advancePerPool - i } });
+  }
+  return slots;
+}
+
 // ---------------------------------------------------------------------------
 // PLAN PERSISTENCE
 // ---------------------------------------------------------------------------
@@ -161,7 +195,12 @@ export async function getPlayoffStatus(categoryId) {
   const plan = readPlan(category);
   if (!plan.playoff_enabled) return [];
 
-  const ladder = deriveLadder({ poolPairs: plan.playoff_pool_pairs, advancePerPool: plan.playoff_advance_per_pool, thirdPlace: plan.playoff_third_place });
+  const ladder = deriveLadder({
+    poolCount: plan.playoff_pool_count,
+    poolPairs: plan.playoff_pool_pairs,
+    advancePerPool: plan.playoff_advance_per_pool,
+    thirdPlace: plan.playoff_third_place,
+  });
   if (!ladder.valid) return [];
 
   const [{ data: poolBrackets, error: poolErr }, poBracket] = await Promise.all([
@@ -244,7 +283,12 @@ export async function generateStageMatches(categoryId, kind, { replace = false }
   const { data: category, error: catErr } = await supabase.from('categories').select('*').eq('id', categoryId).single();
   if (catErr) throw catErr;
   const plan = readPlan(category);
-  const ladder = deriveLadder({ poolPairs: plan.playoff_pool_pairs, advancePerPool: plan.playoff_advance_per_pool, thirdPlace: plan.playoff_third_place });
+  const ladder = deriveLadder({
+    poolCount: plan.playoff_pool_count,
+    poolPairs: plan.playoff_pool_pairs,
+    advancePerPool: plan.playoff_advance_per_pool,
+    thirdPlace: plan.playoff_third_place,
+  });
   if (!plan.playoff_enabled || !ladder.valid) throw new Error('This category has no valid playoff plan.');
   const level = ladder.levels.find((l) => l.kind === kind);
   if (!level) throw new Error('Unknown playoff stage.');
@@ -286,35 +330,59 @@ export async function generateStageMatches(categoryId, kind, { replace = false }
   let teamPairs; // [{ a: teamId, b: teamId }, ...]
 
   if (isFirstStage) {
-    const letters = plan.playoff_pool_pairs.flat();
-    const byLetter = new Map(poolBrackets.map((b) => [b.letter, b]));
-    const missing = letters.filter((l) => !byLetter.has(l));
-    if (missing.length > 0) throw new Error(`Pool${missing.length === 1 ? '' : 's'} ${missing.join(', ')} no longer exist — update the playoff plan to match the pools you drew.`);
-    const extraLetters = poolBrackets.map((b) => b.letter).filter((l) => !letters.includes(l));
-    if (extraLetters.length > 0) throw new Error(`Pool${extraLetters.length === 1 ? '' : 's'} ${extraLetters.join(', ')} ${extraLetters.length === 1 ? "isn't" : "aren't"} included in the playoff plan — update it before generating.`);
+    let rankedByLetter;
+    let slots;
 
-    const { data: allTeams, error: teamErr } = await supabase
-      .from('teams')
-      .select('*')
-      .in(
-        'bracket_id',
-        poolBrackets.map((b) => b.id)
-      );
-    if (teamErr) throw teamErr;
-
-    const rankedByLetter = new Map();
-    for (const b of poolBrackets) {
-      const poolTeams = allTeams.filter((t) => t.bracket_id === b.id);
-      if (poolTeams.length < plan.playoff_advance_per_pool) {
-        throw new Error(`Bracket ${b.letter} only has ${poolTeams.length} team${poolTeams.length === 1 ? '' : 's'}, fewer than the ${plan.playoff_advance_per_pool} needed to advance.`);
+    if (plan.playoff_pool_count === 1) {
+      if (poolBrackets.length !== 1) {
+        throw new Error(`This plan expects 1 pool, but ${poolBrackets.length} pool${poolBrackets.length === 1 ? '' : 's'} were drawn — update the playoff plan to match.`);
       }
-      const ranked = rankTeams(poolTeams);
+      const pool = poolBrackets[0];
+      const { data: allTeams, error: teamErr } = await supabase.from('teams').select('*').eq('bracket_id', pool.id);
+      if (teamErr) throw teamErr;
+      if (allTeams.length < plan.playoff_advance_per_pool) {
+        throw new Error(`Pool ${pool.letter} only has ${allTeams.length} team${allTeams.length === 1 ? '' : 's'}, fewer than the ${plan.playoff_advance_per_pool} needed to advance.`);
+      }
+      const ranked = rankTeams(allTeams);
       for (let rank = 1; rank <= plan.playoff_advance_per_pool; rank++) {
         if (isTiedAtCut(ranked, rank)) {
-          throw new Error(`Bracket ${b.letter} has a tie for ${ordinal(rank)} place — settle it before generating ${level.label}.`);
+          throw new Error(`Pool ${pool.letter} has a tie for ${ordinal(rank)} place — settle it before generating ${level.label}.`);
         }
       }
-      rankedByLetter.set(b.letter, ranked);
+      rankedByLetter = new Map([[pool.letter, ranked]]);
+      slots = expandSinglePoolSlots(pool.letter, plan.playoff_advance_per_pool);
+    } else {
+      const letters = plan.playoff_pool_pairs.flat();
+      const byLetter = new Map(poolBrackets.map((b) => [b.letter, b]));
+      const missing = letters.filter((l) => !byLetter.has(l));
+      if (missing.length > 0) throw new Error(`Pool${missing.length === 1 ? '' : 's'} ${missing.join(', ')} no longer exist — update the playoff plan to match the pools you drew.`);
+      const extraLetters = poolBrackets.map((b) => b.letter).filter((l) => !letters.includes(l));
+      if (extraLetters.length > 0) throw new Error(`Pool${extraLetters.length === 1 ? '' : 's'} ${extraLetters.join(', ')} ${extraLetters.length === 1 ? "isn't" : "aren't"} included in the playoff plan — update it before generating.`);
+
+      const { data: allTeams, error: teamErr } = await supabase
+        .from('teams')
+        .select('*')
+        .in(
+          'bracket_id',
+          poolBrackets.map((b) => b.id)
+        );
+      if (teamErr) throw teamErr;
+
+      rankedByLetter = new Map();
+      for (const b of poolBrackets) {
+        const poolTeams = allTeams.filter((t) => t.bracket_id === b.id);
+        if (poolTeams.length < plan.playoff_advance_per_pool) {
+          throw new Error(`Bracket ${b.letter} only has ${poolTeams.length} team${poolTeams.length === 1 ? '' : 's'}, fewer than the ${plan.playoff_advance_per_pool} needed to advance.`);
+        }
+        const ranked = rankTeams(poolTeams);
+        for (let rank = 1; rank <= plan.playoff_advance_per_pool; rank++) {
+          if (isTiedAtCut(ranked, rank)) {
+            throw new Error(`Bracket ${b.letter} has a tie for ${ordinal(rank)} place — settle it before generating ${level.label}.`);
+          }
+        }
+        rankedByLetter.set(b.letter, ranked);
+      }
+      slots = expandFirstStageSlots(plan.playoff_pool_pairs, plan.playoff_advance_per_pool);
     }
 
     if (!poBracket) {
@@ -328,7 +396,6 @@ export async function generateStageMatches(categoryId, kind, { replace = false }
     }
 
     const seedTeam = (letter, rank) => rankedByLetter.get(letter).find((t) => t.rank === rank);
-    const slots = expandFirstStageSlots(plan.playoff_pool_pairs, plan.playoff_advance_per_pool);
     const neededSeeds = new Map();
     slots.forEach((slot) => {
       neededSeeds.set(`${slot.a.letter}${slot.a.rank}`, slot.a);

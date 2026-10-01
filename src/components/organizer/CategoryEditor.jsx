@@ -36,6 +36,7 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete, de
   const ladderSummary = (() => {
     if (!local.playoff_enabled) return '';
     const ladder = deriveLadder({
+      poolCount: local.playoff_pool_count,
       poolPairs: local.playoff_pool_pairs || [],
       advancePerPool: local.playoff_advance_per_pool,
       thirdPlace: local.playoff_third_place,

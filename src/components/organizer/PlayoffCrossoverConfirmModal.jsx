@@ -34,7 +34,10 @@ export default function PlayoffCrossoverConfirmModal({ level, poolLetters, plan,
     });
   };
 
-  const ladder = useMemo(() => deriveLadder({ poolPairs: pairs, advancePerPool: advance, thirdPlace: plan.playoff_third_place }), [pairs, advance, plan.playoff_third_place]);
+  const ladder = useMemo(
+    () => deriveLadder({ poolCount: plan.playoff_pool_count, poolPairs: pairs, advancePerPool: advance, thirdPlace: plan.playoff_third_place }),
+    [plan.playoff_pool_count, pairs, advance, plan.playoff_third_place]
+  );
   const slots = useMemo(() => expandFirstStageSlots(pairs, advance), [pairs, advance]);
   // deriveLadder only checks the paired letters against each other — it has
   // no notion of "every pool that was actually drawn," so an odd number of
