@@ -24,6 +24,12 @@ function letterAt(i) {
 // [[A,C],[B,D]] for 4 pools, [[A,E],[B,F],[C,G],[D,H]] for 8, etc. — pairs
 // the first half of the alphabet with the second half so a pool never faces
 // itself, matching the plan's "adjacent" default crossover.
+// 1 (single pool, seeds its own top-N) plus every even count a pairing-based
+// draw realistically needs. A plain number input's up/down arrows can't
+// represent this unevenly-spaced set correctly — stepping from 2 by any
+// fixed amount either skips 1 or overshoots the next valid even number.
+const POOL_COUNT_OPTIONS = [1, 2, 4, 6, 8, 10, 12, 16];
+
 function defaultPairs(poolCount) {
   const half = Math.floor(poolCount / 2);
   return Array.from({ length: half }, (_, i) => [letterAt(i), letterAt(i + half)]);
@@ -56,22 +62,14 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
   const [pairs, setPairs] = useState(initial.playoff_pool_pairs.length > 0 ? initial.playoff_pool_pairs : defaultPairs(initial.playoff_pool_count || 4));
   const [thirdPlace, setThirdPlace] = useState(initial.playoff_third_place);
 
+  // Every option POOL_COUNT_OPTIONS offers is already a legal value (1, or
+  // even), so there's no clamping/rounding to do here — unlike the old
+  // native number input, which silently rejected decrementing below 2 (or
+  // let an odd typed value through and left one pool unpaired).
   const handlePoolCountChange = (value) => {
-    const parsed = parseInt(value, 10) || 1;
-    // A single pool seeds its own top-N into the bracket — no crossover
-    // partner needed, so it's exempt from the even-count rule below.
-    if (parsed <= 1) {
-      setPoolCount(1);
-      setPairs([]);
-      return;
-    }
-    // Rounded to even: pool pairing always needs an even count, and the
-    // input's step={2} only constrains the spinner arrows, not typed values
-    // — an odd count here used to leave one pool permanently unpaired (and
-    // silently excluded from the knockout stage) with no error shown.
-    const n = Math.max(2, Math.round(parsed / 2) * 2);
+    const n = parseInt(value, 10);
     setPoolCount(n);
-    setPairs(defaultPairs(n));
+    setPairs(n === 1 ? [] : defaultPairs(n));
   };
 
   // Swaps the two pairs' right-hand letters if the newly-picked one was
@@ -136,7 +134,13 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
 
             <div className="grid grid-cols-2 gap-3">
               <FormField label="Number of pools">
-                <input type="number" min={1} step={2} value={poolCount} onChange={(e) => handlePoolCountChange(e.target.value)} className={inputClass} />
+                <Select value={poolCount} onChange={(e) => handlePoolCountChange(e.target.value)} className={inputClass}>
+                  {POOL_COUNT_OPTIONS.map((n) => (
+                    <option key={n} value={n}>
+                      {n === 1 ? '1 (no crossover)' : n}
+                    </option>
+                  ))}
+                </Select>
               </FormField>
               <FormField label="Advance per pool">
                 <Select value={advance} onChange={(e) => setAdvance(parseInt(e.target.value, 10))} className={inputClass}>
