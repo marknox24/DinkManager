@@ -22,13 +22,13 @@ import {
   Trophy,
   User,
   Users,
-  XCircle,
 } from 'lucide-react';
 import Logo from '../../components/ui/Logo';
 import Tabs from '../../components/ui/Tabs';
 import Modal from '../../components/ui/Modal';
 import FaqAccordion from '../../components/ui/FaqAccordion';
 import RegisteredPlayersTab from '../../components/public/RegisteredPlayersTab';
+import QualificationPanel from '../../components/public/QualificationPanel';
 // Lazy: pulls in qrcode + html-to-image, deferred until a visitor actually
 // opens the QR modal (same reasoning as the organizer editor's Share QR).
 const ShareEventQrModal = lazy(() => import('../../components/organizer/ShareEventQrModal'));
@@ -131,7 +131,6 @@ function CategoryDetailModal({ cat, count, linkBase, closed, myReg, onClose }) {
   const activeCount = count?.active_count || 0;
   const full = cat.max_slots != null && activeCount >= cat.max_slots;
   const qualification = cat.qualification || [];
-  const hasQualificationInfo = qualification.length > 0 || cat.qualification_notes || cat.disqualification_notes;
 
   return (
     <Modal open onClose={onClose} title={cat.name} icon={Trophy} maxWidth="max-w-xl">
@@ -209,33 +208,7 @@ function CategoryDetailModal({ cat, count, linkBase, closed, myReg, onClose }) {
           </div>
         )}
 
-        {hasQualificationInfo && (
-          <div className="rounded-2xl border border-brand-100 bg-brand-50/40 p-4">
-            <h4 className="mb-2 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-brand-700">
-              <ShieldCheck size={13} /> Qualification &amp; eligibility
-            </h4>
-            <p className="mb-3 text-xs text-ink-500">Am I eligible to join this division? Check the requirements below before registering.</p>
-            {qualification.length > 0 && (
-              <ul className="mb-3 flex flex-col gap-1.5">
-                {qualification.map((q, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-ink-800">
-                    <ShieldCheck size={14} className="mt-0.5 shrink-0 text-brand-600" />
-                    <span>
-                      <span className="font-semibold">{q.label}:</span> {q.value}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-            {cat.qualification_notes && <p className="mb-2 whitespace-pre-line text-sm leading-relaxed text-ink-700">{cat.qualification_notes}</p>}
-            {cat.disqualification_notes && (
-              <div className="mt-2 flex items-start gap-2 rounded-xl bg-white p-3 text-xs text-rose-700">
-                <XCircle size={14} className="mt-0.5 shrink-0" />
-                <span>{cat.disqualification_notes}</span>
-              </div>
-            )}
-          </div>
-        )}
+        <QualificationPanel qualification={qualification} qualificationNotes={cat.qualification_notes} disqualificationNotes={cat.disqualification_notes} />
 
         {myReg && (
           <p className="text-xs text-ink-500">

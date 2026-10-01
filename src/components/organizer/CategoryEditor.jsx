@@ -312,7 +312,7 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete, de
             <QualificationEditor qualification={local.qualification || []} onChange={(qualification) => commit({ qualification })} />
             <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <FormField label="Qualification notes" hint="Any additional eligibility rules in plain language.">
-                <textarea
+                <FormattableTextarea
                   value={local.qualification_notes || ''}
                   onChange={(e) => set('qualification_notes', e.target.value)}
                   onBlur={() => commit({ qualification_notes: local.qualification_notes })}
@@ -321,7 +321,7 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete, de
                 />
               </FormField>
               <FormField label="Disqualification conditions" hint="When a registered player can be removed from this category.">
-                <textarea
+                <FormattableTextarea
                   value={local.disqualification_notes || ''}
                   onChange={(e) => set('disqualification_notes', e.target.value)}
                   onBlur={() => commit({ disqualification_notes: local.disqualification_notes })}

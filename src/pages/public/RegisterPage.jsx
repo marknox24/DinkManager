@@ -15,6 +15,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import FormField, { inputClass } from '../../components/ui/FormField';
 import ImageDropzone from '../../components/ui/ImageDropzone';
+import QualificationPanel from '../../components/public/QualificationPanel';
 import { renderRichText } from '../../utils/richText';
 
 export default function RegisterPage() {
@@ -334,6 +335,15 @@ export default function RegisterPage() {
                           <div className="px-3 pb-3">
                             {cat.image_path && <img src={getEventMediaUrl(cat.image_path)} alt="" className="mb-2 h-28 w-full rounded-lg object-cover" />}
                             {cat.description && <div className="whitespace-pre-line text-xs text-ink-600">{renderRichText(cat.description)}</div>}
+                          </div>
+                        )}
+                        {((cat.qualification || []).length > 0 || cat.qualification_notes || cat.disqualification_notes) && (
+                          <div className="px-3 pb-3">
+                            <QualificationPanel
+                              qualification={cat.qualification || []}
+                              qualificationNotes={cat.qualification_notes}
+                              disqualificationNotes={cat.disqualification_notes}
+                            />
                           </div>
                         )}
                       </div>
