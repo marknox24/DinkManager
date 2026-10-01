@@ -11,10 +11,10 @@ export function useToast() {
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
 
-  const pushToast = useCallback((message, tone = 'success') => {
+  const pushToast = useCallback((message, tone = 'success', duration = 3500) => {
     const id = Date.now() + Math.random();
     setToasts((prev) => [...prev, { id, message, tone }]);
-    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 3500);
+    setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), duration);
   }, []);
 
   const dismissToast = useCallback((id) => {

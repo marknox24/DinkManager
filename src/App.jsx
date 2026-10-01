@@ -1,8 +1,9 @@
-import { lazy, Suspense, useEffect } from 'react';
+import { Component, lazy, Suspense, useEffect } from 'react';
 import { Route, Routes, useLocation } from 'react-router-dom';
+import { RefreshCw } from 'lucide-react';
 import { isSupabaseConfigured } from './lib/supabaseClient';
 import { trackPageView } from './lib/analytics';
-import { ToastProvider } from './context/ToastContext';
+import { ToastProvider, useToast } from './context/ToastContext';
 import { AuthProvider } from './context/AuthContext';
 import { ConfirmProvider } from './components/ui/ConfirmProvider';
 import ToastStack from './components/ui/ToastStack';
@@ -61,6 +62,78 @@ const DinkManagerDemoPage = lazy(() => import('./pages/legacy/DinkManagerDemoPag
 // auth-check loading state that was already there.
 function RouteFallback() {
   return <div className="flex min-h-screen items-center justify-center bg-[#f3f6f8] text-sm text-ink-400">Loading…</div>;
+}
+
+// Catches a lazy route chunk failing to load — most commonly an already-open
+// tab whose in-memory JS references a previous deploy's hashed filename
+// (see sw.js for the service-worker-side half of this fix). With no
+// boundary here, that render-time rejection unmounted the whole tree with
+// nothing in its place: the blank white screen this exists to catch.
+// Reloads once automatically (a fresh index.html always resolves it); the
+// sessionStorage guard stops a genuinely broken deploy from reload-looping.
+class AppErrorBoundary extends Component {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error) {
+    const isChunkError = /fetch dynamically imported module|importing a module script failed/i.test(error?.message || '');
+    if (isChunkError && !sessionStorage.getItem('dm_chunk_reload')) {
+      sessionStorage.setItem('dm_chunk_reload', '1');
+      window.location.reload();
+    }
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-[#f3f6f8] px-4 text-center">
+          <p className="text-sm font-semibold text-ink-700">Something went wrong loading this page.</p>
+          <button
+            onClick={() => window.location.reload()}
+            className="rounded-full bg-brand-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700"
+          >
+            Reload
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// Listens for main.jsx's onNeedRefresh event (a new deploy's service worker
+// is installed and waiting — see sw.js) and prompts instead of silently
+// activating mid-session.
+function ServiceWorkerUpdatePrompt() {
+  const { pushToast } = useToast();
+
+  useEffect(() => {
+    const onUpdate = (e) => {
+      pushToast(
+        <span className="flex items-center gap-2">
+          A new version is available.
+          <button
+            onClick={(ev) => {
+              ev.stopPropagation();
+              e.detail.reload();
+            }}
+            className="flex items-center gap-1 font-bold underline underline-offset-2"
+          >
+            <RefreshCw size={12} /> Refresh
+          </button>
+        </span>,
+        'info',
+        20000
+      );
+    };
+    window.addEventListener('dm:sw-update-available', onUpdate);
+    return () => window.removeEventListener('dm:sw-update-available', onUpdate);
+  }, [pushToast]);
+
+  return null;
 }
 
 function RequireSupabase({ children }) {
@@ -190,7 +263,10 @@ export default function App() {
       <ConfirmProvider>
         <AuthProvider>
           <AnalyticsPageViews />
-          <AppRoutes />
+          <ServiceWorkerUpdatePrompt />
+          <AppErrorBoundary>
+            <AppRoutes />
+          </AppErrorBoundary>
           <ToastStack />
         </AuthProvider>
       </ConfirmProvider>

@@ -1,4 +1,4 @@
-import { CheckCircle2, XCircle } from 'lucide-react';
+import { CheckCircle2, RefreshCw, XCircle } from 'lucide-react';
 import { useToast } from '../../context/ToastContext';
 
 export default function ToastStack() {
@@ -14,7 +14,13 @@ export default function ToastStack() {
             t.tone === 'error' ? 'bg-rose-600' : 'bg-ink-900'
           }`}
         >
-          {t.tone === 'error' ? <XCircle size={16} /> : <CheckCircle2 size={16} className="text-brand-400" />}
+          {t.tone === 'error' ? (
+            <XCircle size={16} />
+          ) : t.tone === 'info' ? (
+            <RefreshCw size={16} className="text-brand-400" />
+          ) : (
+            <CheckCircle2 size={16} className="text-brand-400" />
+          )}
           <span>{t.message}</span>
         </div>
       ))}

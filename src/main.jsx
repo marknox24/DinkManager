@@ -20,6 +20,16 @@ createRoot(document.getElementById('root')).render(
 // exclusion rules). Skipped entirely in dev (import.meta.env.DEV) since
 // vite-plugin-pwa's devOptions are disabled — a dev-mode SW would otherwise
 // intercept HMR's own requests.
+//
+// onNeedRefresh fires when a new deploy's SW is installed and waiting (see
+// sw.js — it no longer self-activates). App.jsx's ServiceWorkerUpdatePrompt
+// listens for this event and shows a toast; only once the visitor confirms
+// does updateSW(true) post the skip-waiting message and reload.
 if (import.meta.env.PROD) {
-  registerSW({ immediate: true })
+  const updateSW = registerSW({
+    immediate: true,
+    onNeedRefresh() {
+      window.dispatchEvent(new CustomEvent('dm:sw-update-available', { detail: { reload: () => updateSW(true) } }))
+    },
+  })
 }

@@ -34,5 +34,15 @@ registerRoute(
 
 registerRoute(({ url }) => url.pathname.startsWith('/images/'), new CacheFirst({ cacheName: 'app-images' }));
 
-self.skipWaiting();
+// Update flow: a new SW install now waits (the browser's default) instead
+// of self-activating. Unconditional skipWaiting() used to swap an
+// already-open tab onto a new precache mid-session while its in-memory JS
+// still referenced the previous build's hashed chunk filenames — any
+// lazy-loaded route fetched after that 404'd, which is what showed up as an
+// intermittent blank white screen. main.jsx prompts the visitor via
+// onNeedRefresh and only then posts this message (workbox-window's
+// messageSkipWaiting()) to activate the waiting worker on purpose.
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
+});
 self.addEventListener('activate', () => self.clients.claim());
