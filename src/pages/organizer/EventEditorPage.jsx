@@ -726,7 +726,7 @@ export default function EventEditorPage() {
                     subtitle="Overall prizes across the tournament — per-division prizes are set on each category in the next step."
                     filled={!!event.prize_pool}
                   >
-                    <textarea
+                    <FormattableTextarea
                       defaultValue={event.prize_pool || ''}
                       onBlur={(e) => saveField({ prize_pool: e.target.value })}
                       placeholder={'Total cash prize pool: $2,000 across all divisions.\nChampion and runner-up medals for every division.\nSpecial award for Most Improved Player.'}
@@ -738,7 +738,7 @@ export default function EventEditorPage() {
                     subtitle="What happens if the event is delayed, paused, or cancelled."
                     filled={!!event.cancellation_policy}
                   >
-                    <textarea
+                    <FormattableTextarea
                       defaultValue={event.cancellation_policy || ''}
                       onBlur={(e) => saveField({ cancellation_policy: e.target.value })}
                       placeholder={'In case of rain or unsafe court conditions, matches may be paused, rescheduled, or moved indoors at the organizer’s discretion. If the event is fully cancelled, players will be notified by email at least 2 hours before the scheduled start.'}
@@ -750,7 +750,7 @@ export default function EventEditorPage() {
                     subtitle="Refund tiers based on how close to the event a player cancels."
                     filled={!!event.refund_policy}
                   >
-                    <textarea
+                    <FormattableTextarea
                       defaultValue={event.refund_policy || ''}
                       onBlur={(e) => saveField({ refund_policy: e.target.value })}
                       placeholder={'Full refund up to 7 days before the event.\n50% refund within 3-6 days before the event.\nNo refund within 48 hours of the event, except for a full tournament cancellation.'}
@@ -763,7 +763,7 @@ export default function EventEditorPage() {
                     optional
                     filled={!!event.announcements}
                   >
-                    <textarea
+                    <FormattableTextarea
                       defaultValue={event.announcements || ''}
                       onBlur={(e) => saveField({ announcements: e.target.value })}
                       placeholder="Bring your own paddle and a spare ball. Free water stations available courtside. Livestream link will be posted here closer to the event."
