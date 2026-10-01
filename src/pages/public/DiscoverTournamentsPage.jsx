@@ -9,6 +9,12 @@ import { useToast } from '../../context/ToastContext';
 import { useAuth } from '../../context/AuthContext';
 import useSeo from '../../hooks/useSeo';
 
+const STATUS_TABS = [
+  { id: 'all', label: 'All' },
+  { id: 'upcoming', label: 'Upcoming' },
+  { id: 'finished', label: 'Finished' },
+];
+
 export default function DiscoverTournamentsPage() {
   useSeo({
     title: 'Upcoming Pickleball Tournaments — Find & Register | DinkManager',
@@ -20,6 +26,7 @@ export default function DiscoverTournamentsPage() {
   const { user } = useAuth();
   const [events, setEvents] = useState(null);
   const [query, setQuery] = useState('');
+  const [statusTab, setStatusTab] = useState('all');
   const [myRegsByEvent, setMyRegsByEvent] = useState({});
 
   useEffect(() => {
@@ -46,12 +53,32 @@ export default function DiscoverTournamentsPage() {
       .catch(() => setMyRegsByEvent({}));
   }, [user]);
 
-  const filtered = useMemo(() => {
+  // getPublishedEvents() already orders by start_date ascending — nearest
+  // first for anything still upcoming. Finished events carry past dates, so
+  // a flat ascending sort would surface old results ahead of what's
+  // actionable once an organizer has tournament history; reversing just the
+  // finished bucket gives most-recently-finished-first instead, and "all"
+  // leads with upcoming/ongoing before trailing into finished.
+  const sortedEvents = useMemo(() => {
     if (!events) return null;
+    const notFinished = events.filter((e) => e.status !== 'finished');
+    const finished = events.filter((e) => e.status === 'finished').reverse();
+    return { all: [...notFinished, ...finished], upcoming: notFinished, finished };
+  }, [events]);
+
+  const tabCounts = sortedEvents && {
+    all: sortedEvents.all.length,
+    upcoming: sortedEvents.upcoming.length,
+    finished: sortedEvents.finished.length,
+  };
+
+  const filtered = useMemo(() => {
+    if (!sortedEvents) return null;
+    const base = sortedEvents[statusTab];
     const q = query.trim().toLowerCase();
-    if (!q) return events;
-    return events.filter((e) => e.name.toLowerCase().includes(q) || (e.location_address || '').toLowerCase().includes(q));
-  }, [events, query]);
+    if (!q) return base;
+    return base.filter((e) => e.name.toLowerCase().includes(q) || (e.location_address || '').toLowerCase().includes(q));
+  }, [sortedEvents, statusTab, query]);
 
   return (
     <div className="min-h-screen bg-[#f3f6f8]">
@@ -74,7 +101,7 @@ export default function DiscoverTournamentsPage() {
       </header>
 
       <main className="mx-auto max-w-6xl px-4 py-6 sm:px-6 sm:py-8">
-        <div className="relative mb-6 max-w-sm">
+        <div className="relative mb-4">
           <Search size={15} className="pointer-events-none absolute top-1/2 left-3.5 -translate-y-1/2 text-ink-300" />
           <input
             value={query}
@@ -89,6 +116,22 @@ export default function DiscoverTournamentsPage() {
           )}
         </div>
 
+        {tabCounts && (
+          <div className="mb-6 flex flex-wrap gap-1.5">
+            {STATUS_TABS.map((t) => (
+              <button
+                key={t.id}
+                onClick={() => setStatusTab(t.id)}
+                className={`rounded-full px-3.5 py-1.5 text-xs font-bold transition ${
+                  statusTab === t.id ? 'bg-brand-600 text-white' : 'border border-ink-200 bg-white text-ink-500 hover:bg-ink-50'
+                }`}
+              >
+                {t.label} ({tabCounts[t.id]})
+              </button>
+            ))}
+          </div>
+        )}
+
         {filtered === null && <div className="py-16 text-center text-sm text-ink-400">Loading tournaments…</div>}
 
         {filtered && filtered.length === 0 && events.length === 0 && (
@@ -100,10 +143,14 @@ export default function DiscoverTournamentsPage() {
 
         {filtered && filtered.length === 0 && events.length > 0 && (
           <div className="rounded-3xl border border-dashed border-ink-200 bg-white py-16 text-center">
-            <p className="text-sm text-ink-500">No tournaments match &ldquo;{query}&rdquo;.</p>
-            <button onClick={() => setQuery('')} className="mt-2 text-sm font-semibold text-brand-600">
-              Clear search
-            </button>
+            <p className="text-sm text-ink-500">
+              {query ? <>No tournaments match &ldquo;{query}&rdquo;.</> : `No ${statusTab === 'all' ? '' : statusTab + ' '}tournaments right now.`}
+            </p>
+            {query && (
+              <button onClick={() => setQuery('')} className="mt-2 text-sm font-semibold text-brand-600">
+                Clear search
+              </button>
+            )}
           </div>
         )}
 
