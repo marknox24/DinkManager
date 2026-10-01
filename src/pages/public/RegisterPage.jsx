@@ -466,7 +466,11 @@ export default function RegisterPage() {
           {currentLabel === 'Payment' && (
             <div className="flex flex-col gap-4">
               <div className="flex flex-col items-center gap-3 text-center">
-                <img src={getEventMediaUrl(event.payment_qr_path)} alt="Payment QR" className="h-56 w-56 rounded-2xl border border-ink-200 object-contain" />
+                <img
+                  src={getEventMediaUrl(event.payment_qr_path)}
+                  alt="Payment QR"
+                  className="aspect-square w-full max-w-sm rounded-2xl border border-ink-200 object-contain"
+                />
                 <p className="text-xs text-ink-500">Scan to pay the registration fee, then attach proof of payment below.</p>
               </div>
               <FormField label="Proof of payment *" hint="Required — upload a screenshot or photo of your payment confirmation.">
