@@ -1,4 +1,5 @@
 import { Loader2, X } from 'lucide-react';
+import { compressImage } from '../../utils/imageCompression';
 
 // A single click-anywhere-on-the-box upload control, replacing the old
 // "preview box + separate Upload/Replace button" pattern used at every
@@ -56,7 +57,17 @@ export default function ImageDropzone({
         </button>
       )}
 
-      <input type="file" accept="image/*" disabled={uploading} onChange={(e) => onUpload(e.target.files?.[0])} className="hidden" />
+      <input
+        type="file"
+        accept="image/*"
+        disabled={uploading}
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          if (!file) return;
+          onUpload(await compressImage(file));
+        }}
+        className="hidden"
+      />
     </label>
   );
 }
