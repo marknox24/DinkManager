@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { KeyRound, MailCheck, Pencil, RefreshCw, Trash2, UserCheck, UserPlus, Users } from 'lucide-react';
+import { Check, ChevronDown, KeyRound, Mail, MailCheck, Pencil, Plus, RefreshCw, Send, Trash2, UserCheck, UserPlus, Users } from 'lucide-react';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import StaffPermissionToggles from '../../../components/organizer/StaffPermissionToggles';
 import EditStaffModal from '../../../components/organizer/EditStaffModal';
@@ -12,26 +12,115 @@ import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
 import { useEventAccess } from '../../../context/EventAccessContext';
-import { listEventStaff, removeEventStaff } from '../../../data/staffApi';
+import { clearStaffExpiry, listEventStaff, removeEventStaff } from '../../../data/staffApi';
 import { DEFAULT_PERMISSIONS, EVENT_PERMISSIONS } from '../../../data/permissions';
 import { daysLeftLabel, generatePassword, generateUsername } from '../../../utils/tempAccess';
+
+// Temporary login leads (and is the default): it's the faster path for
+// event day — no real email needed, hand over a username and password —
+// so it sits first rather than behind the email option.
+const INVITE_MODES = [
+  { id: 'temporary', icon: KeyRound, title: 'Temporary login', description: 'Generate a username and password — no email needed. Expires on its own.', badge: 'Fastest' },
+  { id: 'email', icon: Mail, title: 'Email invite', description: 'They get a link by email and choose their own password.' },
+];
+
+function ModeOption({ mode, selected, onSelect }) {
+  const Icon = mode.icon;
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      onClick={onSelect}
+      className={`flex items-start gap-3 rounded-xl border-2 p-3.5 text-left transition-[border-color,background-color,transform] duration-150 ease-out active:scale-[0.98] ${
+        selected ? 'border-brand-500 bg-brand-50/60' : 'border-ink-100 bg-white hover:border-ink-200'
+      }`}
+    >
+      <span
+        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors duration-150 ${
+          selected ? 'bg-brand-600 text-white' : 'bg-ink-50 text-ink-500'
+        }`}
+      >
+        <Icon size={17} strokeWidth={2.3} />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2">
+          <span className="text-sm font-bold text-ink-900">{mode.title}</span>
+          {mode.badge && <span className="rounded-full bg-brand-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-brand-700">{mode.badge}</span>}
+        </span>
+        <span className="mt-0.5 block text-xs leading-snug text-ink-500">{mode.description}</span>
+      </span>
+      <span
+        aria-hidden="true"
+        className={`mt-0.5 flex h-4.5 w-4.5 shrink-0 items-center justify-center rounded-full border-2 transition-colors duration-150 ${
+          selected ? 'border-brand-600 bg-brand-600 text-white' : 'border-ink-200 text-transparent'
+        }`}
+      >
+        <Check size={10} strokeWidth={3.5} />
+      </span>
+    </button>
+  );
+}
+
+// Collapsed by default: the 12-row permission list used to sit between the
+// login fields and the submit button, pushing the one thing the organizer
+// came here to do far down the page. The summary line still says what the
+// helper will be able to open, and "Customize" reveals the switches.
+function AccessSection({ permissions, onChange }) {
+  const [open, setOpen] = useState(false);
+  const allowed = EVENT_PERMISSIONS.filter((p) => permissions[p.column]);
+  const summary = allowed.length ? allowed.map((p) => p.label).join(', ') : 'Nothing yet — turn on at least one area';
+
+  return (
+    <div className="flex flex-col gap-2.5">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="flex w-full items-center justify-between gap-3 rounded-xl border border-ink-100 bg-ink-50/50 px-4 py-3 text-left transition-colors duration-150 hover:bg-ink-50 active:scale-[0.995]"
+      >
+        <span className="min-w-0">
+          <span className="block text-xs font-bold uppercase tracking-wide text-ink-500">What they can access</span>
+          <span className="mt-0.5 block truncate text-sm text-ink-700">
+            <strong className="font-bold text-ink-900">
+              {allowed.length} of {EVENT_PERMISSIONS.length}
+            </strong>{' '}
+            · {summary}
+          </span>
+        </span>
+        <span className="flex shrink-0 items-center gap-1 text-xs font-bold text-brand-600">
+          {open ? 'Hide' : 'Customize'}
+          <ChevronDown size={14} className={`transition-transform duration-200 ease-out ${open ? 'rotate-180' : ''}`} />
+        </span>
+      </button>
+      {open && (
+        <div className="animate-slide-down">
+          <StaffPermissionToggles value={permissions} onChange={onChange} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 function InviteCard({ eventId, onInvited }) {
   const { inviteEventStaff } = useAuth();
   const { pushToast } = useToast();
-  const [mode, setMode] = useState('email'); // 'email' | 'temporary'
+  const [mode, setMode] = useState('temporary'); // 'temporary' | 'email'
   const [email, setEmail] = useState('');
   const [username, setUsername] = useState(() => generateUsername());
   const [permissions, setPermissions] = useState(DEFAULT_PERMISSIONS);
   const [days, setDays] = useState(7);
+  const [neverExpires, setNeverExpires] = useState(false);
   const [password, setPassword] = useState(() => generatePassword());
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState(null);
 
+  const isTemporary = mode === 'temporary';
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (mode === 'temporary') {
-      const daysNum = Number(days);
+    if (isTemporary) {
+      const daysNum = neverExpires ? 1 : Number(days);
       if (!Number.isInteger(daysNum) || daysNum < 1) {
         pushToast('Enter a valid number of days', 'error');
         return;
@@ -46,11 +135,20 @@ function InviteCard({ eventId, onInvited }) {
     try {
       const data = await inviteEventStaff({
         eventId,
-        email: mode === 'temporary' ? username : email,
+        email: isTemporary ? username : email,
         permissions,
-        ...(mode === 'temporary' ? { temporaryAccess: { days: Number(days), password } } : {}),
+        // The server requires an expiry, so "No expiry" is created with the
+        // minimum and cleared immediately below (same call as "Make permanent").
+        ...(isTemporary ? { temporaryAccess: { days: neverExpires ? 1 : Number(days), password } } : {}),
       });
-      setResult(data);
+      if (isTemporary && neverExpires) {
+        try {
+          data.staff = await clearStaffExpiry(data.staff.id);
+        } catch {
+          pushToast("Login created, but its expiry couldn't be removed — use the key icon on the helper below to make it permanent.", 'error');
+        }
+      }
+      setResult({ ...data, mode });
       setEmail('');
       setUsername(generateUsername());
       setPermissions(DEFAULT_PERMISSIONS);
@@ -75,80 +173,79 @@ function InviteCard({ eventId, onInvited }) {
         </div>
       </div>
 
-      <div className="mb-4 inline-flex rounded-full bg-ink-50 p-1">
-        <button
-          type="button"
-          onClick={() => setMode('email')}
-          className={`rounded-full px-3.5 py-1.5 text-xs font-bold transition ${mode === 'email' ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500'}`}
-        >
-          Send email invite
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode('temporary')}
-          className={`rounded-full px-3.5 py-1.5 text-xs font-bold transition ${mode === 'temporary' ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500'}`}
-        >
-          Generate temporary login
-        </button>
-      </div>
-
-      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-        {mode === 'email' ? (
-          <FormField label="Helper's email" className="max-w-sm">
-            <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className={inputClass} placeholder="helper@email.com" />
-          </FormField>
-        ) : (
-          <FormField label="Username" hint="Pre-generated — no real email needed. This is what your helper types into the Email field when they sign in.">
-            <div className="flex items-center gap-2">
-              <input value={username} onChange={(e) => setUsername(e.target.value)} className={`${inputClass} font-mono`} />
-              <button
-                type="button"
-                title="Generate a new username"
-                onClick={() => setUsername(generateUsername())}
-                className="flex h-full shrink-0 items-center justify-center rounded-xl border border-ink-200 px-3 text-ink-500 transition hover:bg-ink-50"
-              >
-                <RefreshCw size={15} />
-              </button>
+      {/* Once a login is generated this replaces the whole form (instead of
+          appearing below a long list the organizer has to scroll to find) —
+          and the method switcher is gone with it, so the one-time password
+          can't be wiped by an accidental tap on the other option. */}
+      {result ? (
+        <div className="flex animate-rise-in flex-col gap-3">
+          {result.mode === 'temporary' ? (
+            <TempCredentialsReveal email={result.email} password={result.password} expiresAt={result.staff.access_expires_at} />
+          ) : result.existingAccount ? (
+            <div className="flex items-start gap-2.5 rounded-xl border border-amber-100 bg-amber-50/60 p-4 text-sm text-amber-700">
+              <UserCheck size={16} className="mt-0.5 shrink-0" />
+              <span>
+                <strong>{result.email}</strong> already had an account, so no invite email was sent — access was granted directly. They can sign in with their existing password.
+              </span>
             </div>
-          </FormField>
-        )}
+          ) : (
+            <div className="flex items-start gap-2.5 rounded-xl border border-brand-100 bg-brand-50/60 p-4 text-sm text-brand-700">
+              <MailCheck size={16} className="mt-0.5 shrink-0" />
+              <span>
+                Invite sent to <strong>{result.email}</strong> — they'll set their own password by following the link in their email.
+              </span>
+            </div>
+          )}
+          <button
+            type="button"
+            onClick={() => setResult(null)}
+            className="flex items-center justify-center gap-1.5 self-start rounded-xl border border-ink-200 px-4 py-2.5 text-sm font-bold text-ink-700 transition-[background-color,transform] duration-150 hover:bg-ink-50 active:scale-[0.97]"
+          >
+            <Plus size={15} /> {result.mode === 'temporary' ? 'Generate another login' : 'Invite another helper'}
+          </button>
+        </div>
+      ) : (
+        <form onSubmit={handleSubmit} className="flex flex-col gap-5">
+          <div role="radiogroup" aria-label="How to invite" className="grid gap-2.5 sm:grid-cols-2">
+            {INVITE_MODES.map((m) => (
+              <ModeOption key={m.id} mode={m} selected={mode === m.id} onSelect={() => setMode(m.id)} />
+            ))}
+          </div>
 
-        {mode === 'temporary' && <TempAccessFields days={days} onDaysChange={setDays} password={password} onPasswordChange={setPassword} />}
+          {isTemporary ? (
+            <div className="flex flex-col gap-4">
+              <FormField label="Username" hint="Pre-generated — no real email needed. Your helper types this into the Email field when they sign in.">
+                <div className="flex items-center gap-2">
+                  <input value={username} onChange={(e) => setUsername(e.target.value)} className={`${inputClass} font-mono`} />
+                  <button
+                    type="button"
+                    title="Generate a new username"
+                    onClick={() => setUsername(generateUsername())}
+                    className="flex h-full shrink-0 items-center justify-center rounded-xl border border-ink-200 px-3 text-ink-500 transition-[background-color,transform] duration-150 hover:bg-ink-50 active:scale-[0.95]"
+                  >
+                    <RefreshCw size={15} />
+                  </button>
+                </div>
+              </FormField>
+              <TempAccessFields days={days} onDaysChange={setDays} password={password} onPasswordChange={setPassword} neverExpires={neverExpires} onNeverExpiresChange={setNeverExpires} />
+            </div>
+          ) : (
+            <FormField label="Helper's email" className="max-w-sm">
+              <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} className={inputClass} placeholder="helper@email.com" />
+            </FormField>
+          )}
 
-        <StaffPermissionToggles value={permissions} onChange={setPermissions} />
+          <AccessSection permissions={permissions} onChange={setPermissions} />
 
-        <div>
           <button
             type="submit"
             disabled={submitting}
-            className="rounded-xl bg-brand-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-60"
+            className="flex items-center justify-center gap-2 rounded-xl bg-brand-600 px-5 py-3 text-sm font-bold text-white shadow-sm transition-[background-color,transform] duration-150 hover:bg-brand-700 active:scale-[0.98] disabled:opacity-60 sm:self-start"
           >
-            {submitting ? (mode === 'temporary' ? 'Generating…' : 'Sending…') : mode === 'temporary' ? 'Generate temporary login' : 'Send invite'}
+            {isTemporary ? <KeyRound size={15} /> : <Send size={15} />}
+            {submitting ? (isTemporary ? 'Generating…' : 'Sending…') : isTemporary ? 'Generate temporary login' : 'Send invite'}
           </button>
-        </div>
-      </form>
-
-      {result && mode === 'temporary' && (
-        <div className="mt-4">
-          <TempCredentialsReveal email={result.email} password={result.password} expiresAt={result.staff.access_expires_at} />
-        </div>
-      )}
-      {result && mode === 'email' && result.existingAccount && (
-        <div className="mt-4 flex items-center gap-2 rounded-xl border border-amber-100 bg-amber-50/60 p-4 text-sm text-amber-700">
-          <UserCheck size={16} />
-          <span>
-            <strong>{result.email}</strong> already had an account, so no invite email was sent — access was granted directly. They can sign
-            in with their existing password.
-          </span>
-        </div>
-      )}
-      {result && mode === 'email' && !result.existingAccount && (
-        <div className="mt-4 flex items-center gap-2 rounded-xl border border-brand-100 bg-brand-50/60 p-4 text-sm text-brand-700">
-          <MailCheck size={16} />
-          <span>
-            Invite sent to <strong>{result.email}</strong> — they'll set their own password by following the link in their email.
-          </span>
-        </div>
+        </form>
       )}
     </div>
   );
