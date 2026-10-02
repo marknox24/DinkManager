@@ -46,8 +46,8 @@ export default function MatchForm({ bracket, catIdx, bracketIdx }) {
   const [mode, setMode] = useState('start'); // 'start' | 'log'
   const [teamAId, setTeamAId] = useState(null);
   const [teamBId, setTeamBId] = useState(null);
-  const [scoreA, setScoreA] = useState('11');
-  const [scoreB, setScoreB] = useState('7');
+  const [scoreA, setScoreA] = useState('0');
+  const [scoreB, setScoreB] = useState('0');
   const [court, setCourt] = useState('');
   const [umpireId, setUmpireId] = useState('');
 

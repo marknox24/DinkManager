@@ -30,8 +30,8 @@ function BusyCourtCard({ courtNumber, liveMatch }) {
   const confirm = useConfirm();
   const [editingUmpire, setEditingUmpire] = useState(false);
   const [finishing, setFinishing] = useState(false);
-  const [scoreA, setScoreA] = useState('11');
-  const [scoreB, setScoreB] = useState('7');
+  const [scoreA, setScoreA] = useState('0');
+  const [scoreB, setScoreB] = useState('0');
   const [umpireChoice, setUmpireChoice] = useState(liveMatch.umpireId);
 
   const paused = !!liveMatch.isPaused;

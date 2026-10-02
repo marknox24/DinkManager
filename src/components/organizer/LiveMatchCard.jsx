@@ -14,8 +14,8 @@ const scoreInputClass =
 export default function LiveMatchCard({ match, now, categoryName, onTogglePause, onCancel, onFinish }) {
   const { pushToast } = useToast();
   const [isFinishing, setIsFinishing] = useState(false);
-  const [scoreA, setScoreA] = useState('11');
-  const [scoreB, setScoreB] = useState('7');
+  const [scoreA, setScoreA] = useState('0');
+  const [scoreB, setScoreB] = useState('0');
   const [saving, setSaving] = useState(false);
 
   const elapsed = liveElapsedSeconds(match, now);
@@ -23,8 +23,8 @@ export default function LiveMatchCard({ match, now, categoryName, onTogglePause,
 
   const openFinish = () => {
     setIsFinishing(true);
-    setScoreA('11');
-    setScoreB('7');
+    setScoreA('0');
+    setScoreB('0');
   };
 
   const handleSave = async () => {

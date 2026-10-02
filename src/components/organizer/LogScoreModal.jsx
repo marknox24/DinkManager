@@ -10,8 +10,8 @@ import { matchLevelLabel } from '../../data/playoffApi';
 export default function LogScoreModal({ match, categoryName, umpires, onSave, onClose }) {
   const { pushToast } = useToast();
   const isEditing = match.status === 'completed';
-  const [scoreA, setScoreA] = useState(isEditing ? String(match.score_a) : '11');
-  const [scoreB, setScoreB] = useState(isEditing ? String(match.score_b) : '7');
+  const [scoreA, setScoreA] = useState(isEditing ? String(match.score_a) : '0');
+  const [scoreB, setScoreB] = useState(isEditing ? String(match.score_b) : '0');
   const [umpireName, setUmpireName] = useState(match.umpire_name || '');
   const [saving, setSaving] = useState(false);
 
