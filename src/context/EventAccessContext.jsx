@@ -4,6 +4,7 @@ import { getEventById } from '../data/eventsApi';
 import { getMyStaffRow } from '../data/staffApi';
 import { EVENT_PERMISSIONS } from '../data/permissions';
 import { cacheEvent, getCachedEvent } from '../hooks/useOfflineCache';
+import { isOnline, onConnectivityChange } from '../lib/connectivity';
 
 const EventAccessContext = createContext(null);
 
@@ -31,73 +32,100 @@ export function EventAccessProvider({ eventId, children }) {
     let cancelled = false;
     const cacheKey = `dm_cached_access:${eventId}:${user.id}`;
 
-    function fetchAccess() {
-      setLoading(true);
-      Promise.all([getEventById(eventId), getMyStaffRow(eventId, user.id)])
-        .then(([fetchedEvent, staff]) => {
-          if (cancelled) return;
-          setEvent(fetchedEvent);
-          setOrganizerId(fetchedEvent.organizer_id);
-          setStaffRow(staff);
-          cacheEvent(fetchedEvent).catch(() => {});
+    // Offline or network error: a stale-but-real permission set is always
+    // safer than a false "no access" redirect, so restore the last-known-
+    // good access from cache instead of nulling it out. Returns whether a
+    // cache was found, so callers can tell "restored" from "nothing to
+    // restore" (first-ever visit to this event with genuinely no access).
+    async function restoreFromCache() {
+      try {
+        const cached = localStorage.getItem(cacheKey);
+        if (!cached) return false;
+        const { organizerId: cachedOrganizerId, staffRow: cachedStaffRow } = JSON.parse(cached);
+        const cachedEvent = await getCachedEvent(eventId).catch(() => null);
+        if (cancelled) return true;
+        setOrganizerId(cachedOrganizerId);
+        setStaffRow(cachedStaffRow);
+        setEvent((prev) => prev ?? cachedEvent ?? null);
+        return true;
+      } catch {
+        // Malformed/unavailable storage.
+        return false;
+      }
+    }
+
+    // `background: true` is used for a reconnect/toggle-off refresh — it
+    // must NOT flip `loading` back to true, which would unmount every page
+    // under EventAccessBoundary (closing whatever modal/form the organizer
+    // has open) just because access is being quietly re-verified.
+    async function fetchAccess({ background = false } = {}) {
+      if (!background) setLoading(true);
+
+      if (!isOnline() && !background) {
+        // Nothing to wait on — go straight to whatever's cached instead of
+        // attempting (and waiting out) a live call known to be skipped.
+        const restored = await restoreFromCache();
+        if (cancelled) return;
+        if (restored) {
+          setLoading(false);
+          return;
+        }
+        // No cache at all: fall through to one bare live attempt below —
+        // same reasoning as offlineRead.js's cache-miss path.
+      }
+
+      try {
+        const [fetchedEvent, staff] = await Promise.all([getEventById(eventId), getMyStaffRow(eventId, user.id)]);
+        if (cancelled) return;
+        setEvent(fetchedEvent);
+        setOrganizerId(fetchedEvent.organizer_id);
+        setStaffRow(staff);
+        cacheEvent(fetchedEvent).catch(() => {});
+        try {
+          localStorage.setItem(cacheKey, JSON.stringify({ organizerId: fetchedEvent.organizer_id, staffRow: staff, cachedAt: Date.now() }));
+        } catch {
+          // Storage full/unavailable — the in-memory access state is still correct.
+        }
+      } catch (err) {
+        if (cancelled) return;
+        // .single() found no visible row — access was revoked or the
+        // event was deleted. A stale cache here would wrongly let a
+        // de-staffed user keep seeing this event, so clear it and let
+        // EventAccessLayout's gate redirect to /dashboard.
+        if (err?.code === 'PGRST116') {
           try {
-            localStorage.setItem(cacheKey, JSON.stringify({ organizerId: fetchedEvent.organizer_id, staffRow: staff, cachedAt: Date.now() }));
+            localStorage.removeItem(cacheKey);
           } catch {
-            // Storage full/unavailable — the in-memory access state is still correct.
-          }
-        })
-        .catch(async (err) => {
-          if (cancelled) return;
-          // .single() found no visible row — access was revoked or the
-          // event was deleted. A stale cache here would wrongly let a
-          // de-staffed user keep seeing this event, so clear it and let
-          // EventAccessLayout's gate redirect to /dashboard.
-          if (err?.code === 'PGRST116') {
-            try {
-              localStorage.removeItem(cacheKey);
-            } catch {
-              // Best-effort only.
-            }
-            setEvent(null);
-            setOrganizerId(null);
-            setStaffRow(null);
-            return;
-          }
-          // Offline or network error: a stale-but-real permission set is
-          // always safer than a false "no access" redirect, so restore the
-          // last-known-good access from cache instead of nulling it out —
-          // only null when there's truly no prior cache (first-ever visit
-          // with genuinely no access).
-          try {
-            const cached = localStorage.getItem(cacheKey);
-            if (cached) {
-              const { organizerId: cachedOrganizerId, staffRow: cachedStaffRow } = JSON.parse(cached);
-              const cachedEvent = await getCachedEvent(eventId).catch(() => null);
-              if (cancelled) return;
-              setOrganizerId(cachedOrganizerId);
-              setStaffRow(cachedStaffRow);
-              setEvent((prev) => prev ?? cachedEvent ?? null);
-              return;
-            }
-          } catch {
-            // Malformed/unavailable storage — fall through to nulling below.
+            // Best-effort only.
           }
           setEvent(null);
           setOrganizerId(null);
           setStaffRow(null);
-        })
-        .finally(() => {
-          if (!cancelled) setLoading(false);
-        });
+        } else {
+          const restored = await restoreFromCache();
+          if (cancelled) return;
+          if (!restored) {
+            setEvent(null);
+            setOrganizerId(null);
+            setStaffRow(null);
+          }
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
     }
 
     fetchAccess();
     // Self-corrects a stale cached permission set as soon as connectivity
-    // returns, rather than waiting for the next remount of this provider.
-    window.addEventListener('online', fetchAccess);
+    // returns — including turning "Offline mode" back off, since isOnline()
+    // (connectivity.js) already folds that flag in — rather than waiting
+    // for the next remount of this provider.
+    const unsubscribe = onConnectivityChange((online) => {
+      if (online) fetchAccess({ background: true });
+    });
     return () => {
       cancelled = true;
-      window.removeEventListener('online', fetchAccess);
+      unsubscribe();
     };
   }, [eventId, user.id]);
 

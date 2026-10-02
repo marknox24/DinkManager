@@ -116,7 +116,7 @@ async function flushEntry(entry) {
   }
 }
 
-let draining = false;
+let drainPromise = null;
 // Replays every pending entry in created_at order (FIFO), sequentially —
 // not in parallel — so e.g. a start queued just before a finish for the
 // same match can't have the finish reach the server first. Stops at the
@@ -125,23 +125,29 @@ let draining = false;
 // ahead to later entries, since a mid-drain network drop likely means
 // every later call would fail the same way, and skipping would let a later
 // write for the same match land out of order.
-export async function drainQueue() {
-  if (draining) return;
-  draining = true;
-  try {
-    const entries = await getQueueEntries();
-    for (const entry of entries) {
-      if (entry.status !== 'pending') continue;
-      if (!isOnline()) break;
-      try {
-        await flushEntry(entry);
-      } catch (e) {
-        if (isPermanentRejection(e)) continue;
-        break;
-      }
+//
+// A caller already mid-drain joins the same in-flight promise instead of
+// getting back a no-op — otherwise two near-simultaneous triggers (e.g. the
+// connectivity listener and a caller explicitly awaiting a sync) would have
+// the second resolve immediately while the drain it meant to wait for is
+// still running, which is exactly wrong for anything that needs to know the
+// drain has actually finished (e.g. refreshing a page's data afterward).
+export function drainQueue() {
+  if (!drainPromise) drainPromise = doDrain().finally(() => { drainPromise = null; });
+  return drainPromise;
+}
+
+async function doDrain() {
+  const entries = await getQueueEntries();
+  for (const entry of entries) {
+    if (entry.status !== 'pending') continue;
+    if (!isOnline()) break;
+    try {
+      await flushEntry(entry);
+    } catch (e) {
+      if (isPermanentRejection(e)) continue;
+      break;
     }
-  } finally {
-    draining = false;
   }
 }
 

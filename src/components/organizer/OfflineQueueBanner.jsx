@@ -14,7 +14,7 @@ import { getQueueEntries } from '../../lib/syncQueue';
 // accepting that this device's local (optimistic) version of that match was
 // wrong and the server's is authoritative.
 export default function OfflineQueueBanner({ onDiscarded }) {
-  const { pendingCount, failedCount, status, syncNow, dismissFailed, online } = useOfflineSync();
+  const { pendingCount, failedCount, status, syncNow, dismissFailed, online, forcedOffline } = useOfflineSync();
   const [failedEntries, setFailedEntries] = useState([]);
 
   useEffect(() => {
@@ -39,7 +39,9 @@ export default function OfflineQueueBanner({ onDiscarded }) {
           <CloudOff size={15} className="shrink-0" />
           {failedCount > 0
             ? `${failedCount} change${failedCount === 1 ? '' : 's'} couldn't sync`
-            : `${pendingCount} change${pendingCount === 1 ? '' : 's'} saved on this device${online ? '' : " — will sync when you're back online"}`}
+            : `${pendingCount} change${pendingCount === 1 ? '' : 's'} saved on this device${
+                online ? '' : forcedOffline ? ' — will sync when you turn off Offline mode' : " — will sync when you're back online"
+              }`}
         </div>
         {online && pendingCount > 0 && (
           <button

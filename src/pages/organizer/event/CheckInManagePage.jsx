@@ -4,7 +4,12 @@ import { CheckCircle2, Circle, Search, UserCheck, Users, X } from 'lucide-react'
 import { checkInPlayer, expireCheckin, listCategories, listRegistrations } from '../../../data/eventsApi';
 import { useToast } from '../../../context/ToastContext';
 import { useEventAccess } from '../../../context/EventAccessContext';
+import { useOfflineSync } from '../../../context/OfflineSyncContext';
+import { useOnlineOnlyGuard } from '../../../hooks/useConnectivity';
+import { readWithFallback, TRANSIENT_RETRY_DELAYS_MS } from '../../../lib/offlineRead';
+import { cacheCategories, getCachedCategories, cacheRegistrations, getCachedRegistrations } from '../../../hooks/useOfflineCache';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
+import ConnectionStatusPill from '../../../components/organizer/ConnectionStatusPill';
 import EventCheckinQr from '../../../components/organizer/EventCheckinQr';
 
 const FILTERS = [
@@ -56,6 +61,8 @@ export default function CheckInManagePage() {
   const { eventId } = useParams();
   const { pushToast } = useToast();
   const { event } = useEventAccess();
+  const { reconnectToken } = useOfflineSync();
+  const blockIfOffline = useOnlineOnlyGuard();
   const [categories, setCategories] = useState([]);
   const [registrations, setRegistrations] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -63,21 +70,42 @@ export default function CheckInManagePage() {
   const [filter, setFilter] = useState('all');
 
   const reload = useCallback(async () => {
-    try {
-      const [cats, regs] = await Promise.all([listCategories(eventId), listRegistrations(eventId)]);
-      setCategories(cats);
-      setRegistrations(regs);
-      setLoaded(true);
-    } catch (e) {
-      pushToast(e.message, 'error');
+    const [{ data: cats, source, error }, { data: regs }] = await Promise.all([
+      readWithFallback({
+        live: () => listCategories(eventId),
+        readCache: () => getCachedCategories(eventId),
+        writeCache: (data) => cacheCategories(eventId, data),
+        retryDelaysMs: TRANSIENT_RETRY_DELAYS_MS,
+      }),
+      readWithFallback({
+        live: () => listRegistrations(eventId),
+        readCache: () => getCachedRegistrations(eventId),
+        writeCache: (data) => cacheRegistrations(eventId, data),
+        retryDelaysMs: TRANSIENT_RETRY_DELAYS_MS,
+      }),
+    ]);
+    if (source === 'none') {
+      pushToast(error?.message, 'error');
+      return;
     }
+    setCategories(cats || []);
+    setRegistrations(regs || []);
+    setLoaded(true);
   }, [eventId, pushToast]);
 
   useEffect(() => {
     reload();
   }, [reload]);
 
+  // Reload once a reconnect-triggered drain has settled (see
+  // OfflineSyncContext's reconnectToken) — picks up anything checked in
+  // from another device while this one was offline.
+  useEffect(() => {
+    if (reconnectToken) reload();
+  }, [reconnectToken, reload]);
+
   const toggleCheckin = async (entry) => {
+    if (blockIfOffline()) return;
     try {
       if (entry.checkedIn) {
         await expireCheckin(entry.regId, entry.slot);
@@ -122,7 +150,10 @@ export default function CheckInManagePage() {
     <EventWorkspaceLayout event={event}>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="font-display text-2xl font-bold text-ink-900">Check-in</h1>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h1 className="font-display text-2xl font-bold text-ink-900">Check-in</h1>
+            <ConnectionStatusPill />
+          </div>
           <p className="text-sm text-ink-500">Who's arrived — search a name or scan the QR at the door.</p>
         </div>
         {event?.slug && <EventCheckinQr eventName={event.name} checkinUrl={`${window.location.origin}/e/${event.slug}/checkin`} />}

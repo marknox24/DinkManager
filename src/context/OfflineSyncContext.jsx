@@ -1,6 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { isOnline, onConnectivityChange } from '../lib/connectivity';
+import { isForcedOffline, isOnline, onConnectivityChange, setForcedOffline } from '../lib/connectivity';
 import { onQueueChange, getQueueStatusCounts, enqueueOperation, drainQueue, dismissEntry as dismissQueueEntry } from '../lib/syncQueue';
 import { cacheMatches } from '../hooks/useOfflineCache';
 import { deleteRecord } from '../lib/offlineDb';
@@ -13,18 +13,15 @@ export function useOfflineSync() {
   return ctx;
 }
 
-// Deliberately mounted around <MatchListPage/> itself in App.jsx rather than
-// inside EventWorkspaceLayout (which every other event page also renders):
-// EventWorkspaceLayout is invoked as an element *created by* MatchListPage's
-// own render, so a provider placed inside it would sit below MatchListPage
-// in the component tree, not above it — MatchListPage's own hook calls
-// (including this context's useOfflineSync()) need the provider as an
-// actual ancestor to see it. This also keeps every other event page
-// (Brackets, Registrations, ...) completely untouched by the offline work,
-// matching the user's own scope-down to Match List only.
+// Mounted once in EventAccessLayout (EventRoute.jsx), above every event
+// page — not just MatchListPage, which is all it originally covered. Any
+// page under an event can enqueue writes or read `status`/`reconnectToken`
+// the same way; the `eventId` it scopes writes to still comes from the
+// route params, unchanged.
 export function OfflineSyncProvider({ children }) {
   const { eventId } = useParams();
   const [online, setOnline] = useState(isOnline());
+  const [forcedOffline, setForcedOfflineState] = useState(isForcedOffline());
   const [pendingCount, setPendingCount] = useState(0);
   const [failedCount, setFailedCount] = useState(0);
   const [syncing, setSyncing] = useState(false);
@@ -33,6 +30,11 @@ export function OfflineSyncProvider({ children }) {
   // true for a few seconds right after a drain that actually had something
   // to sync, then falls back to the idle Online state.
   const [justSynced, setJustSynced] = useState(false);
+  // Bumped after every reconnect-triggered drain settles (even one with
+  // nothing to sync) — pages that cached stale/offline data subscribe to
+  // this to refresh themselves once there's actually something new to show,
+  // instead of reacting to the raw `online` flip and reloading mid-drain.
+  const [reconnectToken, setReconnectToken] = useState(0);
 
   const refreshCounts = useCallback(async () => {
     const { pending, failed } = await getQueueStatusCounts();
@@ -46,6 +48,7 @@ export function OfflineSyncProvider({ children }) {
   }, [refreshCounts]);
 
   useEffect(() => onConnectivityChange(setOnline), []);
+  useEffect(() => onConnectivityChange(() => setForcedOfflineState(isForcedOffline())), []);
 
   const runDrain = useCallback(async () => {
     const { pending: pendingBefore } = await getQueueStatusCounts();
@@ -67,10 +70,16 @@ export function OfflineSyncProvider({ children }) {
   // circumstances") — syncQueue.js also does this itself for any other page
   // that might enqueue writes, but doing it here too keeps this pill's
   // "Syncing…" state accurate to a drain this specific mount triggered.
+  // Only fires on an actual false→true transition (tracked via the ref, not
+  // the initial mount) — reconnectToken is a "something may have changed,
+  // go check" signal for pages, not "the page just loaded".
+  const wasOnline = useRef(online);
   useEffect(() => {
-    if (online) runDrain();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [online]);
+    if (online && !wasOnline.current) {
+      runDrain().then(() => setReconnectToken((t) => t + 1));
+    }
+    wasOnline.current = online;
+  }, [online, runDrain]);
 
   // Applies the write's optimistic result to the offline cache immediately
   // (so a hard-reload while still offline shows it, since MatchListPage's
@@ -107,17 +116,30 @@ export function OfflineSyncProvider({ children }) {
   );
 
   const status = useMemo(() => {
+    if (forcedOffline) return 'forced-offline';
     if (!online) return 'offline';
     if (syncing) return 'syncing';
     if (failedCount > 0) return 'sync-failed';
     if (pendingCount > 0) return 'pending';
     if (justSynced) return 'synced';
     return 'online';
-  }, [online, syncing, failedCount, pendingCount, justSynced]);
+  }, [forcedOffline, online, syncing, failedCount, pendingCount, justSynced]);
 
   const value = useMemo(
-    () => ({ status, online, pendingCount, failedCount, lastSyncedAt, syncNow: runDrain, enqueueWrite, dismissFailed }),
-    [status, online, pendingCount, failedCount, lastSyncedAt, runDrain, enqueueWrite, dismissFailed]
+    () => ({
+      status,
+      online,
+      forcedOffline,
+      setForcedOffline,
+      reconnectToken,
+      pendingCount,
+      failedCount,
+      lastSyncedAt,
+      syncNow: runDrain,
+      enqueueWrite,
+      dismissFailed,
+    }),
+    [status, online, forcedOffline, reconnectToken, pendingCount, failedCount, lastSyncedAt, runDrain, enqueueWrite, dismissFailed]
   );
 
   return <OfflineSyncContext.Provider value={value}>{children}</OfflineSyncContext.Provider>;

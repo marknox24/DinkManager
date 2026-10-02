@@ -17,6 +17,8 @@ import { useConfirm } from '../../../context/ConfirmContext';
 import { useEventAccess } from '../../../context/EventAccessContext';
 import { useOfflineSync } from '../../../context/OfflineSyncContext';
 import { isOnline } from '../../../lib/connectivity';
+import { useOnlineOnlyGuard } from '../../../hooks/useConnectivity';
+import { readWithFallback } from '../../../lib/offlineRead';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import ConnectionStatusPill from '../../../components/organizer/ConnectionStatusPill';
 import OfflineQueueBanner from '../../../components/organizer/OfflineQueueBanner';
@@ -65,7 +67,8 @@ export default function MatchListPage() {
   const { pushToast } = useToast();
   const confirm = useConfirm();
   const { can, event } = useEventAccess();
-  const { enqueueWrite } = useOfflineSync();
+  const { enqueueWrite, reconnectToken } = useOfflineSync();
+  const blockIfOffline = useOnlineOnlyGuard();
   const now = useNow(1000);
 
   const [loaded, setLoaded] = useState(false);
@@ -94,48 +97,45 @@ export default function MatchListPage() {
   // overrides that default once the organizer manually opens/closes one.
   const [roundOverrides, setRoundOverrides] = useState({});
 
-  useEffect(() => {
-    Promise.all([listCategories(eventId), listUmpires(eventId)])
-      .then(([cats, ump]) => {
-        setCategories(cats);
-        setUmpires(ump);
-        setLoaded(true);
-        cacheCategories(eventId, cats);
-        cacheUmpires(eventId, ump);
-      })
-      .catch(async (e) => {
-        // Offline (or any other fetch failure): fall back to whatever this
-        // event's data looked like the last time it loaded successfully,
-        // rather than leaving the page stuck on "Loading…" forever — this
-        // is the one thing that has to work for a referee to keep scoring
-        // with no signal at all. (The event itself is primed into this same
-        // cache by EventAccessProvider, which already fell back to it too.)
-        const [cachedCats, cachedUmp] = await Promise.all([getCachedCategories(eventId), getCachedUmpires(eventId)]);
-        if (cachedCats.length === 0) {
-          pushToast(e.message, 'error');
-          return;
-        }
-        setCategories(cachedCats);
-        setUmpires(cachedUmp);
-        setLoaded(true);
-      });
+  const loadCategoriesAndUmpires = useCallback(async () => {
+    const [{ data: cats, source: catSource, error: catErr }, { data: ump }] = await Promise.all([
+      readWithFallback({
+        live: () => listCategories(eventId),
+        readCache: () => getCachedCategories(eventId),
+        writeCache: (data) => cacheCategories(eventId, data),
+      }),
+      readWithFallback({
+        live: () => listUmpires(eventId),
+        readCache: () => getCachedUmpires(eventId),
+        writeCache: (data) => cacheUmpires(eventId, data),
+      }),
+    ]);
+    if (catSource === 'none') {
+      pushToast(catErr?.message || "Couldn't load categories", 'error');
+      return;
+    }
+    setCategories(cats || []);
+    setUmpires(ump || []);
+    setLoaded(true);
   }, [eventId, pushToast]);
+
+  useEffect(() => {
+    loadCategoriesAndUmpires();
+  }, [loadCategoriesAndUmpires]);
 
   // Event-wide, independent of the active category tab, so a match started
   // from any category stays pinned above the tabs even after switching.
   const loadLiveMatches = useCallback(async () => {
-    try {
-      const live = await listLiveMatchesForEvent(eventId);
-      setLiveMatches(live);
-      cacheMatches(eventId, null, live);
-    } catch (e) {
-      const cachedLive = await getCachedLiveMatchesForEvent(eventId);
-      if (cachedLive.length > 0) {
-        setLiveMatches(cachedLive);
-      } else {
-        pushToast(e.message, 'error');
-      }
+    const { data, source, error } = await readWithFallback({
+      live: () => listLiveMatchesForEvent(eventId),
+      readCache: () => getCachedLiveMatchesForEvent(eventId),
+      writeCache: (live) => cacheMatches(eventId, null, live),
+    });
+    if (source === 'none') {
+      pushToast(error?.message, 'error');
+      return;
     }
+    setLiveMatches(data || []);
   }, [eventId, pushToast]);
 
   useEffect(() => {
@@ -148,19 +148,24 @@ export default function MatchListPage() {
     if (!activeCategory) return;
     setLoadingMatches(true);
     try {
-      const [bkts, mts] = await Promise.all([listBracketsForCategory(activeCategory.id), listMatchesForCategory(activeCategory.id)]);
-      setBrackets(bkts);
-      setMatches(mts);
-      cacheBrackets(activeCategory.id, bkts);
-      cacheMatches(eventId, activeCategory.id, mts);
-    } catch (e) {
-      const [cachedBrackets, cachedMatches] = await Promise.all([getCachedBrackets(activeCategory.id), getCachedMatchesForCategory(activeCategory.id)]);
-      if (cachedBrackets.length > 0 || cachedMatches.length > 0) {
-        setBrackets(cachedBrackets);
-        setMatches(cachedMatches);
-      } else {
-        pushToast(e.message, 'error');
+      const [{ data: bkts, source, error }, { data: mts }] = await Promise.all([
+        readWithFallback({
+          live: () => listBracketsForCategory(activeCategory.id),
+          readCache: () => getCachedBrackets(activeCategory.id),
+          writeCache: (data) => cacheBrackets(activeCategory.id, data),
+        }),
+        readWithFallback({
+          live: () => listMatchesForCategory(activeCategory.id),
+          readCache: () => getCachedMatchesForCategory(activeCategory.id),
+          writeCache: (data) => cacheMatches(eventId, activeCategory.id, data),
+        }),
+      ]);
+      if (source === 'none') {
+        pushToast(error?.message, 'error');
+        return;
       }
+      setBrackets(bkts || []);
+      setMatches(mts || []);
     } finally {
       setLoadingMatches(false);
     }
@@ -170,6 +175,18 @@ export default function MatchListPage() {
     reloadCategoryData();
     setRoundOverrides({});
   }, [reloadCategoryData]);
+
+  // Refreshes every loader once a reconnect-triggered drain has actually
+  // settled (not on the raw online flip, which could race an in-flight
+  // drain — see OfflineSyncContext's reconnectToken) so pages that were
+  // showing cached/offline data pick up whatever's now authoritative.
+  useEffect(() => {
+    if (!reconnectToken) return;
+    loadCategoriesAndUmpires();
+    loadLiveMatches();
+    reloadCategoryData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reconnectToken]);
 
   // Not part of this pass's offline dataset (see the offline-sync plan's
   // scope) — a stale/blank progress summary while offline is a harmless,
@@ -181,6 +198,7 @@ export default function MatchListPage() {
       setBracketProgress([]);
       return;
     }
+    if (!isOnline()) return;
     try {
       const progress = await getBracketProgressForCategory(activeCategory.id);
       setBracketProgress(progress);
@@ -203,6 +221,7 @@ export default function MatchListPage() {
       setPlayoffStatus([]);
       return;
     }
+    if (!isOnline()) return;
     try {
       const status = await getPlayoffStatus(activeCategory.id);
       setPlayoffStatus(status);
@@ -269,7 +288,7 @@ export default function MatchListPage() {
   };
 
   const handleGenerate = async () => {
-    if (blockIfLocked()) return;
+    if (blockIfLocked() || blockIfOffline()) return;
     setGenerating(true);
     try {
       if (isRoundRobinFormat(activeCategory.format)) {
@@ -307,7 +326,7 @@ export default function MatchListPage() {
   };
 
   const handleGenerateStage = async (kind) => {
-    if (blockIfLocked()) return;
+    if (blockIfLocked() || blockIfOffline()) return;
     setGeneratingStage(kind);
     try {
       await generateStageMatches(activeCategory.id, kind);
@@ -321,6 +340,7 @@ export default function MatchListPage() {
   };
 
   const handleConfirmCrossover = async ({ playoff_pool_pairs, playoff_advance_per_pool }) => {
+    if (blockIfOffline()) return;
     await savePlan(activeCategory.id, { playoff_pool_pairs, playoff_advance_per_pool });
     setCategories((prev) => prev.map((c) => (c.id === activeCategory.id ? { ...c, playoff_pool_pairs, playoff_advance_per_pool } : c)));
     await handleGenerateStage(confirmingLevel.kind);

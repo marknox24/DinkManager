@@ -82,3 +82,28 @@ export async function setMeta(key, value) {
   const db = await getOfflineDb();
   return db.put('meta', { key, value });
 }
+
+// Removes every `meta` row whose key starts with `prefix` — used to clear a
+// whole family of per-event blobs (e.g. every cached `registrations:<id>`
+// entry) in one call, such as on sign-out.
+export async function deleteMetaByPrefix(prefix) {
+  const db = await getOfflineDb();
+  const tx = db.transaction('meta', 'readwrite');
+  const keys = await tx.store.getAllKeys();
+  await Promise.all(keys.filter((k) => String(k).startsWith(prefix)).map((k) => tx.store.delete(k)));
+  await tx.done;
+}
+
+// Replaces every record under one index value (e.g. one event's categories,
+// one bracket's teams) with exactly `records` — unlike putAll, a record that
+// existed before but isn't in `records` this time is deleted, so a row
+// removed on the server doesn't linger as a ghost in the offline cache
+// forever (putAll only ever adds/overwrites, never prunes).
+export async function replaceByIndex(storeName, indexName, value, records) {
+  const db = await getOfflineDb();
+  const tx = db.transaction(storeName, 'readwrite');
+  const keep = new Set(records.map((r) => r.id));
+  const existingKeys = await tx.store.index(indexName).getAllKeys(value);
+  await Promise.all([...existingKeys.filter((k) => !keep.has(k)).map((k) => tx.store.delete(k)), ...records.map((r) => tx.store.put(r))]);
+  await tx.done;
+}

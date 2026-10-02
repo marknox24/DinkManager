@@ -9,7 +9,6 @@ import { ConfirmProvider } from './components/ui/ConfirmProvider';
 import ToastStack from './components/ui/ToastStack';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import { EventAccessLayout, EventIndexRedirect, RequireEventPermission } from './components/auth/EventRoute';
-import { OfflineSyncProvider } from './context/OfflineSyncContext';
 // SetupRequiredPage stays a static import — it's the fallback RequireSupabase
 // itself renders below, tiny, and needed before any lazy chunk could resolve.
 import SetupRequiredPage from './pages/SetupRequiredPage';
@@ -224,16 +223,7 @@ function AppRoutes() {
           <Route path="manage" element={<RequireEventPermission permission="registrations"><RegistrationsPage /></RequireEventPermission>} />
           <Route path="checkin" element={<RequireEventPermission permission="checkin"><CheckInManagePage /></RequireEventPermission>} />
           <Route path="brackets" element={<RequireEventPermission permission="brackets"><BracketsPage /></RequireEventPermission>} />
-          <Route
-            path="matchlist"
-            element={
-              <RequireEventPermission permission="matchlist">
-                <OfflineSyncProvider>
-                  <MatchListPage />
-                </OfflineSyncProvider>
-              </RequireEventPermission>
-            }
-          />
+          <Route path="matchlist" element={<RequireEventPermission permission="matchlist"><MatchListPage /></RequireEventPermission>} />
           <Route path="preview" element={<RequireEventPermission permission="preview"><PreviewSetupPage /></RequireEventPermission>} />
           <Route path="umpires" element={<RequireEventPermission permission="umpires"><UmpiresPage /></RequireEventPermission>} />
           <Route path="sponsors" element={<RequireEventPermission permission="sponsors"><SponsorsPage /></RequireEventPermission>} />

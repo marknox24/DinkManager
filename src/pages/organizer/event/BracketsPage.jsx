@@ -3,10 +3,7 @@ import { useParams } from 'react-router-dom';
 import { AlertTriangle, ArrowRightLeft, CheckCircle2, ChevronDown, Crown, Download, History, ListChecks, Radio, RefreshCw, Scale, Settings2, Shuffle, Timer, UserPlus, X } from 'lucide-react';
 import { listCategories, listRegistrations } from '../../../data/eventsApi';
 import {
-  cancelLiveMatch,
   deleteBracketsForCategory,
-  deleteMatch,
-  finishMatch,
   generateBrackets,
   getBracketProgressForCategory,
   listBracketChanges,
@@ -15,18 +12,33 @@ import {
   listMatchesForBracket,
   listMatchesForCategory,
   listTeamsForBracket,
-  pauseMatch,
   recordBracketRandomization,
   regenerateMatchListForCategory,
-  resumeMatch,
   setBracketCapacity,
   setGamesPerTeam,
 } from '../../../data/bracketsApi';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
 import { useEventAccess } from '../../../context/EventAccessContext';
-import { cacheBrackets, getCachedBrackets } from '../../../hooks/useOfflineCache';
+import { useOfflineSync } from '../../../context/OfflineSyncContext';
+import { useOnlineOnlyGuard } from '../../../hooks/useConnectivity';
+import { isOnline } from '../../../lib/connectivity';
+import { readWithFallback, TRANSIENT_RETRY_DELAYS_MS } from '../../../lib/offlineRead';
+import {
+  cacheBrackets,
+  getCachedBrackets,
+  cacheCategories,
+  getCachedCategories,
+  cacheMatches,
+  getCachedLiveMatchesForEvent,
+  getCachedMatchesForCategory,
+  cacheTeams,
+  getCachedTeamsForBracket,
+  getCachedCompletedMatchesForBracket,
+} from '../../../hooks/useOfflineCache';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
+import ConnectionStatusPill from '../../../components/organizer/ConnectionStatusPill';
+import OfflineQueueBanner from '../../../components/organizer/OfflineQueueBanner';
 import RandomizerModal from '../../../components/organizer/RandomizerModal';
 import AddPlayerToBracketModal from '../../../components/organizer/AddPlayerToBracketModal';
 import MoveTeamModal from '../../../components/organizer/MoveTeamModal';
@@ -331,6 +343,8 @@ export default function BracketsPage() {
   const { pushToast } = useToast();
   const confirm = useConfirm();
   const { can, event } = useEventAccess();
+  const { enqueueWrite, reconnectToken, forcedOffline } = useOfflineSync();
+  const blockIfOffline = useOnlineOnlyGuard();
   const canRedraw = can('redraw_brackets');
 
   const [loaded, setLoaded] = useState(false);
@@ -372,22 +386,42 @@ export default function BracketsPage() {
 
   const now = useNow(1000);
 
-  useEffect(() => {
-    listCategories(eventId)
-      .then((cats) => {
-        setCategories(cats);
-        setLoaded(true);
-      })
-      .catch((e) => pushToast(e.message, 'error'));
+  const loadCategories = useCallback(async () => {
+    const { data, source, error } = await readWithFallback({
+      live: () => listCategories(eventId),
+      readCache: () => getCachedCategories(eventId),
+      writeCache: (cats) => cacheCategories(eventId, cats),
+      retryDelaysMs: TRANSIENT_RETRY_DELAYS_MS,
+    });
+    if (source === 'none') {
+      pushToast(error?.message, 'error');
+      return;
+    }
+    setCategories(data || []);
+    setLoaded(true);
   }, [eventId, pushToast]);
 
+  useEffect(() => {
+    loadCategories();
+  }, [loadCategories]);
+
   const loadLiveMatches = useCallback(async () => {
-    try {
-      const live = await listLiveMatchesForEvent(eventId);
-      setLiveMatches(live);
-    } catch (e) {
-      pushToast(e.message, 'error');
+    // Required for offline live-match actions (pause/cancel/finish, below)
+    // to actually show their effect: those enqueue an optimistic update into
+    // the same `matches` cache this reads, so the reload right after one
+    // needs to be able to serve from that cache instead of only ever trying
+    // live.
+    const { data, source, error } = await readWithFallback({
+      live: () => listLiveMatchesForEvent(eventId),
+      readCache: () => getCachedLiveMatchesForEvent(eventId),
+      writeCache: (live) => cacheMatches(eventId, null, live),
+      retryDelaysMs: TRANSIENT_RETRY_DELAYS_MS,
+    });
+    if (source === 'none') {
+      pushToast(error?.message, 'error');
+      return;
     }
+    setLiveMatches(data || []);
   }, [eventId, pushToast]);
 
   useEffect(() => {
@@ -434,12 +468,31 @@ export default function BracketsPage() {
     if (!activeCategory) return;
     const catId = activeCategory.id;
     setLoadingBrackets(true);
+    // Offline/forced-offline: go straight to cache, no live attempt or wait
+    // — same "forced local-only" rule every other offline-capable loader on
+    // this page follows (see offlineRead.js). A cache miss still falls
+    // through to one bare live attempt below, same reasoning as elsewhere:
+    // a read can't corrupt anything, and a permanently blank page is worse.
+    if (!isOnline()) {
+      const cachedFirst = await getCachedBrackets(catId).catch(() => []);
+      const cachedPoolBracketsFirst = cachedFirst.filter((b) => b.kind !== 'playoff');
+      if (activeCatRef.current !== catId) return;
+      if (cachedPoolBracketsFirst.length > 0) {
+        setBrackets(cachedPoolBracketsFirst);
+        setExpandedIds(new Set(cachedPoolBracketsFirst.map((b) => b.id)));
+        setBracketsError(null);
+        setBracketsStale(true);
+        setLoadingBrackets(false);
+        return;
+      }
+    }
     // Transient Supabase connection-pool failures (measured during an active
     // platform incident at roughly 1-in-6 reads) clear within a couple
     // seconds — retrying silently here means the organizer never sees most
     // of them as an error at all, instead of requiring a manual Retry click
-    // for something that would have worked on the very next attempt.
-    const RETRY_DELAYS_MS = [600, 1200];
+    // for something that would have worked on the very next attempt. Skipped
+    // when already offline above (there's nothing to retry into).
+    const RETRY_DELAYS_MS = isOnline() ? [600, 1200] : [];
     let lastError = null;
     let bkts = null;
     let regs = null;
@@ -501,6 +554,10 @@ export default function BracketsPage() {
       setBracketProgress([]);
       return;
     }
+    // No offline dataset for this supplementary summary (same as
+    // MatchListPage's equivalent) — leave the last-known progress on screen
+    // rather than attempting a live call that'll just be skipped anyway.
+    if (!isOnline()) return;
     const catId = activeCategory.id;
     try {
       const progress = await getBracketProgressForCategory(catId);
@@ -525,19 +582,32 @@ export default function BracketsPage() {
   const loadAllBracketDetails = useCallback(async () => {
     if (brackets.length === 0) return;
     const catId = brackets[0].category_id;
-    try {
-      const entries = await Promise.all(
-        brackets.map(async (b) => {
-          const [teams, matches] = await Promise.all([listTeamsForBracket(b.id), listMatchesForBracket(b.id)]);
-          return [b.id, { teams, matches }];
-        })
-      );
-      if (activeCatRef.current !== catId) return;
-      setBracketData(Object.fromEntries(entries));
-    } catch (e) {
-      if (activeCatRef.current === catId) pushToast(e.message, 'error');
-    }
-  }, [brackets, pushToast]);
+    let anyError = null;
+    const entries = await Promise.all(
+      brackets.map(async (b) => {
+        const [{ data: teams, source: teamsSource, error: teamsErr }, { data: matches, source: matchesSource, error: matchesErr }] = await Promise.all([
+          readWithFallback({
+            live: () => listTeamsForBracket(b.id),
+            readCache: () => getCachedTeamsForBracket(b.id),
+            writeCache: (t) => cacheTeams(b.id, t),
+            retryDelaysMs: TRANSIENT_RETRY_DELAYS_MS,
+          }),
+          readWithFallback({
+            live: () => listMatchesForBracket(b.id),
+            readCache: () => getCachedCompletedMatchesForBracket(b.id),
+            writeCache: (m) => cacheMatches(eventId, catId, m),
+            retryDelaysMs: TRANSIENT_RETRY_DELAYS_MS,
+          }),
+        ]);
+        if (teamsSource === 'none') anyError = teamsErr;
+        if (matchesSource === 'none') anyError = matchesErr;
+        return [b.id, { teams: teams || [], matches: matches || [] }];
+      })
+    );
+    if (activeCatRef.current !== catId) return;
+    setBracketData(Object.fromEntries(entries));
+    if (anyError) pushToast(anyError.message, 'error');
+  }, [brackets, pushToast, eventId]);
 
   useEffect(() => {
     loadAllBracketDetails();
@@ -555,17 +625,38 @@ export default function BracketsPage() {
       return;
     }
     const catId = activeCategory.id;
-    try {
-      const matches = await listMatchesForCategory(catId);
-      if (activeCatRef.current === catId) setCategoryMatches(matches);
-    } catch (e) {
-      if (activeCatRef.current === catId) pushToast(e.message, 'error');
+    const { data, source, error } = await readWithFallback({
+      live: () => listMatchesForCategory(catId),
+      readCache: () => getCachedMatchesForCategory(catId),
+      writeCache: (matches) => cacheMatches(eventId, catId, matches),
+      retryDelaysMs: TRANSIENT_RETRY_DELAYS_MS,
+    });
+    if (activeCatRef.current !== catId) return;
+    if (source === 'none') {
+      pushToast(error?.message, 'error');
+      return;
     }
-  }, [activeCategory, pushToast]);
+    setCategoryMatches(data || []);
+  }, [activeCategory, pushToast, eventId]);
 
   useEffect(() => {
     loadCategoryMatches();
   }, [loadCategoryMatches]);
+
+  // Refreshes every loader once a reconnect-triggered drain has settled
+  // (not the raw online flip, which could race an in-flight drain — see
+  // OfflineSyncContext's reconnectToken), so cached/offline data gets
+  // replaced with whatever's now authoritative.
+  useEffect(() => {
+    if (!reconnectToken) return;
+    loadCategories();
+    loadBrackets();
+    loadLiveMatches();
+    loadBracketProgress();
+    loadAllBracketDetails();
+    loadCategoryMatches();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reconnectToken]);
 
   const loadChanges = useCallback(async () => {
     if (!activeCategory) return;
@@ -673,7 +764,7 @@ export default function BracketsPage() {
   }, [brackets, bracketData, categoryMatches, activeCategory, bracketGames]);
 
   const handleRegenerateMatchlist = async () => {
-    if (blockIfLocked()) return;
+    if (blockIfLocked() || blockIfOffline()) return;
     const strongWarning =
       'This category already has matches with recorded scores. Those matches and their scores are kept exactly as they are, but the tournament structure around them may change. Please confirm before continuing.';
     const standardWarning = 'No match in this category has been played yet.';
@@ -730,7 +821,7 @@ export default function BracketsPage() {
   };
 
   const handleGenerate = async (grouping) => {
-    if (blockIfLocked()) return;
+    if (blockIfLocked() || blockIfOffline()) return;
     const again = brackets.length > 0;
     try {
       if (again) {
@@ -750,25 +841,46 @@ export default function BracketsPage() {
     }
   };
 
+  // These three route through OfflineSyncContext's enqueueWrite instead of
+  // calling bracketsApi directly — the same operation types (pause/resume/
+  // cancel/finish) Match List already queues, so a flaky connection or
+  // forced offline mode behaves identically on either page instead of
+  // working on one and hard-failing on the other. enqueueWrite writes the
+  // optimistic result into the same `matches` cache loadLiveMatches/
+  // loadCategoryMatches read on a failed fetch, and never throws on a
+  // network failure, so these handlers stay this simple regardless of
+  // connectivity.
   const handleTogglePause = async (match) => {
     if (blockIfLocked()) return;
-    try {
-      if (match.running_since) {
-        await pauseMatch(match.id, liveElapsedSeconds(match, Date.now()));
-      } else {
-        await resumeMatch(match.id);
-      }
-      await loadLiveMatches();
-    } catch (e) {
-      pushToast(e.message, 'error');
+    if (match.running_since) {
+      const accumulated_seconds = liveElapsedSeconds(match, Date.now());
+      await enqueueWrite({
+        matchId: match.id,
+        operationType: 'pause',
+        payload: { accumulated_seconds },
+        optimisticMatch: { ...match, accumulated_seconds, running_since: null },
+      });
+    } else {
+      const running_since = new Date().toISOString();
+      await enqueueWrite({
+        matchId: match.id,
+        operationType: 'resume',
+        payload: {},
+        optimisticMatch: { ...match, running_since },
+      });
     }
+    await loadLiveMatches();
   };
 
   const handleCancelMatch = async (match) => {
     if (blockIfLocked()) return;
     // A match with a match_code came from a generated match list — cancel
     // resets it to scheduled so its fixture/code isn't lost. An ad-hoc
-    // match (no code) has no schedule slot to preserve, so it's deleted.
+    // match (no code) has no schedule slot to preserve, so it's deleted —
+    // via cancel-then-remove (two queued ops, replayed in order) rather
+    // than remove alone: sync_remove_match only deletes 'scheduled' rows,
+    // so an in-progress ad-hoc match needs the status reset first or the
+    // remove silently no-ops server-side.
     const isFromMatchList = !!match.match_code;
     const ok = await confirm({
       title: 'Cancel this match?',
@@ -778,27 +890,29 @@ export default function BracketsPage() {
       confirmLabel: 'Cancel match',
     });
     if (!ok) return;
-    try {
-      if (isFromMatchList) {
-        await cancelLiveMatch(match.id);
-      } else {
-        await deleteMatch(match.id);
-      }
-      pushToast('Match canceled', 'success');
-      await Promise.all([loadLiveMatches(), loadBracketProgress(), loadCategoryMatches()]);
-    } catch (e) {
-      pushToast(e.message, 'error');
+    await enqueueWrite({
+      matchId: match.id,
+      operationType: 'cancel',
+      payload: {},
+      optimisticMatch: { ...match, status: 'scheduled', started_at: null, running_since: null, accumulated_seconds: 0 },
+    });
+    if (!isFromMatchList) {
+      await enqueueWrite({ matchId: match.id, operationType: 'remove', payload: {}, optimisticDelete: true });
     }
+    pushToast('Match canceled', 'success');
+    await Promise.all([loadLiveMatches(), loadBracketProgress(), loadCategoryMatches()]);
   };
 
   const handleFinishMatch = async (match, sA, sB) => {
     if (blockIfLocked()) return;
     const elapsedSeconds = liveElapsedSeconds(match, Date.now());
-    await finishMatch(match.id, {
-      score_a: sA,
-      score_b: sB,
-      winner_team_id: sA > sB ? match.team_a_id : match.team_b_id,
-      duration_minutes: Math.max(1, Math.round(elapsedSeconds / 60)),
+    const winner_team_id = sA > sB ? match.team_a_id : match.team_b_id;
+    const duration_minutes = Math.max(1, Math.round(elapsedSeconds / 60));
+    await enqueueWrite({
+      matchId: match.id,
+      operationType: 'finish',
+      payload: { score_a: sA, score_b: sB, winner_team_id, duration_minutes },
+      optimisticMatch: { ...match, status: 'completed', score_a: sA, score_b: sB, winner_team_id, duration_minutes, running_since: null, finished_at: new Date().toISOString() },
     });
     pushToast('Match recorded', 'success');
     await Promise.all([loadAllBracketDetails(), loadLiveMatches(), loadBracketProgress(), loadCategoryMatches()]);
@@ -817,7 +931,7 @@ export default function BracketsPage() {
   };
 
   const openMove = (team, fromBracket, initialToId = null) => {
-    if (blockIfLocked()) return;
+    if (blockIfLocked() || blockIfOffline()) return;
     setMoving({ team, fromBracket, initialToId });
   };
 
@@ -830,7 +944,7 @@ export default function BracketsPage() {
   };
 
   const handleSaveGames = async (bracketId, games) => {
-    if (blockIfLocked()) return;
+    if (blockIfLocked() || blockIfOffline()) return;
     try {
       await setGamesPerTeam(activeCategory.id, bracketId, games);
       if (bracketId == null) {
@@ -847,7 +961,7 @@ export default function BracketsPage() {
   };
 
   const handleSaveCapacity = async () => {
-    if (blockIfLocked()) return;
+    if (blockIfLocked() || blockIfOffline()) return;
     const raw = String(capacityInput ?? '').trim();
     const next = raw === '' ? null : Number(raw);
     if (next != null && (!Number.isInteger(next) || next < 1)) {
@@ -869,7 +983,7 @@ export default function BracketsPage() {
   };
 
   const handleRedrawClick = async () => {
-    if (blockIfLocked()) return;
+    if (blockIfLocked() || blockIfOffline()) return;
     const ok = await confirm({
       title: `Randomize ${activeCategory?.name} again?`,
       message: `Randomizing again will replace the current bracket assignments, including any manual moves.${
@@ -887,7 +1001,10 @@ export default function BracketsPage() {
     <EventWorkspaceLayout event={event}>
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="font-display text-2xl font-bold text-ink-900">Brackets</h1>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h1 className="font-display text-2xl font-bold text-ink-900">Brackets</h1>
+            <ConnectionStatusPill />
+          </div>
           <p className="text-sm text-ink-500">Draw brackets from approved players and track pool standings</p>
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -901,7 +1018,7 @@ export default function BracketsPage() {
           )}
           {canRedraw && (
             <button
-              onClick={() => (blockIfLocked() ? null : setAddPlayerOpen(true))}
+              onClick={() => (blockIfLocked() || blockIfOffline() ? null : setAddPlayerOpen(true))}
               className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-2 text-xs font-bold text-ink-600 transition hover:bg-ink-100"
             >
               <UserPlus size={14} /> Add Player
@@ -909,6 +1026,8 @@ export default function BracketsPage() {
           )}
         </div>
       </div>
+
+      <OfflineQueueBanner onDiscarded={() => Promise.all([loadLiveMatches(), loadAllBracketDetails(), loadBracketProgress(), loadCategoryMatches()])} />
 
       {!loaded ? (
         <div className="py-16 text-center text-sm text-ink-400">Loading…</div>
@@ -982,11 +1101,14 @@ export default function BracketsPage() {
               {bracketsStale && (
                 <div className="flex items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs font-semibold text-amber-800">
                   <span className="flex items-center gap-2">
-                    <Radio size={13} className="shrink-0 animate-pulse" /> Showing the last data we had — couldn't reach the server for an update.
+                    <Radio size={13} className="shrink-0 animate-pulse" />
+                    {forcedOffline ? 'Offline mode — showing data saved on this device.' : "Showing the last data we had — couldn't reach the server for an update."}
                   </span>
-                  <button onClick={loadBrackets} className="shrink-0 rounded-full border border-amber-300 px-3 py-1 text-[11px] font-bold hover:bg-amber-100">
-                    Retry
-                  </button>
+                  {!forcedOffline && (
+                    <button onClick={loadBrackets} className="shrink-0 rounded-full border border-amber-300 px-3 py-1 text-[11px] font-bold hover:bg-amber-100">
+                      Retry
+                    </button>
+                  )}
                 </div>
               )}
               {randomizedNotice && (
@@ -1122,7 +1244,7 @@ export default function BracketsPage() {
                 {canMove && (
                   <div className="mt-4 flex flex-wrap items-center justify-end gap-2 border-t border-ink-100 pt-4">
                     <button
-                      onClick={() => (blockIfLocked() ? null : setBalanceOpen(true))}
+                      onClick={() => (blockIfLocked() || blockIfOffline() ? null : setBalanceOpen(true))}
                       disabled={!poolsWithTeams}
                       className="flex items-center gap-1.5 rounded-full border border-ink-200 bg-white px-3.5 py-1.5 text-xs font-bold text-ink-600 transition hover:bg-ink-100 disabled:opacity-50"
                     >

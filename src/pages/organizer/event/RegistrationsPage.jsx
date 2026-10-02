@@ -33,7 +33,15 @@ import { getBracketAssignmentsForEvent } from '../../../data/bracketsApi';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
 import { useEventAccess } from '../../../context/EventAccessContext';
+import { useOfflineSync } from '../../../context/OfflineSyncContext';
+import { useOnlineOnlyGuard } from '../../../hooks/useConnectivity';
+import { isOnline } from '../../../lib/connectivity';
+import { readWithFallback, TRANSIENT_RETRY_DELAYS_MS } from '../../../lib/offlineRead';
+import { cacheCategories, getCachedCategories, cacheRegistrations, getCachedRegistrations } from '../../../hooks/useOfflineCache';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
+import ConnectionStatusPill from '../../../components/organizer/ConnectionStatusPill';
+import DateRangePicker from '../../../components/ui/DateRangePicker';
+import { toLocalYmd } from '../../../utils/format';
 import EditRegistrationModal from '../../../components/organizer/EditRegistrationModal';
 import AddPlayerModal from '../../../components/organizer/AddPlayerModal';
 import Modal from '../../../components/ui/Modal';
@@ -255,6 +263,8 @@ export default function RegistrationsPage() {
   const { pushToast } = useToast();
   const confirm = useConfirm();
   const { event } = useEventAccess();
+  const { reconnectToken } = useOfflineSync();
+  const blockIfOffline = useOnlineOnlyGuard();
 
   const [categories, setCategories] = useState([]);
   const [registrations, setRegistrations] = useState([]);
@@ -268,25 +278,57 @@ export default function RegistrationsPage() {
   const [collapsedCategoryIds, setCollapsedCategoryIds] = useState(() => new Set());
   const [statusFilter, setStatusFilter] = useState('all');
   const [query, setQuery] = useState('');
+  const [dateRange, setDateRange] = useState({ from: null, to: null });
   const [loaded, setLoaded] = useState(false);
 
   const reload = useCallback(async () => {
-    try {
-      const [cats, regs, act] = await Promise.all([listCategories(eventId), listRegistrations(eventId), listActivity(eventId)]);
-      setCategories(cats);
-      setRegistrations(regs);
-      setActivity(act);
-      const assignments = await getBracketAssignmentsForEvent(cats.map((c) => c.id));
-      setBracketAssignments(assignments);
-      setLoaded(true);
-    } catch (e) {
-      pushToast(e.message, 'error');
+    const [{ data: cats, source, error }, { data: regs }] = await Promise.all([
+      readWithFallback({
+        live: () => listCategories(eventId),
+        readCache: () => getCachedCategories(eventId),
+        writeCache: (data) => cacheCategories(eventId, data),
+        retryDelaysMs: TRANSIENT_RETRY_DELAYS_MS,
+      }),
+      readWithFallback({
+        live: () => listRegistrations(eventId),
+        readCache: () => getCachedRegistrations(eventId),
+        writeCache: (data) => cacheRegistrations(eventId, data),
+        retryDelaysMs: TRANSIENT_RETRY_DELAYS_MS,
+      }),
+    ]);
+    if (source === 'none') {
+      pushToast(error?.message, 'error');
+      return;
     }
+    setCategories(cats || []);
+    setRegistrations(regs || []);
+    // Activity log and bracket assignments have no offline dataset — online
+    // only, silently empty otherwise (there's nothing stale worth showing
+    // for either: activity is a live feed, and assignments are consulted
+    // only to block deleting a category with drawn brackets, which is
+    // itself an online-only action).
+    if (isOnline()) {
+      try {
+        const act = await listActivity(eventId);
+        setActivity(act);
+        const assignments = await getBracketAssignmentsForEvent((cats || []).map((c) => c.id));
+        setBracketAssignments(assignments);
+      } catch (e) {
+        pushToast(e.message, 'error');
+      }
+    }
+    setLoaded(true);
   }, [eventId, pushToast]);
 
   useEffect(() => {
     reload();
   }, [reload]);
+
+  // Reload once a reconnect-triggered drain has settled (see
+  // OfflineSyncContext's reconnectToken).
+  useEffect(() => {
+    if (reconnectToken) reload();
+  }, [reconnectToken, reload]);
 
   const isLocked = event?.status === 'finished';
   const blockIfLocked = () => {
@@ -320,7 +362,7 @@ export default function RegistrationsPage() {
   const remainingSlots = (categoryId) => (playerCap == null ? null : Math.max(0, playerCap - approvedCount(categoryId)));
 
   const setStatus = async (reg, status) => {
-    if (blockIfLocked()) return;
+    if (blockIfLocked() || blockIfOffline()) return;
     if (status === 'approved' && remainingSlots(reg.category_id) === 0) {
       await promptUpgrade('Player limit reached', playerLimitMessage);
       return;
@@ -336,7 +378,7 @@ export default function RegistrationsPage() {
   };
 
   const removeRegistration = async (reg) => {
-    if (blockIfLocked()) return;
+    if (blockIfLocked() || blockIfOffline()) return;
     const ok = await confirm({ title: `Remove ${reg.player_name}?`, message: 'This permanently deletes their registration — useful for accidental duplicates.', confirmLabel: 'Remove' });
     if (!ok) return;
     try {
@@ -372,7 +414,7 @@ export default function RegistrationsPage() {
   };
 
   const saveEdit = async (patch) => {
-    if (blockIfLocked()) return;
+    if (blockIfLocked() || blockIfOffline()) return;
     // Moving an approved player takes a slot in the destination category.
     const movingApproved = editingReg.status === 'approved' && patch.category_id !== editingReg.category_id;
     if (movingApproved && remainingSlots(patch.category_id) === 0) {
@@ -394,6 +436,7 @@ export default function RegistrationsPage() {
   // organizer's typed-in names intact if they cancel the upgrade prompt.
   const handleAddPlayer = async (payload) => {
     if (blockIfLocked()) throw new Error('This event is finished and locked.');
+    if (blockIfOffline()) throw new Error('This change needs a connection.');
     if (remainingSlots(payload.category_id) === 0) {
       await promptUpgrade('Player limit reached', playerLimitMessage);
       throw new Error('Player limit reached');
@@ -411,6 +454,7 @@ export default function RegistrationsPage() {
   // rejected whole rather than silently importing only the first N rows.
   const handleImportPlayers = async (categoryId, rows) => {
     if (blockIfLocked()) throw new Error('This event is finished and locked.');
+    if (blockIfOffline()) throw new Error('This change needs a connection.');
     if (!canImport) {
       await promptUpgrade('Excel import not included', `Importing players from Excel isn't included in the ${planLabel} plan.`);
       throw new Error('Excel import not included');
@@ -445,18 +489,32 @@ export default function RegistrationsPage() {
     }
   };
 
+  // Local-date bucket of when the player registered — the same helper the
+  // picker uses, so a late-evening registration never shifts to the next
+  // day (as it would via the UTC date).
+  const inDateRange = (r) => {
+    if (!dateRange.from) return true;
+    const ymd = toLocalYmd(new Date(r.created_at));
+    return ymd >= dateRange.from && ymd <= dateRange.to;
+  };
+
+  // Status pill counts follow the chosen date range (but not the status/name
+  // filters themselves, as before) so "Pending (3)" means pending within it.
   const statusCounts = useMemo(() => {
-    const counts = { all: registrations.length, pending: 0, approved: 0, waitlisted: 0, denied: 0 };
-    registrations.forEach((r) => {
+    const inRange = dateRange.from ? registrations.filter(inDateRange) : registrations;
+    const counts = { all: inRange.length, pending: 0, approved: 0, waitlisted: 0, denied: 0 };
+    inRange.forEach((r) => {
       if (counts[r.status] != null) counts[r.status] += 1;
     });
     return counts;
-  }, [registrations]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [registrations, dateRange]);
 
-  const isFiltering = statusFilter !== 'all' || query.trim() !== '';
+  const isFiltering = statusFilter !== 'all' || query.trim() !== '' || Boolean(dateRange.from);
 
   const matchesFilters = (r) => {
     if (statusFilter !== 'all' && r.status !== statusFilter) return false;
+    if (!inDateRange(r)) return false;
     const q = query.trim().toLowerCase();
     if (q && !r.player_name.toLowerCase().includes(q)) return false;
     return true;
@@ -466,7 +524,10 @@ export default function RegistrationsPage() {
     <EventWorkspaceLayout event={event}>
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="font-display text-2xl font-bold text-ink-900">Registrations</h1>
+          <div className="flex flex-wrap items-center gap-2.5">
+            <h1 className="font-display text-2xl font-bold text-ink-900">Registrations</h1>
+            <ConnectionStatusPill />
+          </div>
           <p className="text-sm text-ink-500">Approve players and follow activity for this event</p>
         </div>
         <div className="flex items-center gap-2">
@@ -525,18 +586,23 @@ export default function RegistrationsPage() {
             )}
           </div>
 
-          <div className="mb-5 flex items-center gap-1 overflow-x-auto rounded-full bg-ink-50 p-1">
-            {STATUS_FILTERS.map(([id, label]) => (
-              <button
-                key={id}
-                onClick={() => setStatusFilter(id)}
-                className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-bold transition ${
-                  statusFilter === id ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500 hover:text-ink-700'
-                }`}
-              >
-                {label} ({statusCounts[id] ?? 0})
-              </button>
-            ))}
+          {/* The date picker sits beside — not inside — the scrolling pill
+              row: an overflow-x-auto parent would clip its popover. */}
+          <div className="mb-5 flex flex-wrap items-center gap-2">
+            <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto rounded-full bg-ink-50 p-1">
+              {STATUS_FILTERS.map(([id, label]) => (
+                <button
+                  key={id}
+                  onClick={() => setStatusFilter(id)}
+                  className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-bold transition ${
+                    statusFilter === id ? 'bg-white text-ink-900 shadow-sm' : 'text-ink-500 hover:text-ink-700'
+                  }`}
+                >
+                  {label} ({statusCounts[id] ?? 0})
+                </button>
+              ))}
+            </div>
+            <DateRangePicker value={dateRange} onChange={setDateRange} />
           </div>
 
           <div className="grid grid-cols-1 gap-5 lg:grid-cols-[1fr_320px]">

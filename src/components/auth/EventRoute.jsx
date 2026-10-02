@@ -2,6 +2,7 @@ import { Navigate, Outlet, useParams } from 'react-router-dom';
 import { RefreshCw, ShieldAlert, WifiOff } from 'lucide-react';
 import ProtectedRoute from './ProtectedRoute';
 import { EventAccessProvider, useEventAccess } from '../../context/EventAccessContext';
+import { OfflineSyncProvider } from '../../context/OfflineSyncContext';
 
 function NoAccessPanel({ expired }) {
   return (
@@ -78,14 +79,24 @@ function EventAccessBoundary({ children }) {
 // every sidebar navigation. `key={eventId}` forces a clean remount (fresh
 // fetch, no stale previous event for one render) when navigating from one
 // event straight into another, e.g. after Settings → Duplicate.
+//
+// OfflineSyncProvider also mounts here — once for the whole workspace
+// instead of being scoped to a single page — so any event page can enqueue
+// offline writes or read sync status. It sits OUTSIDE EventAccessBoundary
+// deliberately: the boundary's own "Loading…"/error states unmount
+// everything below them, and a sync queue mid-drain (or its `syncing`/
+// `justSynced` UI state) shouldn't reset just because the event row itself
+// is being refetched.
 export function EventAccessLayout() {
   const { eventId } = useParams();
   return (
     <ProtectedRoute>
       <EventAccessProvider key={eventId} eventId={eventId}>
-        <EventAccessBoundary>
-          <Outlet />
-        </EventAccessBoundary>
+        <OfflineSyncProvider>
+          <EventAccessBoundary>
+            <Outlet />
+          </EventAccessBoundary>
+        </OfflineSyncProvider>
       </EventAccessProvider>
     </ProtectedRoute>
   );

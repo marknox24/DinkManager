@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { isSupabaseConfigured, supabase } from '../lib/supabaseClient';
+import { clearCachedRegistrations } from '../hooks/useOfflineCache';
 
 const AuthContext = createContext(null);
 
@@ -225,7 +226,13 @@ export function AuthProvider({ children }) {
           options: { redirectTo: `${window.location.origin}${role === 'player' ? '/player/dashboard' : '/dashboard'}` },
         });
       },
-      signOut: () => supabase.auth.signOut(),
+      // Registrations cached offline carry player names/emails/phone
+      // numbers — clear them for whoever signs in next on this device. The
+      // actual sign-out always proceeds even if this best-effort cleanup fails.
+      signOut: async () => {
+        await supabase.auth.signOut();
+        clearCachedRegistrations().catch(() => {});
+      },
       resetPasswordForEmail: (email) =>
         supabase.auth.resetPasswordForEmail(email, { redirectTo: `${window.location.origin}/reset-password` }),
       updatePassword: (password) => supabase.auth.updateUser({ password }),
