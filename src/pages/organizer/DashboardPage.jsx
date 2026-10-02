@@ -122,7 +122,7 @@ export default function DashboardPage() {
           else setShowWelcome(true);
         }
         if (!isStaffOnly) {
-          getOnboardingProgress(user.id)
+          getOnboardingProgress(myEvents)
             .then(setProgress)
             .catch(() => {});
         }

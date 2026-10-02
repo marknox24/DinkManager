@@ -860,10 +860,10 @@ export async function uploadPaymentQr(file) {
 // Derives "getting started" progress from real account data instead of a
 // separate tracked flag, so it always reflects what the organizer has
 // actually done and needs no manual bookkeeping to stay in sync.
-export async function getOnboardingProgress(organizerId) {
-  const { data: events, error } = await supabase.from('events').select('id, is_published').eq('organizer_id', organizerId);
-  if (error) throw error;
-
+// `events` is the organizer's event list the caller already has in hand
+// (from listMyEvents) — reusing it instead of re-querying skips a redundant
+// round trip on every dashboard load.
+export async function getOnboardingProgress(events) {
   const hasEvent = events.length > 0;
   const hasPublished = events.some((e) => e.is_published);
   if (!hasEvent) {
