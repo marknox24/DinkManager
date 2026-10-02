@@ -36,14 +36,19 @@ function NavButton({ item, active, onClick }) {
   );
 }
 
-export default function EventWorkspaceLayout({ event, children }) {
-  const eventName = event?.name;
+export default function EventWorkspaceLayout({ event: eventProp, children }) {
   const { eventId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
   const { user, signOut } = useAuth();
   const { pushToast } = useToast();
-  const { isOwner, can, firstAllowedNavId } = useEventAccess();
+  const { event: ctxEvent, isOwner, can, firstAllowedNavId } = useEventAccess();
+  // Accepts an explicit `event` prop (pages mid-conversion still pass their
+  // own local state) but falls back to the shared one every page under
+  // EventAccessLayout already has, so pages can drop the prop entirely once
+  // converted without this layout needing a matching change each time.
+  const event = eventProp ?? ctxEvent;
+  const eventName = event?.name;
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const visibleItems = NAV_ITEMS.filter((item) => (item.ownerOnly ? isOwner : can(permissionForNavId(item.id))));

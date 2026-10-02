@@ -22,7 +22,6 @@ import {
   createRegistration,
   createRegistrationsBulk,
   deleteRegistration,
-  getEventById,
   getRegistrationFileUrl,
   listActivity,
   listCategories,
@@ -33,6 +32,7 @@ import {
 import { getBracketAssignmentsForEvent } from '../../../data/bracketsApi';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
+import { useEventAccess } from '../../../context/EventAccessContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import EditRegistrationModal from '../../../components/organizer/EditRegistrationModal';
 import AddPlayerModal from '../../../components/organizer/AddPlayerModal';
@@ -254,8 +254,8 @@ export default function RegistrationsPage() {
   const navigate = useNavigate();
   const { pushToast } = useToast();
   const confirm = useConfirm();
+  const { event } = useEventAccess();
 
-  const [event, setEvent] = useState(null);
   const [categories, setCategories] = useState([]);
   const [registrations, setRegistrations] = useState([]);
   const [activity, setActivity] = useState([]);
@@ -268,16 +268,17 @@ export default function RegistrationsPage() {
   const [collapsedCategoryIds, setCollapsedCategoryIds] = useState(() => new Set());
   const [statusFilter, setStatusFilter] = useState('all');
   const [query, setQuery] = useState('');
+  const [loaded, setLoaded] = useState(false);
 
   const reload = useCallback(async () => {
     try {
-      const [ev, cats, regs, act] = await Promise.all([getEventById(eventId), listCategories(eventId), listRegistrations(eventId), listActivity(eventId)]);
-      setEvent(ev);
+      const [cats, regs, act] = await Promise.all([listCategories(eventId), listRegistrations(eventId), listActivity(eventId)]);
       setCategories(cats);
       setRegistrations(regs);
       setActivity(act);
       const assignments = await getBracketAssignmentsForEvent(cats.map((c) => c.id));
       setBracketAssignments(assignments);
+      setLoaded(true);
     } catch (e) {
       pushToast(e.message, 'error');
     }
@@ -502,7 +503,7 @@ export default function RegistrationsPage() {
         </div>
       </div>
 
-      {!event ? (
+      {!loaded ? (
         <div className="py-16 text-center text-sm text-ink-400">Loading…</div>
       ) : (
         <>

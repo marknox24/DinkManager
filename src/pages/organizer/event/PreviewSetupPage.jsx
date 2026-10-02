@@ -2,26 +2,28 @@ import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import QRCode from 'qrcode';
 import { AlertTriangle, Check, Copy, MonitorPlay } from 'lucide-react';
-import { getEventById, listCategories } from '../../../data/eventsApi';
+import { listCategories } from '../../../data/eventsApi';
 import { useToast } from '../../../context/ToastContext';
+import { useEventAccess } from '../../../context/EventAccessContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 
 export default function PreviewSetupPage() {
   const { eventId } = useParams();
   const navigate = useNavigate();
   const { pushToast } = useToast();
-  const [event, setEvent] = useState(null);
+  const { event } = useEventAccess();
+  const [loaded, setLoaded] = useState(false);
   const [categories, setCategories] = useState([]);
   const [selectedId, setSelectedId] = useState('');
   const [qrDataUrl, setQrDataUrl] = useState(null);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    Promise.all([getEventById(eventId), listCategories(eventId)])
-      .then(([ev, cats]) => {
-        setEvent(ev);
+    listCategories(eventId)
+      .then((cats) => {
         setCategories(cats);
         if (cats.length > 0) setSelectedId(cats[0].id);
+        setLoaded(true);
       })
       .catch((e) => pushToast(e.message, 'error'));
   }, [eventId, pushToast]);
@@ -57,7 +59,7 @@ export default function PreviewSetupPage() {
         <p className="text-sm text-ink-500">Open a big-screen display for spectators — live courts, standings, and upcoming matches</p>
       </div>
 
-      {!event ? (
+      {!loaded ? (
         <div className="py-16 text-center text-sm text-ink-400">Loading…</div>
       ) : categories.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-ink-200 bg-white py-12 text-center text-sm text-ink-400">

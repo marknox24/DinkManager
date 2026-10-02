@@ -35,7 +35,6 @@ import {
   deleteCategory,
   deleteRegistrationField,
   deleteUmpire,
-  getEventById,
   listCategories,
   listRegistrationFields,
   listUmpires,
@@ -48,6 +47,7 @@ import {
 } from '../../data/eventsApi';
 import { useToast } from '../../context/ToastContext';
 import { useConfirm } from '../../context/ConfirmContext';
+import { useEventAccess } from '../../context/EventAccessContext';
 import OrganizerLayout from '../../components/organizer/OrganizerLayout';
 import CategoryEditor from '../../components/organizer/CategoryEditor';
 import RegistrationFieldEditor from '../../components/organizer/RegistrationFieldEditor';
@@ -112,8 +112,9 @@ export default function EventEditorPage() {
   const { pushToast } = useToast();
   const confirm = useConfirm();
   const { user, isAdmin } = useAuth();
+  const { event, setEvent, refreshEvent } = useEventAccess();
 
-  const [event, setEvent] = useState(null);
+  const [loaded, setLoaded] = useState(false);
   const [categories, setCategories] = useState([]);
   // Only the category just added via "Add category" opens expanded by
   // default — every other category card starts collapsed, since with many
@@ -145,12 +146,12 @@ export default function EventEditorPage() {
   };
 
   useEffect(() => {
-    Promise.all([getEventById(eventId), listCategories(eventId), listRegistrationFields(eventId), listUmpires(eventId)])
-      .then(([ev, cats, flds, umps]) => {
-        setEvent(ev);
+    Promise.all([listCategories(eventId), listRegistrationFields(eventId), listUmpires(eventId)])
+      .then(([cats, flds, umps]) => {
         setCategories(cats);
         setFields(flds);
         setUmpires(umps);
+        setLoaded(true);
       })
       .catch((e) => {
         pushToast(e.message, 'error');
@@ -167,6 +168,11 @@ export default function EventEditorPage() {
     } catch (e) {
       setSaveStatus('error');
       pushToast(e.message, 'error');
+      // The optimistic patch above is now sitting in the shared context
+      // event, which every other page under this event reads from — revert
+      // it to the real server value rather than letting a failed save
+      // propagate a wrong value around the app.
+      refreshEvent().catch(() => {});
     }
   };
 
@@ -399,7 +405,7 @@ export default function EventEditorPage() {
   // event or one they're helping an organizer with.
   const datesLocked = !isAdmin && Boolean(event?.end_date && now > new Date(event.end_date).getTime() + 48 * 60 * 60 * 1000);
 
-  if (!event) {
+  if (!loaded) {
     return (
       <OrganizerLayout backTo="/dashboard" backLabel="Dashboard">
         <div className="py-16 text-center text-sm text-ink-400">Loading event…</div>

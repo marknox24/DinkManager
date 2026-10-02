@@ -8,7 +8,7 @@ import { AuthProvider } from './context/AuthContext';
 import { ConfirmProvider } from './components/ui/ConfirmProvider';
 import ToastStack from './components/ui/ToastStack';
 import ProtectedRoute from './components/auth/ProtectedRoute';
-import EventRoute from './components/auth/EventRoute';
+import { EventAccessLayout, EventIndexRedirect, RequireEventPermission } from './components/auth/EventRoute';
 import { OfflineSyncProvider } from './context/OfflineSyncContext';
 // SetupRequiredPage stays a static import — it's the fallback RequireSupabase
 // itself renders below, tiny, and needed before any lazy chunk could resolve.
@@ -213,31 +213,41 @@ function AppRoutes() {
         />
 
         <Route path="/dashboard" element={<Protected><DashboardPage /></Protected>} />
-        <Route path="/events/:eventId/edit" element={<EventRoute permission="edit_event"><EventEditorPage /></EventRoute>} />
-        <Route path="/events/:eventId/overview" element={<EventRoute permission="overview"><OverviewPage /></EventRoute>} />
-        <Route path="/events/:eventId/manage" element={<EventRoute permission="registrations"><RegistrationsPage /></EventRoute>} />
-        <Route path="/events/:eventId/checkin" element={<EventRoute permission="checkin"><CheckInManagePage /></EventRoute>} />
-        <Route path="/events/:eventId/brackets" element={<EventRoute permission="brackets"><BracketsPage /></EventRoute>} />
-        <Route
-          path="/events/:eventId/matchlist"
-          element={
-            <EventRoute permission="matchlist">
-              <OfflineSyncProvider>
-                <MatchListPage />
-              </OfflineSyncProvider>
-            </EventRoute>
-          }
-        />
-        <Route path="/events/:eventId/preview" element={<EventRoute permission="preview"><PreviewSetupPage /></EventRoute>} />
+        {/* One EventAccessProvider shared by every /events/:eventId/* organizer
+            page (via EventAccessLayout + Outlet) instead of each page
+            mounting its own and re-fetching the event/staff row on every
+            sidebar click — see EventAccessContext.jsx for the fetch itself. */}
+        <Route path="/events/:eventId" element={<EventAccessLayout />}>
+          <Route index element={<EventIndexRedirect />} />
+          <Route path="edit" element={<RequireEventPermission permission="edit_event"><EventEditorPage /></RequireEventPermission>} />
+          <Route path="overview" element={<RequireEventPermission permission="overview"><OverviewPage /></RequireEventPermission>} />
+          <Route path="manage" element={<RequireEventPermission permission="registrations"><RegistrationsPage /></RequireEventPermission>} />
+          <Route path="checkin" element={<RequireEventPermission permission="checkin"><CheckInManagePage /></RequireEventPermission>} />
+          <Route path="brackets" element={<RequireEventPermission permission="brackets"><BracketsPage /></RequireEventPermission>} />
+          <Route
+            path="matchlist"
+            element={
+              <RequireEventPermission permission="matchlist">
+                <OfflineSyncProvider>
+                  <MatchListPage />
+                </OfflineSyncProvider>
+              </RequireEventPermission>
+            }
+          />
+          <Route path="preview" element={<RequireEventPermission permission="preview"><PreviewSetupPage /></RequireEventPermission>} />
+          <Route path="umpires" element={<RequireEventPermission permission="umpires"><UmpiresPage /></RequireEventPermission>} />
+          <Route path="sponsors" element={<RequireEventPermission permission="sponsors"><SponsorsPage /></RequireEventPermission>} />
+          <Route path="accounting" element={<RequireEventPermission permission="accounting"><AccountingPage /></RequireEventPermission>} />
+          <Route path="settings" element={<RequireEventPermission permission="settings"><SettingsPage /></RequireEventPermission>} />
+          <Route path="team" element={<RequireEventPermission ownerOnly><TeamPage /></RequireEventPermission>} />
+        </Route>
         {/* Public on purpose: players land here straight from the check-in
             flow with no session at all, and it's spectator-facing anyway (no
-            PII — same data already shown on a venue TV). */}
+            PII — same data already shown on a venue TV). Stays outside
+            EventAccessLayout — no auth/access check at all. Safe as a
+            top-level sibling: the nested "preview" child route above has no
+            splat, so it can't swallow /events/:eventId/preview/:categoryId. */}
         <Route path="/events/:eventId/preview/:categoryId" element={<RequireSupabase><PreviewDisplayPage /></RequireSupabase>} />
-        <Route path="/events/:eventId/umpires" element={<EventRoute permission="umpires"><UmpiresPage /></EventRoute>} />
-        <Route path="/events/:eventId/sponsors" element={<EventRoute permission="sponsors"><SponsorsPage /></EventRoute>} />
-        <Route path="/events/:eventId/accounting" element={<EventRoute permission="accounting"><AccountingPage /></EventRoute>} />
-        <Route path="/events/:eventId/settings" element={<EventRoute permission="settings"><SettingsPage /></EventRoute>} />
-        <Route path="/events/:eventId/team" element={<EventRoute ownerOnly><TeamPage /></EventRoute>} />
 
         <Route path="/e/:slug" element={<RequireSupabase><PublicEventPage /></RequireSupabase>} />
         <Route path="/e/:slug/register" element={<RequireSupabase><RegisterPage /></RequireSupabase>} />

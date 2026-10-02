@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Activity, CheckCircle2, Gavel, LayoutGrid, Shuffle, Trophy, UserCog, Users } from 'lucide-react';
-import { getEventById, listCategories, listRegistrations } from '../../../data/eventsApi';
+import { listCategories, listRegistrations } from '../../../data/eventsApi';
 import { useToast } from '../../../context/ToastContext';
 import { useEventAccess } from '../../../context/EventAccessContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
@@ -42,9 +42,9 @@ export default function OverviewPage() {
   const { eventId } = useParams();
   const navigate = useNavigate();
   const { pushToast } = useToast();
-  const { can } = useEventAccess();
+  const { can, event } = useEventAccess();
   const canSeeRegistrations = can('registrations');
-  const [event, setEvent] = useState(null);
+  const [loaded, setLoaded] = useState(false);
   const [categories, setCategories] = useState([]);
   const [registrations, setRegistrations] = useState([]);
 
@@ -52,11 +52,11 @@ export default function OverviewPage() {
     // RLS would silently return 0 rows for a staffer without the
     // Registrations toggle — skip the call entirely rather than rendering
     // that as a misleading "0 players".
-    Promise.all([getEventById(eventId), listCategories(eventId), canSeeRegistrations ? listRegistrations(eventId) : Promise.resolve([])])
-      .then(([ev, cats, regs]) => {
-        setEvent(ev);
+    Promise.all([listCategories(eventId), canSeeRegistrations ? listRegistrations(eventId) : Promise.resolve([])])
+      .then(([cats, regs]) => {
         setCategories(cats);
         setRegistrations(regs);
+        setLoaded(true);
       })
       .catch((e) => pushToast(e.message, 'error'));
   }, [eventId, pushToast, canSeeRegistrations]);
@@ -74,7 +74,7 @@ export default function OverviewPage() {
         {event && <StatusBadge status={event.status} />}
       </div>
 
-      {!event ? (
+      {!loaded ? (
         <div className="py-16 text-center text-sm text-ink-400">Loading…</div>
       ) : (
         <div className="flex flex-col gap-6">

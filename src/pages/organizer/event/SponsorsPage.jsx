@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Award, Pencil, Plus, Trash2 } from 'lucide-react';
-import { createSponsor, deleteSponsor, getEventById, getEventMediaUrl, listSponsors, updateSponsor } from '../../../data/eventsApi';
+import { createSponsor, deleteSponsor, getEventMediaUrl, listSponsors, updateSponsor } from '../../../data/eventsApi';
 import { SPONSOR_TIERS } from '../../../data/constants';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
+import { useEventAccess } from '../../../context/EventAccessContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import SponsorFormModal from '../../../components/organizer/SponsorFormModal';
 
@@ -39,8 +40,8 @@ export default function SponsorsPage() {
   const { eventId } = useParams();
   const { pushToast } = useToast();
   const confirm = useConfirm();
+  const { event } = useEventAccess();
 
-  const [event, setEvent] = useState(null);
   const [sponsors, setSponsors] = useState(null);
   const [sponsorModal, setSponsorModal] = useState(null); // 'new' | { sponsor } | null
 
@@ -48,9 +49,7 @@ export default function SponsorsPage() {
 
   const reload = useCallback(async () => {
     try {
-      const [ev, sponsorsData] = await Promise.all([getEventById(eventId), listSponsors(eventId)]);
-      setEvent(ev);
-      setSponsors(sponsorsData);
+      setSponsors(await listSponsors(eventId));
     } catch (e) {
       pushToast(e.message, 'error');
     }

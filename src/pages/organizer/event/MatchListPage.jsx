@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ChevronDown, FileText, Lock, ListOrdered, Pencil, Printer, Radio, Sparkles, Timer, Trash2, Trophy } from 'lucide-react';
-import { getEventById, listCategories, listUmpires } from '../../../data/eventsApi';
+import { listCategories, listUmpires } from '../../../data/eventsApi';
 import {
   generateRoundRobinMatchList,
   generateSingleEliminationRound1,
@@ -28,12 +28,10 @@ import MatchlistPreviewModal from '../../../components/organizer/MatchlistPrevie
 import RoundRobinScoreSheets from '../../../components/organizer/RoundRobinScoreSheets';
 import BlankScoreSheets from '../../../components/organizer/BlankScoreSheets';
 import {
-  cacheEvent,
   cacheCategories,
   cacheUmpires,
   cacheBrackets,
   cacheMatches,
-  getCachedEvent,
   getCachedCategories,
   getCachedUmpires,
   getCachedBrackets,
@@ -66,11 +64,11 @@ export default function MatchListPage() {
   const { eventId } = useParams();
   const { pushToast } = useToast();
   const confirm = useConfirm();
-  const { can } = useEventAccess();
+  const { can, event } = useEventAccess();
   const { enqueueWrite } = useOfflineSync();
   const now = useNow(1000);
 
-  const [event, setEvent] = useState(null);
+  const [loaded, setLoaded] = useState(false);
   const [categories, setCategories] = useState([]);
   const [umpires, setUmpires] = useState([]);
   const [activeCatIdx, setActiveCatIdx] = useState(0);
@@ -97,12 +95,11 @@ export default function MatchListPage() {
   const [roundOverrides, setRoundOverrides] = useState({});
 
   useEffect(() => {
-    Promise.all([getEventById(eventId), listCategories(eventId), listUmpires(eventId)])
-      .then(([ev, cats, ump]) => {
-        setEvent(ev);
+    Promise.all([listCategories(eventId), listUmpires(eventId)])
+      .then(([cats, ump]) => {
         setCategories(cats);
         setUmpires(ump);
-        cacheEvent(ev);
+        setLoaded(true);
         cacheCategories(eventId, cats);
         cacheUmpires(eventId, ump);
       })
@@ -111,16 +108,16 @@ export default function MatchListPage() {
         // event's data looked like the last time it loaded successfully,
         // rather than leaving the page stuck on "Loading…" forever — this
         // is the one thing that has to work for a referee to keep scoring
-        // with no signal at all.
-        const cachedEvent = await getCachedEvent(eventId);
-        if (!cachedEvent) {
+        // with no signal at all. (The event itself is primed into this same
+        // cache by EventAccessProvider, which already fell back to it too.)
+        const [cachedCats, cachedUmp] = await Promise.all([getCachedCategories(eventId), getCachedUmpires(eventId)]);
+        if (cachedCats.length === 0) {
           pushToast(e.message, 'error');
           return;
         }
-        const [cachedCats, cachedUmp] = await Promise.all([getCachedCategories(eventId), getCachedUmpires(eventId)]);
-        setEvent(cachedEvent);
         setCategories(cachedCats);
         setUmpires(cachedUmp);
+        setLoaded(true);
       });
   }, [eventId, pushToast]);
 
@@ -506,7 +503,7 @@ export default function MatchListPage() {
         </div>
       )}
 
-      {!event ? (
+      {!loaded ? (
         <div className="py-16 text-center text-sm text-ink-400">Loading…</div>
       ) : categories.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-ink-200 bg-white py-12 text-center text-sm text-ink-400">

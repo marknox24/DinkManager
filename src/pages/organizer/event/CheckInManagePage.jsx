@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { CheckCircle2, Circle, Search, UserCheck, Users, X } from 'lucide-react';
-import { checkInPlayer, expireCheckin, getEventById, listCategories, listRegistrations } from '../../../data/eventsApi';
+import { checkInPlayer, expireCheckin, listCategories, listRegistrations } from '../../../data/eventsApi';
 import { useToast } from '../../../context/ToastContext';
+import { useEventAccess } from '../../../context/EventAccessContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import EventCheckinQr from '../../../components/organizer/EventCheckinQr';
 
@@ -54,18 +55,19 @@ function flattenApprovedPlayers(registrations, categories) {
 export default function CheckInManagePage() {
   const { eventId } = useParams();
   const { pushToast } = useToast();
-  const [event, setEvent] = useState(null);
+  const { event } = useEventAccess();
   const [categories, setCategories] = useState([]);
   const [registrations, setRegistrations] = useState([]);
+  const [loaded, setLoaded] = useState(false);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
 
   const reload = useCallback(async () => {
     try {
-      const [ev, cats, regs] = await Promise.all([getEventById(eventId), listCategories(eventId), listRegistrations(eventId)]);
-      setEvent(ev);
+      const [cats, regs] = await Promise.all([listCategories(eventId), listRegistrations(eventId)]);
       setCategories(cats);
       setRegistrations(regs);
+      setLoaded(true);
     } catch (e) {
       pushToast(e.message, 'error');
     }
@@ -126,7 +128,7 @@ export default function CheckInManagePage() {
         {event?.slug && <EventCheckinQr eventName={event.name} checkinUrl={`${window.location.origin}/e/${event.slug}/checkin`} />}
       </div>
 
-      {!event ? (
+      {!loaded ? (
         <div className="py-16 text-center text-sm text-ink-400">Loading…</div>
       ) : (
         <>

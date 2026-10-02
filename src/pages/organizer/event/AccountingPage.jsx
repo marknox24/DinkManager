@@ -6,7 +6,6 @@ import {
   createExpense,
   deleteEarning,
   deleteExpense,
-  getEventById,
   getRegistrationEarnings,
   listEarnings,
   listExpenses,
@@ -17,6 +16,7 @@ import {
 } from '../../../data/eventsApi';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
+import { useEventAccess } from '../../../context/EventAccessContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import ExpenseFormModal from '../../../components/organizer/ExpenseFormModal';
 import EarningFormModal from '../../../components/organizer/EarningFormModal';
@@ -61,8 +61,8 @@ export default function AccountingPage() {
   const { eventId } = useParams();
   const { pushToast } = useToast();
   const confirm = useConfirm();
+  const { event, setEvent } = useEventAccess();
 
-  const [event, setEvent] = useState(null);
   const [expenses, setExpenses] = useState(null);
   const [earnings, setEarnings] = useState(null);
   const [registrationEarnings, setRegistrationEarnings] = useState([]);
@@ -84,14 +84,12 @@ export default function AccountingPage() {
 
   const reload = useCallback(async () => {
     try {
-      const [ev, exp, earn, regEarn, sponsorsData] = await Promise.all([
-        getEventById(eventId),
+      const [exp, earn, regEarn, sponsorsData] = await Promise.all([
         listExpenses(eventId),
         listEarnings(eventId),
         getRegistrationEarnings(eventId),
         listSponsors(eventId),
       ]);
-      setEvent(ev);
       setExpenses(exp);
       setEarnings(earn);
       setRegistrationEarnings(regEarn);

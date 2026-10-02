@@ -11,7 +11,7 @@ import FormField, { inputClass } from '../../../components/ui/FormField';
 import { useAuth } from '../../../context/AuthContext';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
-import { getEventById } from '../../../data/eventsApi';
+import { useEventAccess } from '../../../context/EventAccessContext';
 import { listEventStaff, removeEventStaff } from '../../../data/staffApi';
 import { DEFAULT_PERMISSIONS, EVENT_PERMISSIONS } from '../../../data/permissions';
 import { daysLeftLabel, generatePassword, generateUsername } from '../../../utils/tempAccess';
@@ -238,16 +238,14 @@ function StaffList({ eventId, staffList, onEdit, onManageLogin, onRemoved }) {
 export default function TeamPage() {
   const { eventId } = useParams();
   const { pushToast } = useToast();
-  const [event, setEvent] = useState(null);
+  const { event } = useEventAccess();
   const [staffList, setStaffList] = useState(null);
   const [editing, setEditing] = useState(null);
   const [managingLogin, setManagingLogin] = useState(null);
 
   const reload = useCallback(async () => {
     try {
-      const [ev, staff] = await Promise.all([getEventById(eventId), listEventStaff(eventId)]);
-      setEvent(ev);
-      setStaffList(staff);
+      setStaffList(await listEventStaff(eventId));
     } catch (e) {
       pushToast(e.message, 'error');
     }

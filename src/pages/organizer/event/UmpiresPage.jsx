@@ -1,27 +1,25 @@
 import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { Check, Gavel, Pencil, Plus, Trash2, X } from 'lucide-react';
-import { createUmpire, deleteUmpire, getEventById, listUmpires, updateUmpire } from '../../../data/eventsApi';
+import { createUmpire, deleteUmpire, listUmpires, updateUmpire } from '../../../data/eventsApi';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
+import { useEventAccess } from '../../../context/EventAccessContext';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 
 export default function UmpiresPage() {
   const { eventId } = useParams();
   const { pushToast } = useToast();
   const confirm = useConfirm();
-  const [event, setEvent] = useState(null);
+  const { event } = useEventAccess();
   const [umpires, setUmpires] = useState([]);
   const [name, setName] = useState('');
   const [editingId, setEditingId] = useState(null);
   const [editingName, setEditingName] = useState('');
 
   useEffect(() => {
-    Promise.all([getEventById(eventId), listUmpires(eventId)])
-      .then(([ev, ump]) => {
-        setEvent(ev);
-        setUmpires(ump);
-      })
+    listUmpires(eventId)
+      .then(setUmpires)
       .catch((e) => pushToast(e.message, 'error'));
   }, [eventId, pushToast]);
 

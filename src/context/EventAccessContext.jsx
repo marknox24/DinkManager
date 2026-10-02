@@ -1,8 +1,9 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { useAuth } from './AuthContext';
 import { getEventById } from '../data/eventsApi';
 import { getMyStaffRow } from '../data/staffApi';
 import { EVENT_PERMISSIONS } from '../data/permissions';
+import { cacheEvent, getCachedEvent } from '../hooks/useOfflineCache';
 
 const EventAccessContext = createContext(null);
 
@@ -12,14 +13,17 @@ export function useEventAccess() {
   return ctx;
 }
 
-// Fetches the event's owner and (if the current user isn't the owner) their
-// staff permission row once per event mount, then exposes a single `can()`
-// check so every gated call site is one expression. A context rather than a
-// bare hook because both EventWorkspaceLayout and the page it wraps need
-// this data, and a hook alone would fetch it twice.
+// Fetches the event itself, its owner, and (if the current user isn't the
+// owner) their staff permission row once per event mount, then exposes a
+// single `can()` check plus the event object so every page under this
+// provider reads from here instead of each independently re-fetching the
+// same row. A context rather than a bare hook because every page under
+// EventWorkspaceRoute needs this data, and a hook alone would fetch it once
+// per page instead of once per event.
 export function EventAccessProvider({ eventId, children }) {
   const { user } = useAuth();
   const [loading, setLoading] = useState(true);
+  const [event, setEvent] = useState(null);
   const [organizerId, setOrganizerId] = useState(null);
   const [staffRow, setStaffRow] = useState(null);
 
@@ -30,35 +34,55 @@ export function EventAccessProvider({ eventId, children }) {
     function fetchAccess() {
       setLoading(true);
       Promise.all([getEventById(eventId), getMyStaffRow(eventId, user.id)])
-        .then(([event, staff]) => {
+        .then(([fetchedEvent, staff]) => {
           if (cancelled) return;
-          setOrganizerId(event.organizer_id);
+          setEvent(fetchedEvent);
+          setOrganizerId(fetchedEvent.organizer_id);
           setStaffRow(staff);
+          cacheEvent(fetchedEvent).catch(() => {});
           try {
-            localStorage.setItem(cacheKey, JSON.stringify({ organizerId: event.organizer_id, staffRow: staff, cachedAt: Date.now() }));
+            localStorage.setItem(cacheKey, JSON.stringify({ organizerId: fetchedEvent.organizer_id, staffRow: staff, cachedAt: Date.now() }));
           } catch {
             // Storage full/unavailable — the in-memory access state is still correct.
           }
         })
-        .catch(() => {
+        .catch(async (err) => {
           if (cancelled) return;
+          // .single() found no visible row — access was revoked or the
+          // event was deleted. A stale cache here would wrongly let a
+          // de-staffed user keep seeing this event, so clear it and let
+          // EventAccessLayout's gate redirect to /dashboard.
+          if (err?.code === 'PGRST116') {
+            try {
+              localStorage.removeItem(cacheKey);
+            } catch {
+              // Best-effort only.
+            }
+            setEvent(null);
+            setOrganizerId(null);
+            setStaffRow(null);
+            return;
+          }
           // Offline or network error: a stale-but-real permission set is
-          // always safer than a false "no access" redirect (EventRoute
-          // sends anyone without owner/staff access to /dashboard), so
-          // restore the last-known-good access from cache instead of
-          // nulling it out — only null when there's truly no prior cache
-          // (first-ever visit with genuinely no access).
+          // always safer than a false "no access" redirect, so restore the
+          // last-known-good access from cache instead of nulling it out —
+          // only null when there's truly no prior cache (first-ever visit
+          // with genuinely no access).
           try {
             const cached = localStorage.getItem(cacheKey);
             if (cached) {
               const { organizerId: cachedOrganizerId, staffRow: cachedStaffRow } = JSON.parse(cached);
+              const cachedEvent = await getCachedEvent(eventId).catch(() => null);
+              if (cancelled) return;
               setOrganizerId(cachedOrganizerId);
               setStaffRow(cachedStaffRow);
+              setEvent((prev) => prev ?? cachedEvent ?? null);
               return;
             }
           } catch {
             // Malformed/unavailable storage — fall through to nulling below.
           }
+          setEvent(null);
           setOrganizerId(null);
           setStaffRow(null);
         })
@@ -77,7 +101,22 @@ export function EventAccessProvider({ eventId, children }) {
     };
   }, [eventId, user.id]);
 
-  const value = useMemo(() => {
+  // Lets a page that just saved changes (EventEditorPage, SettingsPage,
+  // AccountingPage) push the result into this shared cache immediately, so
+  // other event pages reached right after show the fresh data instead of
+  // stale pre-edit values. Re-fetches from the server instead of trusting a
+  // local patch, so a failed/partial save can't propagate a wrong value.
+  const refreshEvent = useCallback(async () => {
+    const ev = await getEventById(eventId);
+    setEvent(ev);
+    cacheEvent(ev).catch(() => {});
+    return ev;
+  }, [eventId]);
+
+  // accessValue changes only when access itself changes (not on every event
+  // edit), so pages that only read `can()`/`isOwner` don't re-render on
+  // every keystroke-driven optimistic event update elsewhere in the tree.
+  const accessValue = useMemo(() => {
     const isOwner = Boolean(organizerId && organizerId === user.id);
     const isStaff = Boolean(staffRow);
     // Mirrors has_event_permission()'s expiry gate in schema.sql — checked
@@ -97,8 +136,13 @@ export function EventAccessProvider({ eventId, children }) {
     const allowedNavIds = EVENT_PERMISSIONS.filter((p) => p.navId && can(p.key)).map((p) => p.navId);
     const firstAllowedNavId = isOwner ? 'overview' : allowedNavIds[0] || null;
 
-    return { loading, isOwner, isStaff, staffRow, can, allowedNavIds, firstAllowedNavId, accessExpired };
-  }, [loading, organizerId, staffRow, user.id]);
+    return { isOwner, isStaff, staffRow, can, allowedNavIds, firstAllowedNavId, accessExpired };
+  }, [organizerId, staffRow, user.id]);
+
+  const value = useMemo(
+    () => ({ ...accessValue, loading, event, setEvent, refreshEvent }),
+    [accessValue, loading, event, refreshEvent]
+  );
 
   return <EventAccessContext.Provider value={value}>{children}</EventAccessContext.Provider>;
 }

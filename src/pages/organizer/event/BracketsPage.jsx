@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { AlertTriangle, ArrowRightLeft, CheckCircle2, ChevronDown, Crown, Download, History, ListChecks, Radio, RefreshCw, Scale, Settings2, Shuffle, Timer, UserPlus, X } from 'lucide-react';
-import { getEventById, listCategories, listRegistrations } from '../../../data/eventsApi';
+import { listCategories, listRegistrations } from '../../../data/eventsApi';
 import {
   cancelLiveMatch,
   deleteBracketsForCategory,
@@ -329,10 +329,10 @@ export default function BracketsPage() {
   const { eventId } = useParams();
   const { pushToast } = useToast();
   const confirm = useConfirm();
-  const { can } = useEventAccess();
+  const { can, event } = useEventAccess();
   const canRedraw = can('redraw_brackets');
 
-  const [event, setEvent] = useState(null);
+  const [loaded, setLoaded] = useState(false);
   const [categories, setCategories] = useState([]);
   const [registrations, setRegistrations] = useState([]);
   const [activeCatIdx, setActiveCatIdx] = useState(0);
@@ -367,10 +367,10 @@ export default function BracketsPage() {
   const now = useNow(1000);
 
   useEffect(() => {
-    Promise.all([getEventById(eventId), listCategories(eventId)])
-      .then(([ev, cats]) => {
-        setEvent(ev);
+    listCategories(eventId)
+      .then((cats) => {
         setCategories(cats);
+        setLoaded(true);
       })
       .catch((e) => pushToast(e.message, 'error'));
   }, [eventId, pushToast]);
@@ -872,7 +872,7 @@ export default function BracketsPage() {
         </div>
       </div>
 
-      {!event ? (
+      {!loaded ? (
         <div className="py-16 text-center text-sm text-ink-400">Loading…</div>
       ) : categories.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-ink-200 bg-white py-12 text-center text-sm text-ink-400">

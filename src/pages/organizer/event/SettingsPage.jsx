@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, Check, Coins, Copy, Files, LayoutGrid, Lock, MessageCircleQuestion, RefreshCw, Send, Shuffle, Sparkles, Trash2 } from 'lucide-react';
-import { deleteEvent, duplicateEvent, getEventById, getPendingPlanRequestForEvent, regenerateShareToken, setEventVisibility, updateEvent } from '../../../data/eventsApi';
+import { deleteEvent, duplicateEvent, getPendingPlanRequestForEvent, regenerateShareToken, setEventVisibility, updateEvent } from '../../../data/eventsApi';
 import { addChangeRequestMessage, listChangeRequestMessages, listMyChangeRequests } from '../../../data/changeRequestsApi';
 import { CURRENCIES, COURT_TYPES } from '../../../data/constants';
 import { PLAN_LIMITS } from '../../../data/plans';
@@ -184,14 +184,18 @@ export default function SettingsPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { pushToast } = useToast();
   const confirm = useConfirm();
-  const { isOwner } = useEventAccess();
+  const { isOwner, event, setEvent } = useEventAccess();
   const { profile } = useAuth();
-  const [event, setEvent] = useState(null);
-  const [numCourts, setNumCourts] = useState('');
-  const [duration, setDuration] = useState('');
-  const [courtType, setCourtType] = useState('');
+  // Lazy initializers: `event` is already populated by the time this page
+  // renders (EventAccessBoundary blocks until it is), so these seed from the
+  // real event on first render instead of a placeholder that gets replaced
+  // a tick later.
+  const [numCourts, setNumCourts] = useState(() => usableCourts(event));
+  const [duration, setDuration] = useState(() => event.match_duration_minutes ?? 18);
+  const [courtType, setCourtType] = useState(() => event.court_type || '');
   const [copied, setCopied] = useState(false);
   const [pendingRequest, setPendingRequest] = useState(null);
+  const [pendingLoaded, setPendingLoaded] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [duplicating, setDuplicating] = useState(false);
   const [contactAdminOpen, setContactAdminOpen] = useState(false);
@@ -205,13 +209,10 @@ export default function SettingsPage() {
   const reloadPendingRequest = () => getPendingPlanRequestForEvent(eventId).then(setPendingRequest);
 
   useEffect(() => {
-    Promise.all([getEventById(eventId), getPendingPlanRequestForEvent(eventId)])
-      .then(([ev, pending]) => {
-        setEvent(ev);
-        setNumCourts(usableCourts(ev));
-        setDuration(ev.match_duration_minutes ?? 18);
-        setCourtType(ev.court_type || '');
+    getPendingPlanRequestForEvent(eventId)
+      .then((pending) => {
         setPendingRequest(pending);
+        setPendingLoaded(true);
       })
       .catch((e) => pushToast(e.message, 'error'));
   }, [eventId, pushToast]);
@@ -220,9 +221,12 @@ export default function SettingsPage() {
   // dialogs land here already pointed at the Upgrade Plan modal, instead of
   // dropping the organizer on a page they then have to hunt around on.
   // An upgrade already awaiting payment review isn't opened again — that
-  // would let the organizer submit a second request (and pay twice).
+  // would let the organizer submit a second request (and pay twice). Gated
+  // on `pendingLoaded` rather than `event` (now available immediately from
+  // context) so the modal can't flash open before we actually know whether
+  // a request is already pending.
   useEffect(() => {
-    if (searchParams.get('upgrade') === '1' && event && !isLocked) {
+    if (searchParams.get('upgrade') === '1' && pendingLoaded && !isLocked) {
       if (pendingRequest) pushToast('An upgrade for this event is already pending review', 'info');
       else setUpgradeModalOpen(true);
       setSearchParams((prev) => {
@@ -231,7 +235,7 @@ export default function SettingsPage() {
         return next;
       }, { replace: true });
     }
-  }, [searchParams, setSearchParams, event, isLocked, pendingRequest, pushToast]);
+  }, [searchParams, setSearchParams, pendingLoaded, isLocked, pendingRequest, pushToast]);
 
   const save = async () => {
     let n = parseInt(numCourts, 10);
@@ -350,7 +354,7 @@ export default function SettingsPage() {
         <p className="text-sm text-ink-500">Court capacity, match timing and danger zone</p>
       </div>
 
-      {!event ? (
+      {!pendingLoaded ? (
         <div className="py-16 text-center text-sm text-ink-400">Loading…</div>
       ) : (
         <div className="mx-auto flex max-w-2xl flex-col gap-5">
