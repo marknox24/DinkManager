@@ -25,6 +25,7 @@ import {
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
 import { useEventAccess } from '../../../context/EventAccessContext';
+import { cacheBrackets, getCachedBrackets } from '../../../hooks/useOfflineCache';
 import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLayout';
 import RandomizerModal from '../../../components/organizer/RandomizerModal';
 import AddPlayerToBracketModal from '../../../components/organizer/AddPlayerToBracketModal';
@@ -346,6 +347,11 @@ export default function BracketsPage() {
   const [bracketsListOpen, setBracketsListOpen] = useState(false);
   const [loadingBrackets, setLoadingBrackets] = useState(false);
   const [bracketsError, setBracketsError] = useState(null);
+  // True when `brackets` is showing the last-known IndexedDB cache rather
+  // than a fresh load — the live fetch failed (after retries) but there was
+  // prior data to fall back to, so the panel stays usable instead of
+  // blanking to a dead-end error (see loadBrackets below).
+  const [bracketsStale, setBracketsStale] = useState(false);
   const [categoryMatches, setCategoryMatches] = useState([]);
   const [regenerating, setRegenerating] = useState(false);
   // Bracket balancing: the open Move dialog ({ team, fromBracket,
@@ -414,6 +420,7 @@ export default function BracketsPage() {
     setChanges([]);
     setRegistrations([]);
     setBracketsError(null);
+    setBracketsStale(false);
     setLoadingBrackets(true);
     setRandomizedNotice(false);
     setCapacityInput(null);
@@ -427,9 +434,27 @@ export default function BracketsPage() {
     if (!activeCategory) return;
     const catId = activeCategory.id;
     setLoadingBrackets(true);
-    try {
-      const [bkts, regs] = await Promise.all([listBracketsForCategory(catId), listRegistrations(eventId)]);
-      if (activeCatRef.current !== catId) return;
+    // Transient Supabase connection-pool failures (measured during an active
+    // platform incident at roughly 1-in-6 reads) clear within a couple
+    // seconds — retrying silently here means the organizer never sees most
+    // of them as an error at all, instead of requiring a manual Retry click
+    // for something that would have worked on the very next attempt.
+    const RETRY_DELAYS_MS = [600, 1200];
+    let lastError = null;
+    let bkts = null;
+    let regs = null;
+    for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+      try {
+        [bkts, regs] = await Promise.all([listBracketsForCategory(catId), listRegistrations(eventId)]);
+        lastError = null;
+        break;
+      } catch (e) {
+        lastError = e;
+        if (attempt < RETRY_DELAYS_MS.length) await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]));
+      }
+    }
+    if (activeCatRef.current !== catId) return;
+    if (!lastError) {
       // The knockout ladder (if any) lives in its own 'playoff' bracket and
       // is played out from Match List instead — see PlayoffStagesEditor /
       // MatchListPage's Playoffs panel. Only pool brackets show here.
@@ -442,16 +467,29 @@ export default function BracketsPage() {
       setExpandedIds(new Set(poolBrackets.map((b) => b.id)));
       setRegistrations(regs.filter((r) => r.category_id === catId && r.status === 'approved'));
       setBracketsError(null);
-    } catch (e) {
-      if (activeCatRef.current !== catId) return;
-      // Nothing from another category is showing (see selectCategory), so
-      // show why instead of an empty "no brackets drawn yet" state.
-      setBrackets([]);
-      setBracketData({});
-      setBracketsError(e.message);
-    } finally {
-      if (activeCatRef.current === catId) setLoadingBrackets(false);
+      setBracketsStale(false);
+      cacheBrackets(catId, poolBrackets).catch(() => {});
+    } else {
+      // Every retry failed — fall back to the last-known data for this
+      // category (same IndexedDB cache MatchListPage already relies on)
+      // instead of wiping the panel to a dead end. Only when there's
+      // nothing to fall back to (this category has never loaded
+      // successfully on this device) does the blocking error UI show.
+      const cached = await getCachedBrackets(catId).catch(() => []);
+      const cachedPoolBrackets = cached.filter((b) => b.kind !== 'playoff');
+      if (cachedPoolBrackets.length > 0) {
+        setBrackets(cachedPoolBrackets);
+        setExpandedIds(new Set(cachedPoolBrackets.map((b) => b.id)));
+        setBracketsError(null);
+        setBracketsStale(true);
+      } else {
+        setBrackets([]);
+        setBracketData({});
+        setBracketsError(lastError.message);
+        setBracketsStale(false);
+      }
     }
+    if (activeCatRef.current === catId) setLoadingBrackets(false);
   }, [activeCategory, eventId]);
 
   useEffect(() => {
@@ -941,6 +979,16 @@ export default function BracketsPage() {
             </div>
           ) : (
             <>
+              {bracketsStale && (
+                <div className="flex items-center justify-between gap-3 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs font-semibold text-amber-800">
+                  <span className="flex items-center gap-2">
+                    <Radio size={13} className="shrink-0 animate-pulse" /> Showing the last data we had — couldn't reach the server for an update.
+                  </span>
+                  <button onClick={loadBrackets} className="shrink-0 rounded-full border border-amber-300 px-3 py-1 text-[11px] font-bold hover:bg-amber-100">
+                    Retry
+                  </button>
+                </div>
+              )}
               {randomizedNotice && (
                 <div className="flex items-start justify-between gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3">
                   <div className="flex items-start gap-2 text-sm text-emerald-800">
