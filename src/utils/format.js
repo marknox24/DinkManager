@@ -39,3 +39,14 @@ export function formatRelativeTime(dateString) {
   }
   return 'just now';
 }
+
+// Local-date key ("2026-10-02"), NOT toISOString().slice(0, 10): that is the
+// UTC date, which lands on the wrong day for anyone registering late in the
+// evening ahead of (or early morning behind) UTC. Callers bucket timestamps
+// with this same helper so the picker and the filter always agree.
+export function toLocalYmd(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}

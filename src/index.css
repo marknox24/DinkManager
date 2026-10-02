@@ -113,6 +113,16 @@ body {
   animation: modal-in 0.2s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/* Small anchored popovers (date picker): scales in from the trigger corner
+   (set transform-origin inline), not from center. */
+@keyframes popover-in {
+  from { opacity: 0; transform: scale(0.97); }
+  to { opacity: 1; transform: scale(1); }
+}
+.animate-popover-in {
+  animation: popover-in 0.15s cubic-bezier(0.23, 1, 0.32, 1);
+}
+
 @keyframes fade-in {
   from { opacity: 0; }
   to { opacity: 1; }
