@@ -105,12 +105,20 @@ export default function PreviewDisplayPage() {
 
   // Brackets/teams/matches/live courts — the actual poll cadence.
   const loadLive = useCallback(async () => {
+    // One round trip via the snapshot function when it's deployed and
+    // healthy; falls back to the old multi-query path — both when
+    // getPreviewLiveSnapshot returns null (the migration isn't deployed
+    // yet) and when it throws for any other reason (e.g. a statement
+    // timeout under load). A TV/kiosk display has no one to retry it, so a
+    // single slow poll of the fast path shouldn't blank out data the slower
+    // path can still deliver.
+    let snapshot = null;
     try {
-      // One round trip via the snapshot function when it's deployed; falls
-      // back to the old multi-query path (getPreviewLiveSnapshot returns
-      // null) so this page works the same whether or not that migration has
-      // shipped yet — see getPreviewLiveSnapshot in bracketsApi.js.
-      const snapshot = await getPreviewLiveSnapshot(eventId, categoryId);
+      snapshot = await getPreviewLiveSnapshot(eventId, categoryId);
+    } catch {
+      snapshot = null;
+    }
+    try {
       if (snapshot) {
         setBrackets(snapshot.brackets);
         setTeams(snapshot.teams);
