@@ -176,6 +176,28 @@ export default function EventEditorPage() {
     }
   };
 
+  // A native date input fires onChange while the year is still being typed
+  // ("2" → "0002-10-24" → … → "2026-10-24"). Saving those intermediates
+  // once wrote year 0002 as an event's end date, which made the event look
+  // long-finished and tripped the 48-hour date lock before the typing was
+  // done. So only a complete, sane date is committed; anything else is left
+  // alone and the field snaps back to the saved value on blur.
+  const isSaneDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v) && Number(v.slice(0, 4)) >= 2000 && Number(v.slice(0, 4)) <= 2100;
+  const saveDate = (field, value, { optional = false } = {}) => {
+    if (!value) {
+      if (optional) saveField({ [field]: null });
+      return;
+    }
+    if (!isSaneDate(value)) return;
+    if (field === 'start_date' && event.end_date && value > event.end_date) return;
+    if (field === 'end_date' && event.start_date && value < event.start_date) return;
+    saveField({ [field]: value });
+  };
+  const revertDateIfUnsaved = (field) => (e) => {
+    const saved = event[field] || '';
+    if (e.target.value !== saved) e.target.value = saved;
+  };
+
   const togglePublish = async () => {
     if (!event.is_published) {
       if (categories.length === 0) {
@@ -603,26 +625,28 @@ export default function EventEditorPage() {
                 ) : (
                   <>
                     <FormField label="Start date">
-                      <input type="date" value={event.start_date || ''} onChange={(e) => saveField({ start_date: e.target.value })} className={inputClass} />
+                      <input type="date" defaultValue={event.start_date || ''} onChange={(e) => saveDate('start_date', e.target.value)} onBlur={revertDateIfUnsaved('start_date')} className={inputClass} />
                     </FormField>
                     <FormField label="End date">
-                      <input type="date" value={event.end_date || ''} onChange={(e) => saveField({ end_date: e.target.value })} className={inputClass} />
+                      <input type="date" defaultValue={event.end_date || ''} onChange={(e) => saveDate('end_date', e.target.value)} onBlur={revertDateIfUnsaved('end_date')} className={inputClass} />
                     </FormField>
                   </>
                 )}
                 <FormField label="Registration opens" hint="Optional — shown to players on the public page.">
                   <input
                     type="date"
-                    value={event.registration_open_date || ''}
-                    onChange={(e) => saveField({ registration_open_date: e.target.value || null })}
+                    defaultValue={event.registration_open_date || ''}
+                    onChange={(e) => saveDate('registration_open_date', e.target.value, { optional: true })}
+                    onBlur={revertDateIfUnsaved('registration_open_date')}
                     className={inputClass}
                   />
                 </FormField>
                 <FormField label="Registration closes" hint="Optional — shown to players on the public page.">
                   <input
                     type="date"
-                    value={event.registration_close_date || ''}
-                    onChange={(e) => saveField({ registration_close_date: e.target.value || null })}
+                    defaultValue={event.registration_close_date || ''}
+                    onChange={(e) => saveDate('registration_close_date', e.target.value, { optional: true })}
+                    onBlur={revertDateIfUnsaved('registration_close_date')}
                     className={inputClass}
                   />
                 </FormField>
