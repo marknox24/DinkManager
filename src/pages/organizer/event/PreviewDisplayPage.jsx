@@ -10,6 +10,20 @@ import {
   listMatchesForCategory,
   listTeamsForCategory,
 } from '../../../data/bracketsApi';
+import { isOnline } from '../../../lib/connectivity';
+import {
+  cacheBrackets,
+  cacheCategories,
+  cacheEvent,
+  cacheMatches,
+  cacheTeams,
+  getCachedBrackets,
+  getCachedCategories,
+  getCachedEvent,
+  getCachedLiveMatchesForEvent,
+  getCachedMatchesForCategory,
+  getCachedTeamsForBracket,
+} from '../../../hooks/useOfflineCache';
 import AutoCarousel from '../../../components/organizer/AutoCarousel';
 import SponsorBox from '../../../components/organizer/SponsorBox';
 import SponsorMarquee from '../../../components/organizer/SponsorMarquee';
@@ -73,10 +87,27 @@ export default function PreviewDisplayPage() {
   // Event/category/sponsors — rarely change mid-tournament, so this isn't
   // part of the fast poll (see poll() below for the cadence it actually
   // runs on).
+  // The same IndexedDB cache the organizer pages fill — so a preview opened
+  // in Offline mode (or on a dropped connection) still shows the event,
+  // courts and current matches instead of a blank screen.
+  const loadStaticFromCache = useCallback(async () => {
+    const [ev, cats] = await Promise.all([getCachedEvent(eventId).catch(() => null), getCachedCategories(eventId).catch(() => [])]);
+    const cat = cats.find((c) => c.id === categoryId) || null;
+    if (!ev || !cat) return false;
+    setEvent(ev);
+    setCategory(cat);
+    setPageState('ok');
+    setStale(true);
+    return true;
+  }, [eventId, categoryId]);
+
   const loadStatic = useCallback(async () => {
+    if (!isOnline() && (await loadStaticFromCache())) return true;
     try {
       const [ev, cats, sponsorsData] = await Promise.all([getEventById(eventId), listCategories(eventId), listSponsors(eventId)]);
       const cat = cats.find((c) => c.id === categoryId) || null;
+      cacheEvent(ev).catch(() => {});
+      cacheCategories(eventId, cats).catch(() => {});
       setEvent(ev);
       setCategory(cat);
       setSponsors(sponsorsData);
@@ -92,6 +123,8 @@ export default function PreviewDisplayPage() {
       // (schema.sql) hides the row entirely, so .single() reports "0 rows".
       if (e?.code === 'PGRST116') {
         setPageState('not_public');
+      } else if (await loadStaticFromCache()) {
+        return true;
       } else {
         // Only fall back to the full error screen if we've never had good
         // data — a transient blip once the display is already showing
@@ -101,10 +134,50 @@ export default function PreviewDisplayPage() {
       }
       return false;
     }
-  }, [eventId, categoryId]);
+  }, [eventId, categoryId, loadStaticFromCache]);
 
   // Brackets/teams/matches/live courts — the actual poll cadence.
+  const loadLiveFromCache = useCallback(async () => {
+    const bkts = await getCachedBrackets(categoryId);
+    const teamLists = await Promise.all(bkts.map((b) => getCachedTeamsForBracket(b.id)));
+    const [mts, live] = await Promise.all([getCachedMatchesForCategory(categoryId), getCachedLiveMatchesForEvent(eventId)]);
+    setBrackets(bkts);
+    setTeams(teamLists.flat());
+    setMatches(mts);
+    setLiveMatches(live);
+    setLastUpdated(new Date());
+  }, [eventId, categoryId]);
+
+  // Fire-and-forget: keeps what this screen last showed available offline
+  // (live matches are merged in by cacheMatches, teams per bracket).
+  const saveLiveToCache = useCallback(
+    (bkts, tms, mts, live) => {
+      cacheBrackets(categoryId, bkts).catch(() => {});
+      bkts.forEach((b) =>
+        cacheTeams(
+          b.id,
+          tms.filter((t) => t.bracket_id === b.id)
+        ).catch(() => {})
+      );
+      cacheMatches(eventId, categoryId, mts).catch(() => {});
+      cacheMatches(eventId, null, live).catch(() => {});
+    },
+    [eventId, categoryId]
+  );
+
   const loadLive = useCallback(async () => {
+    // Offline / forced Offline mode: read the local cache — no network
+    // attempt — so the courts keep showing the matches currently in play
+    // (including ones started or finished offline on this device).
+    if (!isOnline()) {
+      try {
+        await loadLiveFromCache();
+        setStale(true);
+      } catch {
+        setStale(true);
+      }
+      return;
+    }
     // One round trip via the snapshot function when it's deployed and
     // healthy; falls back to the old multi-query path — both when
     // getPreviewLiveSnapshot returns null (the migration isn't deployed
@@ -124,6 +197,7 @@ export default function PreviewDisplayPage() {
         setTeams(snapshot.teams);
         setMatches(snapshot.matches);
         setLiveMatches(snapshot.live);
+        saveLiveToCache(snapshot.brackets, snapshot.teams, snapshot.matches, snapshot.live);
       } else {
         const bkts = await listBracketsForCategory(categoryId);
         const [tms, mts, live] = await Promise.all([
@@ -135,13 +209,21 @@ export default function PreviewDisplayPage() {
         setTeams(tms);
         setMatches(mts);
         setLiveMatches(live);
+        saveLiveToCache(bkts, tms, mts, live);
       }
       setLastUpdated(new Date());
       setStale(false);
     } catch {
+      // Both live paths failed — show what this device last saw rather
+      // than leaving the courts empty.
+      try {
+        await loadLiveFromCache();
+      } catch {
+        // Nothing cached either; keep whatever is on screen.
+      }
       setStale(true);
     }
-  }, [eventId, categoryId]);
+  }, [eventId, categoryId, loadLiveFromCache, saveLiveToCache]);
 
   const poll = useCallback(async () => {
     if (inFlightRef.current) return;
