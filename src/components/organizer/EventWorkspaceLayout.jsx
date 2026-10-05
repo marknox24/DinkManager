@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { Award, Gavel, LayoutGrid, ListOrdered, Lock, LogOut, Menu, MonitorPlay, PencilLine, QrCode, Settings, Shuffle, UserCog, Users, Wallet, WifiOff, X } from 'lucide-react';
+import { Award, CalendarClock, Gavel, LayoutGrid, ListOrdered, Lock, LogOut, Menu, MonitorPlay, PencilLine, QrCode, Settings, Shuffle, UserCog, Users, Wallet, WifiOff, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useEventAccess } from '../../context/EventAccessContext';
@@ -14,6 +14,8 @@ const NAV_ITEMS = [
   { id: 'checkin', label: 'Check-in', icon: QrCode },
   { id: 'brackets', label: 'Brackets', icon: Shuffle },
   { id: 'matchlist', label: 'Match List', icon: ListOrdered },
+  // Read-only projection of the match list; shares the Match List permission.
+  { id: 'schedule', label: 'Match Schedule', icon: CalendarClock, permission: 'matchlist' },
   { id: 'preview', label: 'Preview Screen', icon: MonitorPlay },
   { id: 'sponsors', label: 'Sponsors', icon: Award },
   { id: 'accounting', label: 'Accounting', icon: Wallet },
@@ -53,7 +55,7 @@ export default function EventWorkspaceLayout({ event: eventProp, children }) {
   const eventName = event?.name;
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const visibleItems = NAV_ITEMS.filter((item) => (item.ownerOnly ? isOwner : can(permissionForNavId(item.id))));
+  const visibleItems = NAV_ITEMS.filter((item) => (item.ownerOnly ? isOwner : can(item.permission ?? permissionForNavId(item.id))));
   const activeId = NAV_ITEMS.find((item) => location.pathname.endsWith(`/${item.id}`))?.id || firstAllowedNavId || 'manage';
 
   const goTo = (id) => {

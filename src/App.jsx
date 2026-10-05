@@ -42,6 +42,7 @@ const RegistrationsPage = lazy(() => import('./pages/organizer/event/Registratio
 const CheckInManagePage = lazy(() => import('./pages/organizer/event/CheckInManagePage'));
 const BracketsPage = lazy(() => import('./pages/organizer/event/BracketsPage'));
 const MatchListPage = lazy(() => import('./pages/organizer/event/MatchListPage'));
+const MatchSchedulePage = lazy(() => import('./pages/organizer/event/MatchSchedulePage'));
 const PreviewSetupPage = lazy(() => import('./pages/organizer/event/PreviewSetupPage'));
 const PreviewDisplayPage = lazy(() => import('./pages/organizer/event/PreviewDisplayPage'));
 const UmpiresPage = lazy(() => import('./pages/organizer/event/UmpiresPage'));
@@ -224,6 +225,7 @@ function AppRoutes() {
           <Route path="checkin" element={<RequireEventPermission permission="checkin"><CheckInManagePage /></RequireEventPermission>} />
           <Route path="brackets" element={<RequireEventPermission permission="brackets"><BracketsPage /></RequireEventPermission>} />
           <Route path="matchlist" element={<RequireEventPermission permission="matchlist"><MatchListPage /></RequireEventPermission>} />
+          <Route path="schedule" element={<RequireEventPermission permission="matchlist"><MatchSchedulePage /></RequireEventPermission>} />
           <Route path="preview" element={<RequireEventPermission permission="preview"><PreviewSetupPage /></RequireEventPermission>} />
           <Route path="umpires" element={<RequireEventPermission permission="umpires"><UmpiresPage /></RequireEventPermission>} />
           <Route path="sponsors" element={<RequireEventPermission permission="sponsors"><SponsorsPage /></RequireEventPermission>} />

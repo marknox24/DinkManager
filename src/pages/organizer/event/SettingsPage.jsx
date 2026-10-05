@@ -193,6 +193,8 @@ export default function SettingsPage() {
   const [numCourts, setNumCourts] = useState(() => usableCourts(event));
   const [duration, setDuration] = useState(() => event.match_duration_minutes ?? 18);
   const [courtType, setCourtType] = useState(() => event.court_type || '');
+  const savedStartTime = (event.daily_start_time || '').slice(0, 5);
+  const [startTime, setStartTime] = useState(savedStartTime);
   const [copied, setCopied] = useState(false);
   const [pendingRequest, setPendingRequest] = useState(null);
   const [pendingLoaded, setPendingLoaded] = useState(false);
@@ -254,7 +256,11 @@ export default function SettingsPage() {
       return;
     }
     try {
-      const updated = await updateEvent(eventId, { num_courts: n, match_duration_minutes: d, court_type: courtType || null });
+      const payload = { num_courts: n, match_duration_minutes: d, court_type: courtType || null };
+      // Only sent when changed, so saving courts keeps working on a database
+      // that hasn't had the daily_start_time column added yet.
+      if (startTime !== savedStartTime) payload.daily_start_time = startTime || null;
+      const updated = await updateEvent(eventId, payload);
       setEvent(updated);
       pushToast('Court settings updated', 'success');
     } catch (e) {
@@ -453,6 +459,25 @@ export default function SettingsPage() {
                   onChange={(e) => setDuration(e.target.value)}
                   className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 sm:max-w-xs"
                 />
+              </div>
+              <div>
+                <label htmlFor="daily-start-time" className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-ink-500">
+                  Daily start time <span className="font-normal normal-case text-ink-400">— when the first match is planned; used for the estimated Match Schedule</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  <input
+                    id="daily-start-time"
+                    type="time"
+                    value={startTime}
+                    onChange={(e) => setStartTime(e.target.value)}
+                    className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 sm:max-w-xs"
+                  />
+                  {startTime && (
+                    <button type="button" onClick={() => setStartTime('')} className="text-xs font-bold text-ink-400 transition hover:text-ink-700">
+                      Clear
+                    </button>
+                  )}
+                </div>
               </div>
               <div>
                 <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-ink-500">Court type</label>

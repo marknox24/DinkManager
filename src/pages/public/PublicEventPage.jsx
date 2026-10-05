@@ -28,6 +28,7 @@ import Tabs from '../../components/ui/Tabs';
 import Modal from '../../components/ui/Modal';
 import FaqAccordion from '../../components/ui/FaqAccordion';
 import RegisteredPlayersTab from '../../components/public/RegisteredPlayersTab';
+import MatchScheduleView from '../../components/schedule/MatchScheduleView';
 import QualificationPanel from '../../components/public/QualificationPanel';
 // Lazy: pulls in qrcode + html-to-image, deferred until a visitor actually
 // opens the QR modal (same reasoning as the organizer editor's Share QR).
@@ -384,6 +385,7 @@ export default function PublicEventPage() {
     { id: 'policies', label: 'Policies', content: policyContent.length > 0 ? policyContent : null },
     { id: 'announcements', label: 'Announcements', content: event.announcements },
     { id: 'faq', label: 'FAQ', content: event.faq },
+    { id: 'matches', label: 'Match Schedule', content: categories.length > 0 },
     { id: 'roster', label: 'Registered Players', content: true },
   ].filter((s) => s.content);
 
@@ -587,6 +589,8 @@ export default function PublicEventPage() {
                     </div>
                   ) : s.id === 'faq' ? (
                     <FaqAccordion raw={s.content} />
+                  ) : s.id === 'matches' ? (
+                    <MatchScheduleView event={event} categories={categories} mode="public" />
                   ) : s.id === 'roster' ? (
                     <RegisteredPlayersTab event={event} categories={categories} />
                   ) : (

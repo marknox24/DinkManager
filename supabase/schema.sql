@@ -188,6 +188,9 @@ create table if not exists events (
 );
 
 alter table events add column if not exists match_duration_minutes integer not null default 18;
+-- Planned time of day the first match starts (local to the venue). Only used
+-- to anchor the estimated Match Schedule; null = anchor to "now" instead.
+alter table events add column if not exists daily_start_time time;
 alter table events add column if not exists cover_photo_path text;
 -- Focal point (percentage, 0-100, default 50/50 = center) for cover_photo_path.
 -- The same cover photo renders at several different aspect ratios across the

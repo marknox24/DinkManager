@@ -12,6 +12,7 @@ import {
   planTemplateMatches,
 } from '../utils/scheduling';
 import { getCustomFormat } from './customFormats';
+import { compareMatchCode } from '../utils/match';
 import { getDeviceId } from '../lib/deviceId';
 
 // ---------------------------------------------------------------------------
@@ -443,23 +444,6 @@ export async function deleteMatch(matchId, opts) {
 // MATCH LIST  (auto-generated schedules)
 // ---------------------------------------------------------------------------
 
-// "A9" < "A10" as plain strings sort the wrong way round ('1' < '9') — once
-// a bracket accumulates 10+ matches (5+ teams), a plain localeCompare on
-// match_code silently reorders the tail of the schedule. Splits off the
-// trailing digits and compares those numerically instead, falling back to a
-// plain string compare for anything without a numeric suffix.
-function compareMatchCode(codeA, codeB) {
-  const a = codeA || '';
-  const b = codeB || '';
-  const numA = a.match(/\d+$/)?.[0];
-  const numB = b.match(/\d+$/)?.[0];
-  if (numA && numB) {
-    const prefixCompare = a.slice(0, a.length - numA.length).localeCompare(b.slice(0, b.length - numB.length));
-    return prefixCompare || Number(numA) - Number(numB);
-  }
-  return a.localeCompare(b);
-}
-
 // Every match across every bracket in a category, any status, with team
 // names embedded and a bracket_letter for grouping — sorted to reconstruct
 // the exact round-by-round, cross-bracket-interleaved generation order. This
@@ -492,6 +476,34 @@ export async function listMatchesForCategory(categoryId) {
         a.bracket_letter.localeCompare(b.bracket_letter) ||
         compareMatchCode(a.match_code, b.match_code)
     );
+}
+
+// Every match in the whole event (any status, any category) with team names
+// and its category/bracket, in one query — the input to the estimated
+// timetable (utils/timetable.js). Works for signed-out visitors on a
+// published event: matches/brackets/teams are anon-readable under the same
+// RLS the Preview Screen's snapshot relies on.
+export async function listScheduleMatchesForEvent(categoryIds) {
+  if (categoryIds.length === 0) return [];
+  // PostgREST caps a response at 1000 rows; a big multi-category event can
+  // exceed that, so page through with a stable order.
+  const PAGE = 1000;
+  const rows = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('matches')
+      .select(
+        '*, bracket:bracket_id!inner(letter, kind, category_id), team_a:team_a_id(id, player1_name, player2_name, club_name), team_b:team_b_id(id, player1_name, player2_name, club_name)'
+      )
+      .in('bracket.category_id', categoryIds)
+      .order('created_at')
+      .order('id')
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    rows.push(...data);
+    if (data.length < PAGE) break;
+  }
+  return rows.map(({ bracket, ...m }) => ({ ...m, bracket_letter: bracket.letter, bracket_kind: bracket.kind, category_id: bracket.category_id }));
 }
 
 // Everything the Preview Screen's poll needs (brackets, teams, matches for
