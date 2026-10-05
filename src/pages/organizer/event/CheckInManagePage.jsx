@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { CheckCircle2, Circle, Search, UserCheck, Users, X } from 'lucide-react';
 import { checkInPlayer, expireCheckin, listCategories, listRegistrations } from '../../../data/eventsApi';
+import { findOtherCategoryMatches } from '../../../utils/checkin';
 import { useToast } from '../../../context/ToastContext';
+import { useConfirm } from '../../../context/ConfirmContext';
 import { useEventAccess } from '../../../context/EventAccessContext';
 import { useOfflineSync } from '../../../context/OfflineSyncContext';
 import { useOnlineOnlyGuard } from '../../../hooks/useConnectivity';
@@ -63,6 +65,7 @@ export default function CheckInManagePage() {
   const { event } = useEventAccess();
   const { reconnectToken } = useOfflineSync();
   const blockIfOffline = useOnlineOnlyGuard();
+  const confirm = useConfirm();
   const [categories, setCategories] = useState([]);
   const [registrations, setRegistrations] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -104,6 +107,40 @@ export default function CheckInManagePage() {
     if (reconnectToken) reload();
   }, [reconnectToken, reload]);
 
+  const players = useMemo(() => flattenApprovedPlayers(registrations, categories), [registrations, categories]);
+
+  // After checking someone in (not on undo), look for the same name already
+  // registered — and not yet checked in — under a different category in
+  // this event, and offer to check them in there too in one go. Name-only
+  // matching (see utils/checkin.js) is best-effort, so this never blocks or
+  // alters the check-in that was actually clicked.
+  const promptOtherCategories = async (entry) => {
+    const matches = findOtherCategoryMatches(players, { excludeCategoryId: entry.categoryId, name: entry.name });
+    if (matches.length === 0) return;
+    const otherNames = [...new Set(matches.map((m) => categories.find((c) => c.id === m.categoryId)?.name).filter(Boolean))];
+    const ok = await confirm({
+      title: 'Also registered elsewhere',
+      message: (
+        <>
+          We also found <strong className="font-bold text-ink-900">{entry.name}</strong> registered in{' '}
+          <strong className="font-bold text-brand-700">{otherNames.join(' and ')}</strong>, not checked in yet. Check them in there too?
+        </>
+      ),
+      confirmLabel: 'Check in',
+      danger: false,
+    });
+    if (!ok) return;
+    const results = await Promise.allSettled(matches.map((m) => checkInPlayer(m.regId, m.slot)));
+    results.forEach((res, i) => {
+      if (res.status === 'fulfilled') {
+        setRegistrations((prev) => prev.map((r) => (r.id === matches[i].regId ? { ...r, ...res.value } : r)));
+      }
+    });
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    if (failed > 0) pushToast(`Checked in to ${matches.length - failed} of ${matches.length} other categories`, 'error');
+    else pushToast(`Checked in to ${matches.length} more ${matches.length === 1 ? 'category' : 'categories'}`, 'success');
+  };
+
   const toggleCheckin = async (entry) => {
     if (blockIfOffline()) return;
     try {
@@ -114,13 +151,12 @@ export default function CheckInManagePage() {
       } else {
         const updated = await checkInPlayer(entry.regId, entry.slot);
         setRegistrations((prev) => prev.map((r) => (r.id === entry.regId ? { ...r, ...updated } : r)));
+        await promptOtherCategories(entry);
       }
     } catch (e) {
       pushToast(e.message, 'error');
     }
   };
-
-  const players = useMemo(() => flattenApprovedPlayers(registrations, categories), [registrations, categories]);
 
   const totals = useMemo(() => ({ total: players.length, checkedIn: players.filter((p) => p.checkedIn).length }), [players]);
 

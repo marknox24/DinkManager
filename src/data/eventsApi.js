@@ -408,6 +408,16 @@ export async function listCheckinRoster(eventId, categoryId) {
   return data;
 }
 
+// Every category's roster in one call, not just one — used to find a
+// player's OTHER category registrations so check-in can prompt "also check
+// them in there?" (src/utils/checkin.js). Same anon-safe view as
+// listCheckinRoster above, just without the category filter.
+export async function listCheckinRosterForEvent(eventId) {
+  const { data, error } = await supabase.from('public_checkin_roster').select('*').eq('event_id', eventId);
+  if (error) throw error;
+  return data;
+}
+
 export async function getCheckinRegistration(registrationId) {
   const { data, error } = await supabase.from('public_checkin_roster').select('*').eq('id', registrationId).maybeSingle();
   if (error) throw error;

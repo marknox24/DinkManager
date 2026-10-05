@@ -1,7 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { CheckCircle2, Loader2, Search, Users } from 'lucide-react';
-import { checkInPlayer, expireCheckin, getCheckinRegistration, getPublicEventBySlug, listCategories, listCheckinRoster } from '../../data/eventsApi';
+import {
+  checkInPlayer,
+  expireCheckin,
+  getCheckinRegistration,
+  getPublicEventBySlug,
+  listCategories,
+  listCheckinRoster,
+  listCheckinRosterForEvent,
+} from '../../data/eventsApi';
+import { flattenCheckinRows, findOtherCategoryMatches } from '../../utils/checkin';
+import { useConfirm } from '../../context/ConfirmContext';
 import Logo from '../../components/ui/Logo';
 
 const POLL_MS = 4000;
@@ -73,6 +83,7 @@ function buildSearchEntries(roster) {
 export default function CheckInPage() {
   const { slug } = useParams();
   const navigate = useNavigate();
+  const confirm = useConfirm();
 
   const [event, setEvent] = useState(undefined); // undefined = loading, null = not found
   const [categories, setCategories] = useState([]);
@@ -238,6 +249,34 @@ export default function CheckInPage() {
     try {
       const reg = await checkInPlayer(selectedEntry.registrationId, selectedEntry.slot);
       saveCheckin(event.id, { registrationId: selectedEntry.registrationId, categoryId, slot: selectedEntry.slot });
+
+      // Best-effort reminder only — same name, different category, not yet
+      // checked in (see utils/checkin.js). Never blocks or alters the
+      // check-in just made, or the redirect/waiting flow that follows.
+      if (categories.length > 1) {
+        try {
+          const allRows = await listCheckinRosterForEvent(event.id);
+          const matches = findOtherCategoryMatches(flattenCheckinRows(allRows), { excludeCategoryId: categoryId, name: selectedEntry.name });
+          if (matches.length > 0) {
+            const otherNames = [...new Set(matches.map((m) => categories.find((c) => c.id === m.categoryId)?.name).filter(Boolean))];
+            const ok = await confirm({
+              title: 'Also registered elsewhere',
+              message: (
+                <>
+                  We also found you registered in <strong className="font-bold text-brand-700">{otherNames.join(' and ')}</strong>, not checked in
+                  yet. Check in there too?
+                </>
+              ),
+              confirmLabel: 'Check in',
+              danger: false,
+            });
+            if (ok) await Promise.allSettled(matches.map((m) => checkInPlayer(m.regId, m.slot)));
+          }
+        } catch {
+          // Reminder couldn't load/save — not worth surfacing to the player.
+        }
+      }
+
       if (isFullyCheckedIn(reg)) {
         redirectToPreview(reg.category_id);
         return;
