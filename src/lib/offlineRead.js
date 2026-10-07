@@ -10,8 +10,21 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// An empty array IS cached data — "zero live matches right now" is a
+// completely ordinary, trustworthy answer (arguably the most common one:
+// most of the time nothing is in progress), not a sign the cache was never
+// populated. Treating it as a miss — the previous `data.length > 0` check —
+// made every offline reload with no live match fall through to a real
+// network call for live(), the exact thing "forced offline" exists to skip:
+// ~1-2s wasted on a real round trip when truly online-but-toggled-offline,
+// and potentially much longer (stalled until a slow timeout) when the
+// device is genuinely offline. The same miscount also fired a spurious
+// "couldn't load" toast on the ONLINE retry-exhausted path whenever the
+// true cached answer was a legitimate empty list. `data != null` still
+// correctly treats a never-cached single-object read (e.g. getCachedEvent
+// returning undefined) as a miss.
 function defaultHasCachedData(data) {
-  return Array.isArray(data) ? data.length > 0 : data != null;
+  return data != null;
 }
 
 // Generalizes the retry-then-cache-fallback pattern already proven in
