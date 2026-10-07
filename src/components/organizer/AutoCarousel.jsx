@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 
 // Cycles through `items` one at a time, looping forever, for spectator-facing
 // displays (Preview Screen) that nobody is actively interacting with.
-export default function AutoCarousel({ items, intervalMs = 7000, renderItem, emptyMessage }) {
+export default function AutoCarousel({ items, intervalMs = 7000, renderItem, emptyMessage, minHeightClass = 'min-h-[92px]' }) {
   const [index, setIndex] = useState(0);
 
   useEffect(() => {
@@ -21,7 +21,7 @@ export default function AutoCarousel({ items, intervalMs = 7000, renderItem, emp
 
   return (
     <div>
-      <div className="relative min-h-[92px]">
+      <div className={`relative ${minHeightClass}`}>
         {items.map((item, i) => (
           <div
             key={i}

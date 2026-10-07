@@ -176,7 +176,24 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete, de
                       setCustomFormat(true);
                       set('format', '');
                     } else {
-                      commit({ format: e.target.value });
+                      const nextFormat = e.target.value;
+                      const patch = { format: nextFormat };
+                      // Switching away from a Round-Robin-family format
+                      // strands stale playoff/pool config — the Playoffs
+                      // section below hides itself for this format, but
+                      // that doesn't clear the underlying fields, so a
+                      // category that once had playoffs configured could
+                      // still show a leftover "Playoffs" tree/badge
+                      // elsewhere after being switched to e.g. Single
+                      // Elimination. Clear it in the same commit.
+                      if (!/round robin/i.test(nextFormat)) {
+                        patch.playoff_enabled = false;
+                        patch.playoff_pool_count = null;
+                        patch.playoff_pool_pairs = [];
+                        patch.playoff_advance_per_pool = 2;
+                        patch.playoff_third_place = true;
+                      }
+                      commit(patch);
                     }
                   }}
                   className={inputClass}

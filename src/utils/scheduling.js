@@ -165,17 +165,34 @@ export function planRoundRobin(brackets, teamsByBracket, isDouble, gamesByBracke
   return rows;
 }
 
-// Single elimination Round 1 exactly as generateSingleEliminationRound1
-// pairs it: teams in created_at order, 1v2, 3v4, ...; an odd team out gets a
-// bye. teams: [{ id, bracket_id, ... }] already in created_at order.
+function nextPowerOfTwo(n) {
+  let size = 1;
+  while (size < n) size *= 2;
+  return size;
+}
+
+// Single elimination Round 1: teams in created_at order, 1v2, 3v4, ...,
+// paired as far as the bracket's shape allows — the remaining leftover
+// teams at the end all get a bye (no Round 1 row), not just a single odd
+// one out. The leftover count is always `nextPowerOfTwo(n) - n`, which is
+// exactly what's needed to round every later round up to a clean power of
+// two: Round 2, the quarterfinal, the semifinal (always 4 real players, 2
+// matches) and the Final all come out even, with no round silently
+// skipped by a bye that carries across multiple rounds. For an n that's
+// already a power of two this is 0 byes — identical to today's pairing.
+// teams: [{ id, bracket_id, ... }] already in created_at order.
 export function planSingleEliminationRound1(brackets, teams) {
   const rows = [];
   const byes = [];
   for (const b of brackets) {
     const bracketTeams = teams.filter((t) => t.bracket_id === b.id);
+    const n = bracketTeams.length;
+    if (n === 0) continue;
+    const byeCount = nextPowerOfTwo(n) - n;
+    const pairedCount = n - byeCount;
     let counter = 0;
     let i = 0;
-    for (; i + 1 < bracketTeams.length; i += 2) {
+    for (; i < pairedCount; i += 2) {
       counter += 1;
       rows.push({
         bracket_id: b.id,
@@ -186,7 +203,7 @@ export function planSingleEliminationRound1(brackets, teams) {
         match_code: `${b.letter}${counter}`,
       });
     }
-    if (i < bracketTeams.length) byes.push({ bracket: b, team: bracketTeams[i] });
+    for (; i < n; i++) byes.push({ bracket: b, team: bracketTeams[i] });
   }
   return { rows, byes };
 }

@@ -560,14 +560,15 @@ export default function MatchListPage() {
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {bracketProgress.map((b) => (
                   <span key={b.bracket_id} className="rounded-full bg-ink-50 px-2.5 py-1 text-[11px] font-semibold text-ink-600 ring-1 ring-ink-200">
-                    {b.kind === 'playoff' ? 'Playoffs' : `Bracket ${b.letter}`}: {b.completedCount}/{b.totalMatches} · {b.remaining} left
+                    {b.kind === 'playoff' && activeCategory?.format !== 'Single Elimination' ? 'Playoffs' : `Bracket ${b.letter}`}: {b.completedCount}/{b.totalMatches} ·{' '}
+                    {b.remaining} left
                   </span>
                 ))}
               </div>
             </div>
           )}
 
-          {playoffStatus.length > 0 && (
+          {activeCategory?.format !== 'Single Elimination' && playoffStatus.length > 0 && (
             <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
               <div className="mb-3 flex items-center gap-2 text-sm font-bold text-ink-800">
                 <Trophy size={14} className="text-amber-500" /> Playoffs

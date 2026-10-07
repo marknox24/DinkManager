@@ -41,6 +41,18 @@ function parseYmd(ymd) {
   return new Date(y, m - 1, d).getTime();
 }
 
+// The earliest a category assigned to a specific tournament day can start —
+// that day's local midnight, or its planned clock time when a daily start
+// time is set. A category with no day assignment has no floor at all (null),
+// preserving the original single-day behavior exactly.
+function dayFloorMs(ymd, dailyStartTime) {
+  if (!ymd) return null;
+  const day = parseYmd(ymd);
+  if (!dailyStartTime) return day;
+  const [hh, mm] = dailyStartTime.split(':').map(Number);
+  return day + (hh * 60 + (mm || 0)) * MIN;
+}
+
 // The planned first-match time for "today" (or the first event day when the
 // event hasn't started yet). Null when no daily start time is set or the
 // event's dates have passed.
@@ -78,6 +90,9 @@ function simulate(items, courtFree, teamFree, minutesFor) {
     let start = courtFree[slot];
     if (item.teamAId) start = Math.max(start, teamFree.get(item.teamAId) || 0);
     if (item.teamBId) start = Math.max(start, teamFree.get(item.teamBId) || 0);
+    // A category assigned to a specific tournament day can't start before
+    // that day begins, even if its court/teams were free earlier.
+    if (item.dayFloorMs != null) start = Math.max(start, item.dayFloorMs);
     const ends = roundEnds.get(item.categoryId) || new Map();
     // A projected knockout stage can't begin until every earlier round of
     // its category has finished (stage matches within a round run in parallel).
@@ -114,9 +129,11 @@ export function buildTimetable({ event, categories, matches, now = Date.now() })
 
   const perMatch = new Map();
   const nominal = new Map();
+  const dayFloorByCategory = new Map();
   for (const c of categories) {
     nominal.set(c.id, nominalMinutes(c, event));
     perMatch.set(c.id, learnedMinutes(matchesByCategory.get(c.id) || []) ?? nominal.get(c.id));
+    dayFloorByCategory.set(c.id, dayFloorMs(c.scheduled_date, event?.daily_start_time));
   }
 
   const items = [];
@@ -138,6 +155,7 @@ export function buildTimetable({ event, categories, matches, now = Date.now() })
         bracketLetter: m.bracket_letter,
         matchCode: m.match_code,
         playoffStage: m.playoff_stage || null,
+        dayFloorMs: dayFloorByCategory.get(c.id),
         createdAt: m.created_at,
         teamAId: m.team_a_id,
         teamBId: m.team_b_id,
@@ -170,6 +188,7 @@ export function buildTimetable({ event, categories, matches, now = Date.now() })
             playoffStage: level.kind,
             stageIndex: n,
             stageMatchCount: level.matchCount,
+            dayFloorMs: dayFloorByCategory.get(c.id),
             createdAt: '',
             teamAId: null,
             teamBId: null,

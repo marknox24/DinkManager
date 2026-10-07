@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { AlertTriangle, ArrowRightLeft, CheckCircle2, ChevronDown, Crown, Download, History, ListChecks, Radio, RefreshCw, Scale, Settings2, Shuffle, Timer, UserPlus, X } from 'lucide-react';
+import { AlertTriangle, ArrowRightLeft, CheckCircle2, ChevronDown, Crown, Download, GitBranch, History, ListChecks, Radio, RefreshCw, Scale, Settings2, Shuffle, Timer, UserPlus, X } from 'lucide-react';
 import { listCategories, listRegistrations } from '../../../data/eventsApi';
 import {
   deleteBracketsForCategory,
@@ -57,6 +57,8 @@ import { liveElapsedSeconds, teamLabel } from '../../../utils/match';
 import { computeMissingPairs, effectiveGames, expectedRoundRobin, matchCounts, missingTemplatePairs, planCustomAdjust, planTemplateRounds, progressLabel } from '../../../utils/scheduling';
 import { getCustomFormat } from '../../../data/customFormats';
 import { rankTeams } from '../../../utils/standings';
+import { bracketTreeApplies } from '../../../utils/bracketTree';
+import BracketView from '../../../components/brackets/BracketView';
 
 // One collapsible section per drawn pool — standings + its own recent
 // matches. Starting/logging matches lives on Match List; this page draws
@@ -368,6 +370,7 @@ export default function BracketsPage() {
   const [bracketsStale, setBracketsStale] = useState(false);
   const [categoryMatches, setCategoryMatches] = useState([]);
   const [regenerating, setRegenerating] = useState(false);
+  const [showTree, setShowTree] = useState(false);
   // Bracket balancing: the open Move dialog ({ team, fromBracket,
   // initialToId }), the team being dragged, the Balance preview, the
   // just-randomized notice, the change history, and the max per bracket
@@ -1050,6 +1053,25 @@ export default function BracketsPage() {
               </button>
             ))}
           </div>
+
+          {bracketTreeApplies(activeCategory || {}) && (
+            <div className="rounded-2xl border border-ink-100 bg-white p-4 shadow-sm">
+              <button
+                onClick={() => setShowTree((v) => !v)}
+                className="flex w-full items-center justify-between gap-2 text-sm font-bold text-ink-800"
+              >
+                <span className="flex items-center gap-2">
+                  <GitBranch size={15} className="text-brand-600" /> Bracket tree
+                </span>
+                <ChevronDown size={15} className={`text-ink-400 transition-transform duration-150 ${showTree ? 'rotate-180' : ''}`} />
+              </button>
+              {showTree && (
+                <div className="mt-4 border-t border-ink-100 pt-4">
+                  <BracketView event={event} categories={[activeCategory]} />
+                </div>
+              )}
+            </div>
+          )}
 
           {liveMatches.length > 0 && (
             <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4">

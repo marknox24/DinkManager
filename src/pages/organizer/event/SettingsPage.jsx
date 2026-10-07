@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, Check, Coins, Copy, Files, LayoutGrid, Lock, MessageCircleQuestion, RefreshCw, Send, Shuffle, Sparkles, Trash2 } from 'lucide-react';
-import { deleteEvent, duplicateEvent, getPendingPlanRequestForEvent, regenerateShareToken, setEventVisibility, updateEvent } from '../../../data/eventsApi';
+import { AlertTriangle, CalendarDays, Check, Coins, Copy, Files, LayoutGrid, Lock, MessageCircleQuestion, Plus, RefreshCw, Send, Shuffle, Sparkles, Trash2 } from 'lucide-react';
+import { deleteEvent, duplicateEvent, getPendingPlanRequestForEvent, listCategories, regenerateShareToken, setEventVisibility, updateCategory, updateEvent } from '../../../data/eventsApi';
 import { addChangeRequestMessage, listChangeRequestMessages, listMyChangeRequests } from '../../../data/changeRequestsApi';
 import { CURRENCIES, COURT_TYPES } from '../../../data/constants';
 import { PLAN_LIMITS } from '../../../data/plans';
@@ -16,6 +16,30 @@ import UpgradeEventModal from '../../../components/organizer/UpgradeEventModal';
 import ContactAdminModal from '../../../components/organizer/ContactAdminModal';
 import Select from '../../../components/ui/Select';
 import Switch from '../../../components/ui/Switch';
+import Tabs from '../../../components/ui/Tabs';
+
+function parseYmd(ymd) {
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function toYmd(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+// Every calendar day the event spans, inclusive — the set of days a
+// category can be assigned to play on.
+function daysInRange(startYmd, endYmd) {
+  if (!startYmd || !endYmd) return [];
+  const days = [];
+  let cursor = parseYmd(startYmd);
+  const end = parseYmd(endYmd);
+  while (cursor <= end) {
+    days.push(toYmd(cursor));
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
+  }
+  return days;
+}
 
 const REQUEST_TYPE_LABELS = {
   start_date: 'Start date change',
@@ -193,16 +217,30 @@ export default function SettingsPage() {
   const [numCourts, setNumCourts] = useState(() => usableCourts(event));
   const [duration, setDuration] = useState(() => event.match_duration_minutes ?? 18);
   const [courtType, setCourtType] = useState(() => event.court_type || '');
-  const savedStartTime = (event.daily_start_time || '').slice(0, 5);
-  const [startTime, setStartTime] = useState(savedStartTime);
+  // 8:00 AM is only ever a display default — an organizer who never opens
+  // this field leaves daily_start_time null in the database, and the Match
+  // Schedule keeps its existing "anchor to now" fallback. It's here so the
+  // field never looks blank/broken, not to silently change anyone's
+  // schedule the moment they load this page.
+  const [startTime, setStartTime] = useState(() => (event.daily_start_time || '08:00').slice(0, 5));
   const [copied, setCopied] = useState(false);
   const [pendingRequest, setPendingRequest] = useState(null);
   const [pendingLoaded, setPendingLoaded] = useState(false);
   const [upgradeModalOpen, setUpgradeModalOpen] = useState(false);
   const [duplicating, setDuplicating] = useState(false);
   const [contactAdminOpen, setContactAdminOpen] = useState(false);
+  const [categories, setCategories] = useState([]);
+  const [categoriesLoaded, setCategoriesLoaded] = useState(false);
+  const [addingDay, setAddingDay] = useState(false);
+  const [now] = useState(() => Date.now());
 
   const isLocked = event?.status === 'finished';
+  // Same 48h-after-end_date freeze the database enforces on start_date/
+  // end_date/status (see events_update_owner in schema.sql, and the
+  // identical client-side mirror in EventEditorPage.jsx) — so "Add another
+  // day" doesn't look available and then fail.
+  const datesLocked = Boolean(event?.end_date && now > new Date(event.end_date).getTime() + 48 * 60 * 60 * 1000);
+  const days = daysInRange(event.start_date, event.end_date);
   // Duplicating creates a Free Trial event — only one per account (the
   // database refuses the rest), so once it's used the way to run this
   // event again is a new plan purchase.
@@ -215,6 +253,15 @@ export default function SettingsPage() {
       .then((pending) => {
         setPendingRequest(pending);
         setPendingLoaded(true);
+      })
+      .catch((e) => pushToast(e.message, 'error'));
+  }, [eventId, pushToast]);
+
+  useEffect(() => {
+    listCategories(eventId)
+      .then((cats) => {
+        setCategories(cats);
+        setCategoriesLoaded(true);
       })
       .catch((e) => pushToast(e.message, 'error'));
   }, [eventId, pushToast]);
@@ -256,15 +303,63 @@ export default function SettingsPage() {
       return;
     }
     try {
-      const payload = { num_courts: n, match_duration_minutes: d, court_type: courtType || null };
-      // Only sent when changed, so saving courts keeps working on a database
-      // that hasn't had the daily_start_time column added yet.
-      if (startTime !== savedStartTime) payload.daily_start_time = startTime || null;
-      const updated = await updateEvent(eventId, payload);
+      const updated = await updateEvent(eventId, { num_courts: n, match_duration_minutes: d, court_type: courtType || null });
       setEvent(updated);
       pushToast('Court settings updated', 'success');
     } catch (e) {
       pushToast(e.message, 'error');
+    }
+  };
+
+  // Auto-saves on change, same model as the day-assignment pills below it —
+  // no separate "Save" step for one time field when everything else nearby
+  // already commits instantly.
+  const saveStartTime = async (value) => {
+    const previous = startTime;
+    setStartTime(value || '08:00');
+    try {
+      const updated = await updateEvent(eventId, { daily_start_time: value || null });
+      setEvent(updated);
+    } catch (e) {
+      setStartTime(previous);
+      pushToast(e.message, 'error');
+    }
+  };
+
+  // Explicit selection, not a toggle — "Any day" is its own pill rather
+  // than an absence, so a category always has exactly one visibly-selected
+  // state. `ymd` is null for "Any day", which the Match Schedule treats as
+  // unassigned (continuous scheduling) — see utils/timetable.js's dayFloorMs.
+  const setCategoryDay = async (category, ymd) => {
+    if (category.scheduled_date === ymd) return;
+    setCategories((prev) => prev.map((c) => (c.id === category.id ? { ...c, scheduled_date: ymd } : c)));
+    try {
+      await updateCategory(category.id, { scheduled_date: ymd });
+    } catch (e) {
+      setCategories((prev) => prev.map((c) => (c.id === category.id ? { ...c, scheduled_date: category.scheduled_date } : c)));
+      pushToast(e.message, 'error');
+    }
+  };
+
+  const addAnotherDay = async () => {
+    const lastDay = days[days.length - 1] || event.start_date;
+    const nextDay = toYmd(new Date(parseYmd(lastDay).getFullYear(), parseYmd(lastDay).getMonth(), parseYmd(lastDay).getDate() + 1));
+    const ok = await confirm({
+      title: 'Add another day?',
+      message: `This extends the event through ${new Date(nextDay).toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })} — the new end date shown to players on the event page.`,
+      confirmLabel: 'Add day',
+      danger: false,
+    });
+    if (!ok) return;
+    setAddingDay(true);
+    try {
+      const updated = await updateEvent(eventId, { end_date: nextDay });
+      setEvent(updated);
+      pushToast('Day added', 'success');
+    } catch (e) {
+      pushToast(e.message, 'error');
+    } finally {
+      setAddingDay(false);
     }
   };
 
@@ -357,279 +452,381 @@ export default function SettingsPage() {
     <EventWorkspaceLayout event={event}>
       <div className="mb-6">
         <h1 className="font-display text-2xl font-bold text-ink-900">Settings</h1>
-        <p className="text-sm text-ink-500">Court capacity, match timing and danger zone</p>
+        <p className="text-sm text-ink-500">Plan, match play, and support for this event</p>
       </div>
 
       {!pendingLoaded ? (
         <div className="py-16 text-center text-sm text-ink-400">Loading…</div>
       ) : (
-        <div className="mx-auto flex max-w-2xl flex-col gap-5">
-          <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center gap-2.5">
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
-                <Sparkles size={17} strokeWidth={2.3} />
-              </span>
-              <div>
-                <h2 className="font-display text-base font-bold text-ink-900">Event plan</h2>
-                <p className="text-xs text-ink-500">
-                  {isLocked ? 'This event is finished — its plan and entitlements are preserved for the record.' : 'Applies only to this event — every other event you own keeps its own plan.'}
-                </p>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl bg-ink-50 px-4 py-3.5">
-              <div>
-                <div className="text-sm font-bold text-ink-800">
-                  {PLAN_LIMITS[event.plan]?.label ?? 'Free Trial'}
-                  {event.plan !== 'free' && <span className="ml-1.5 font-normal text-ink-500">₱{PLAN_LIMITS[event.plan].price}</span>}
-                </div>
-                <div className="mt-0.5 text-xs text-ink-500">
-                  {event.entitlement_categories ?? 'Unlimited'} categories · {event.entitlement_players_per_category} players/cat · {event.entitlement_courts} courts ·{' '}
-                  {event.entitlement_csv_import ? 'Excel import' : 'No Excel import'}
-                </div>
-                <div className="mt-1.5 text-xs font-semibold">
-                  {pendingRequest ? (
-                    <span className="text-amber-600">
-                      {PLAN_LIMITS[pendingRequest.plan]?.label} upgrade pending review
-                    </span>
-                  ) : event.plan === 'free' ? (
-                    <span className="text-ink-500">Free Trial — no payment required</span>
-                  ) : (
-                    <span className="text-brand-600">Active · paid</span>
-                  )}
-                </div>
-              </div>
-              {isLocked && trialUsed ? (
-                <Link
-                  to="/#pricing"
-                  className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-brand-700"
-                >
-                  <Sparkles size={13} /> Get a plan for a new event
-                </Link>
-              ) : isLocked ? (
-                <button
-                  onClick={handleDuplicate}
-                  disabled={duplicating}
-                  className="flex shrink-0 items-center gap-1.5 rounded-full border border-ink-200 bg-white px-4 py-2 text-xs font-bold text-ink-700 shadow-sm transition hover:bg-ink-100 disabled:opacity-50"
-                >
-                  <Files size={13} /> {duplicating ? 'Duplicating…' : 'Duplicate Event'}
-                </button>
-              ) : (
-                <button
-                  onClick={() => setUpgradeModalOpen(true)}
-                  disabled={!!pendingRequest}
-                  className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <Sparkles size={13} /> {pendingRequest ? 'Upgrade pending review' : 'Upgrade Plan'}
-                </button>
-              )}
-            </div>
-          </div>
+        <div className="mx-auto max-w-2xl">
+          <Tabs
+            tabs={[
+              {
+                id: 'general',
+                label: 'General',
+                content: (
+                  <div className="flex flex-col gap-5">
+                    <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+                      <div className="mb-4 flex items-center gap-2.5">
+                        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                          <Sparkles size={17} strokeWidth={2.3} />
+                        </span>
+                        <div>
+                          <h2 className="font-display text-base font-bold text-ink-900">Event plan</h2>
+                          <p className="text-xs text-ink-500">
+                            {isLocked ? 'This event is finished — its plan and entitlements are preserved for the record.' : 'Applies only to this event — every other event you own keeps its own plan.'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl bg-ink-50 px-4 py-3.5">
+                        <div>
+                          <div className="text-sm font-bold text-ink-800">
+                            {PLAN_LIMITS[event.plan]?.label ?? 'Free Trial'}
+                            {event.plan !== 'free' && <span className="ml-1.5 font-normal text-ink-500">₱{PLAN_LIMITS[event.plan].price}</span>}
+                          </div>
+                          <div className="mt-0.5 text-xs text-ink-500">
+                            {event.entitlement_categories ?? 'Unlimited'} categories · {event.entitlement_players_per_category} players/cat · {event.entitlement_courts} courts ·{' '}
+                            {event.entitlement_csv_import ? 'Excel import' : 'No Excel import'}
+                          </div>
+                          <div className="mt-1.5 text-xs font-semibold">
+                            {pendingRequest ? (
+                              <span className="text-amber-600">
+                                {PLAN_LIMITS[pendingRequest.plan]?.label} upgrade pending review
+                              </span>
+                            ) : event.plan === 'free' ? (
+                              <span className="text-ink-500">Free Trial — no payment required</span>
+                            ) : (
+                              <span className="text-brand-600">Active · paid</span>
+                            )}
+                          </div>
+                        </div>
+                        {isLocked && trialUsed ? (
+                          <Link
+                            to="/#pricing"
+                            className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-brand-700"
+                          >
+                            <Sparkles size={13} /> Get a plan for a new event
+                          </Link>
+                        ) : isLocked ? (
+                          <button
+                            onClick={handleDuplicate}
+                            disabled={duplicating}
+                            className="flex shrink-0 items-center gap-1.5 rounded-full border border-ink-200 bg-white px-4 py-2 text-xs font-bold text-ink-700 shadow-sm transition hover:bg-ink-100 disabled:opacity-50"
+                          >
+                            <Files size={13} /> {duplicating ? 'Duplicating…' : 'Duplicate Event'}
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => setUpgradeModalOpen(true)}
+                            disabled={!!pendingRequest}
+                            className="flex shrink-0 items-center gap-1.5 rounded-full bg-brand-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-brand-700 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <Sparkles size={13} /> {pendingRequest ? 'Upgrade pending review' : 'Upgrade Plan'}
+                          </button>
+                        )}
+                      </div>
+                    </div>
 
-          <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center gap-2.5">
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
-                <LayoutGrid size={17} strokeWidth={2.3} />
-              </span>
-              <div>
-                <h2 className="font-display text-base font-bold text-ink-900">Court settings</h2>
-                <p className="text-xs text-ink-500">Caps how many matches can be live at once — organizers can't start a new match once every court is in use.</p>
-              </div>
-            </div>
-            <div className="flex flex-col gap-5">
-              <div>
-                <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-ink-500">
-                  Number of courts available <span className="font-normal normal-case text-ink-400">— {PLAN_LIMITS[event.plan]?.label ?? 'Free Trial'} plan allows up to {event.entitlement_courts} for this event</span>
-                </label>
-                <input
-                  type="number"
-                  min={1}
-                  max={event.entitlement_courts ?? 30}
-                  value={numCourts}
-                  onChange={(e) => setNumCourts(e.target.value)}
-                  className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 sm:max-w-xs"
-                />
-              </div>
-              <div>
-                <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-ink-500">Average match duration (minutes)</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={180}
-                  value={duration}
-                  onChange={(e) => setDuration(e.target.value)}
-                  className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 sm:max-w-xs"
-                />
-              </div>
-              <div>
-                <label htmlFor="daily-start-time" className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-ink-500">
-                  Daily start time <span className="font-normal normal-case text-ink-400">— when the first match is planned; used for the estimated Match Schedule</span>
-                </label>
-                <div className="flex items-center gap-2">
-                  <input
-                    id="daily-start-time"
-                    type="time"
-                    value={startTime}
-                    onChange={(e) => setStartTime(e.target.value)}
-                    className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 sm:max-w-xs"
-                  />
-                  {startTime && (
-                    <button type="button" onClick={() => setStartTime('')} className="text-xs font-bold text-ink-400 transition hover:text-ink-700">
-                      Clear
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div>
-                <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-ink-500">Court type</label>
-                <Select
-                  value={courtType}
-                  onChange={(e) => setCourtType(e.target.value)}
-                  className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 sm:max-w-xs"
-                  wrapperClassName="sm:max-w-xs"
-                >
-                  <option value="">Not specified</option>
-                  {COURT_TYPES.map((c) => (
-                    <option key={c.value} value={c.value}>
-                      {c.label}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <button onClick={save} className="self-start rounded-xl bg-brand-600 px-6 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700">
-                Save settings
-              </button>
-            </div>
-          </div>
+                    <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+                      <div className="mb-4 flex items-center justify-between gap-2.5">
+                        <div className="flex items-center gap-2.5">
+                          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                            <Lock size={17} strokeWidth={2.3} />
+                          </span>
+                          <div>
+                            <h2 className="font-display text-base font-bold text-ink-900">Private event</h2>
+                            <p className="text-xs text-ink-500">Hide this event from the public Browse Tournaments list — only people with a share link can find it.</p>
+                          </div>
+                        </div>
+                        <Switch checked={event.visibility === 'private'} onChange={toggleVisibility} />
+                      </div>
+                      {event.visibility === 'private' && (
+                        <div className="flex flex-col gap-2 rounded-xl bg-ink-50 p-3.5">
+                          <div className="flex items-center gap-2">
+                            <code className="min-w-0 flex-1 truncate rounded-lg border border-ink-200 bg-white px-3 py-2 text-xs text-ink-700">
+                              {`${window.location.origin}/t/${event.share_token}`}
+                            </code>
+                            <button
+                              onClick={copyShareLink}
+                              className="flex shrink-0 items-center gap-1.5 rounded-lg border border-ink-200 bg-white px-3 py-2 text-xs font-bold text-ink-700 transition hover:bg-ink-50"
+                            >
+                              {copied ? <Check size={13} className="text-brand-600" /> : <Copy size={13} />}
+                              {copied ? 'Copied' : 'Copy link'}
+                            </button>
+                          </div>
+                          <button
+                            onClick={rotateShareLink}
+                            className="flex items-center gap-1.5 self-start text-xs font-semibold text-ink-500 hover:text-ink-800"
+                          >
+                            <RefreshCw size={12} /> Generate new link
+                          </button>
+                        </div>
+                      )}
+                    </div>
 
-          <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between gap-2.5">
-              <div className="flex items-center gap-2.5">
-                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
-                  <Shuffle size={17} strokeWidth={2.3} />
-                </span>
-                <div>
-                  <h2 className="font-display text-base font-bold text-ink-900">Club separation</h2>
-                  <p className="text-xs text-ink-500">Controls whether the Randomizer can place players from the same club in the same bracket.</p>
-                </div>
-              </div>
-            </div>
-            <div className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-ink-50 px-4 py-3">
-              <div>
-                <div className="text-sm font-semibold text-ink-800">Allow Same-Club Players</div>
-                <div className="text-xs text-ink-500">Allow players from the same club in the same bracket</div>
-              </div>
-              <Switch checked={!!event.randomizer_allow_same_club} onChange={toggleAllowSameClub} />
-            </div>
-          </div>
+                    <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+                      <div className="mb-4 flex items-center gap-2.5">
+                        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                          <Coins size={17} strokeWidth={2.3} />
+                        </span>
+                        <div>
+                          <h2 className="font-display text-base font-bold text-ink-900">Currency</h2>
+                          <p className="text-xs text-ink-500">Used to display amounts on the Accounting and Sponsors pages for this event.</p>
+                        </div>
+                      </div>
+                      <Select
+                        value={event.currency || 'USD'}
+                        onChange={(e) => saveCurrency(e.target.value)}
+                        className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 sm:max-w-xs"
+                        wrapperClassName="sm:max-w-xs"
+                      >
+                        {CURRENCIES.map((c) => (
+                          <option key={c.code} value={c.code}>
+                            {c.code} — {c.name}
+                          </option>
+                        ))}
+                      </Select>
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                id: 'match-play',
+                label: 'Match Play',
+                content: (
+                  <div className="flex flex-col gap-5">
+                    <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+                      <div className="mb-4 flex items-center gap-2.5">
+                        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                          <LayoutGrid size={17} strokeWidth={2.3} />
+                        </span>
+                        <div>
+                          <h2 className="font-display text-base font-bold text-ink-900">Court settings</h2>
+                          <p className="text-xs text-ink-500">Caps how many matches can be live at once — organizers can't start a new match once every court is in use.</p>
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-5">
+                        <div>
+                          <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-ink-500">
+                            Number of courts available <span className="font-normal normal-case text-ink-400">— {PLAN_LIMITS[event.plan]?.label ?? 'Free Trial'} plan allows up to {event.entitlement_courts} for this event</span>
+                          </label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={event.entitlement_courts ?? 30}
+                            value={numCourts}
+                            onChange={(e) => setNumCourts(e.target.value)}
+                            className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 sm:max-w-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-ink-500">Average match duration (minutes)</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={180}
+                            value={duration}
+                            onChange={(e) => setDuration(e.target.value)}
+                            className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 sm:max-w-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-ink-500">Court type</label>
+                          <Select
+                            value={courtType}
+                            onChange={(e) => setCourtType(e.target.value)}
+                            className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 sm:max-w-xs"
+                            wrapperClassName="sm:max-w-xs"
+                          >
+                            <option value="">Not specified</option>
+                            {COURT_TYPES.map((c) => (
+                              <option key={c.value} value={c.value}>
+                                {c.label}
+                              </option>
+                            ))}
+                          </Select>
+                        </div>
+                        <button onClick={save} className="self-start rounded-xl bg-brand-600 px-6 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700">
+                          Save settings
+                        </button>
+                      </div>
+                    </div>
 
-          <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center gap-2.5">
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
-                <Coins size={17} strokeWidth={2.3} />
-              </span>
-              <div>
-                <h2 className="font-display text-base font-bold text-ink-900">Currency</h2>
-                <p className="text-xs text-ink-500">Used to display amounts on the Accounting and Sponsors pages for this event.</p>
-              </div>
-            </div>
-            <Select
-              value={event.currency || 'USD'}
-              onChange={(e) => saveCurrency(e.target.value)}
-              className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 sm:max-w-xs"
-              wrapperClassName="sm:max-w-xs"
-            >
-              {CURRENCIES.map((c) => (
-                <option key={c.code} value={c.code}>
-                  {c.code} — {c.name}
-                </option>
-              ))}
-            </Select>
-          </div>
+                    <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+                      <div className="mb-4 flex items-center gap-2.5">
+                        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                          <CalendarDays size={17} strokeWidth={2.3} />
+                        </span>
+                        <div>
+                          <h2 className="font-display text-base font-bold text-ink-900">Tournament schedule</h2>
+                          <p className="text-xs text-ink-500">When play starts each day, and which categories play when.</p>
+                        </div>
+                      </div>
 
-          <SupportRequestsCard eventId={eventId} />
+                      <div className="mb-5">
+                        <label htmlFor="daily-start-time" className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-ink-500">
+                          Daily start time <span className="font-normal normal-case text-ink-400">— when the first match of each day is planned; used for the estimated Match Schedule</span>
+                        </label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            id="daily-start-time"
+                            type="time"
+                            value={startTime}
+                            onChange={(e) => saveStartTime(e.target.value)}
+                            className="w-full rounded-xl border border-ink-200 px-3.5 py-2.5 text-sm font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100 sm:max-w-xs"
+                          />
+                          {event.daily_start_time && (
+                            <button type="button" onClick={() => saveStartTime('')} className="text-xs font-bold text-ink-400 transition hover:text-ink-700">
+                              Clear
+                            </button>
+                          )}
+                        </div>
+                      </div>
 
-          <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center justify-between gap-2.5">
-              <div className="flex items-center gap-2.5">
-                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
-                  <MessageCircleQuestion size={17} strokeWidth={2.3} />
-                </span>
-                <div>
-                  <h2 className="font-display text-base font-bold text-ink-900">Need help with something else?</h2>
-                  <p className="text-xs text-ink-500">Registration, billing, a technical problem — reach the admin directly.</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setContactAdminOpen(true)}
-                className="flex shrink-0 items-center gap-1.5 rounded-full border border-ink-200 px-3.5 py-2 text-xs font-bold text-ink-700 transition hover:bg-ink-50"
-              >
-                <MessageCircleQuestion size={13} /> Contact Admin
-              </button>
-            </div>
-          </div>
+                      {!categoriesLoaded ? (
+                        <p className="py-4 text-center text-sm text-ink-400">Loading…</p>
+                      ) : categories.length === 0 ? (
+                        <p className="py-4 text-center text-sm text-ink-400">Add a category before assigning tournament days.</p>
+                      ) : days.length <= 1 ? (
+                        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-ink-50 px-4 py-3">
+                          <p className="text-xs text-ink-500">This is a single-day event. Add another day to schedule categories separately.</p>
+                          {!datesLocked && (
+                            <button
+                              onClick={addAnotherDay}
+                              disabled={addingDay}
+                              className="flex shrink-0 items-center gap-1.5 rounded-full border border-dashed border-ink-300 px-3.5 py-1.5 text-xs font-bold text-ink-600 transition-[border-color,color] duration-150 hover:border-brand-400 hover:text-brand-600 disabled:opacity-50"
+                            >
+                              <Plus size={13} /> {addingDay ? 'Adding…' : 'Add another day'}
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <div key={days.length} className="animate-fade-in flex flex-col gap-1">
+                          <div className="mb-1 text-xs font-bold uppercase tracking-wide text-ink-500">Which day does each category play?</div>
+                          <div className="flex flex-col divide-y divide-ink-100">
+                            {categories.map((cat) => (
+                              <div key={cat.id} className="flex flex-wrap items-center justify-between gap-2.5 py-2.5">
+                                <span className="text-sm font-semibold text-ink-800">{cat.name}</span>
+                                <div className="flex flex-wrap gap-1.5">
+                                  <button
+                                    onClick={() => setCategoryDay(cat, null)}
+                                    className={`rounded-full px-3 py-1.5 text-xs font-bold transition-[background-color,color,transform] duration-150 active:scale-[0.95] ${
+                                      !cat.scheduled_date ? 'bg-brand-600 text-white' : 'bg-white text-ink-600 ring-1 ring-ink-200 hover:bg-ink-50'
+                                    }`}
+                                  >
+                                    Any day
+                                  </button>
+                                  {days.map((ymd) => (
+                                    <button
+                                      key={ymd}
+                                      onClick={() => setCategoryDay(cat, ymd)}
+                                      className={`rounded-full px-3 py-1.5 text-xs font-bold transition-[background-color,color,transform] duration-150 active:scale-[0.95] ${
+                                        cat.scheduled_date === ymd ? 'bg-brand-600 text-white' : 'bg-white text-ink-600 ring-1 ring-ink-200 hover:bg-ink-50'
+                                      }`}
+                                    >
+                                      {parseYmd(ymd).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                          {!datesLocked && (
+                            <button
+                              onClick={addAnotherDay}
+                              disabled={addingDay}
+                              className="mt-3 flex items-center gap-1.5 self-start rounded-full border border-dashed border-ink-300 px-3.5 py-1.5 text-xs font-bold text-ink-600 transition-[border-color,color] duration-150 hover:border-brand-400 hover:text-brand-600 disabled:opacity-50"
+                            >
+                              <Plus size={13} /> {addingDay ? 'Adding…' : 'Add another day'}
+                            </button>
+                          )}
+                        </div>
+                      )}
+                    </div>
 
-          <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
-            <div className="mb-4 flex items-center justify-between gap-2.5">
-              <div className="flex items-center gap-2.5">
-                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
-                  <Lock size={17} strokeWidth={2.3} />
-                </span>
-                <div>
-                  <h2 className="font-display text-base font-bold text-ink-900">Private event</h2>
-                  <p className="text-xs text-ink-500">Hide this event from the public Browse Tournaments list — only people with a share link can find it.</p>
-                </div>
-              </div>
-              <Switch checked={event.visibility === 'private'} onChange={toggleVisibility} />
-            </div>
-            {event.visibility === 'private' && (
-              <div className="flex flex-col gap-2 rounded-xl bg-ink-50 p-3.5">
-                <div className="flex items-center gap-2">
-                  <code className="min-w-0 flex-1 truncate rounded-lg border border-ink-200 bg-white px-3 py-2 text-xs text-ink-700">
-                    {`${window.location.origin}/t/${event.share_token}`}
-                  </code>
-                  <button
-                    onClick={copyShareLink}
-                    className="flex shrink-0 items-center gap-1.5 rounded-lg border border-ink-200 bg-white px-3 py-2 text-xs font-bold text-ink-700 transition hover:bg-ink-50"
-                  >
-                    {copied ? <Check size={13} className="text-brand-600" /> : <Copy size={13} />}
-                    {copied ? 'Copied' : 'Copy link'}
-                  </button>
-                </div>
-                <button
-                  onClick={rotateShareLink}
-                  className="flex items-center gap-1.5 self-start text-xs font-semibold text-ink-500 hover:text-ink-800"
-                >
-                  <RefreshCw size={12} /> Generate new link
-                </button>
-              </div>
-            )}
-          </div>
+                    <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+                      <div className="flex items-center justify-between gap-2.5">
+                        <div className="flex items-center gap-2.5">
+                          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                            <Shuffle size={17} strokeWidth={2.3} />
+                          </span>
+                          <div>
+                            <h2 className="font-display text-base font-bold text-ink-900">Club separation</h2>
+                            <p className="text-xs text-ink-500">Controls whether the Randomizer can place players from the same club in the same bracket.</p>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="mt-4 flex items-center justify-between gap-3 rounded-xl bg-ink-50 px-4 py-3">
+                        <div>
+                          <div className="text-sm font-semibold text-ink-800">Allow Same-Club Players</div>
+                          <div className="text-xs text-ink-500">Allow players from the same club in the same bracket</div>
+                        </div>
+                        <Switch checked={!!event.randomizer_allow_same_club} onChange={toggleAllowSameClub} />
+                      </div>
+                    </div>
+                  </div>
+                ),
+              },
+              {
+                id: 'support',
+                label: 'Support',
+                content: (
+                  <div className="flex flex-col gap-5">
+                    <SupportRequestsCard eventId={eventId} />
 
-          {isOwner && (
-            <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-5">
-              <div className="mb-3 flex items-center gap-2.5">
-                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-rose-100 text-rose-600">
-                  <AlertTriangle size={17} strokeWidth={2.3} />
-                </span>
-                <div>
-                  <h2 className="font-display text-base font-bold text-rose-900">Danger zone</h2>
-                  <p className="text-xs text-rose-700/80">Irreversible actions — use with care.</p>
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white px-4 py-3">
-                <div>
-                  <div className="text-sm font-semibold text-ink-800">Delete this event</div>
-                  <div className="text-xs text-ink-500">Removes the event, its categories, and every registration permanently.</div>
-                </div>
-                <button
-                  onClick={removeEvent}
-                  className="flex items-center gap-1.5 rounded-full bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-rose-700"
-                >
-                  <Trash2 size={13} /> Delete event
-                </button>
-              </div>
-            </div>
-          )}
+                    <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+                      <div className="mb-4 flex items-center justify-between gap-2.5">
+                        <div className="flex items-center gap-2.5">
+                          <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                            <MessageCircleQuestion size={17} strokeWidth={2.3} />
+                          </span>
+                          <div>
+                            <h2 className="font-display text-base font-bold text-ink-900">Need help with something else?</h2>
+                            <p className="text-xs text-ink-500">Registration, billing, a technical problem — reach the admin directly.</p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => setContactAdminOpen(true)}
+                          className="flex shrink-0 items-center gap-1.5 rounded-full border border-ink-200 px-3.5 py-2 text-xs font-bold text-ink-700 transition hover:bg-ink-50"
+                        >
+                          <MessageCircleQuestion size={13} /> Contact Admin
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ),
+              },
+              isOwner && {
+                id: 'danger',
+                label: 'Danger Zone',
+                content: (
+                  <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-5">
+                    <div className="mb-3 flex items-center gap-2.5">
+                      <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-rose-100 text-rose-600">
+                        <AlertTriangle size={17} strokeWidth={2.3} />
+                      </span>
+                      <div>
+                        <h2 className="font-display text-base font-bold text-rose-900">Danger zone</h2>
+                        <p className="text-xs text-rose-700/80">Irreversible actions — use with care.</p>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl bg-white px-4 py-3">
+                      <div>
+                        <div className="text-sm font-semibold text-ink-800">Delete this event</div>
+                        <div className="text-xs text-ink-500">Removes the event, its categories, and every registration permanently.</div>
+                      </div>
+                      <button
+                        onClick={removeEvent}
+                        className="flex items-center gap-1.5 rounded-full bg-rose-600 px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:bg-rose-700"
+                      >
+                        <Trash2 size={13} /> Delete event
+                      </button>
+                    </div>
+                  </div>
+                ),
+              },
+            ].filter(Boolean)}
+          />
         </div>
       )}
 

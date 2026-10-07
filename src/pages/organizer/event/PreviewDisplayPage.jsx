@@ -33,7 +33,10 @@ import { formatDuration } from '../../../utils/format';
 import { usableCourts } from '../../../utils/courts';
 import { teamLabel } from '../../../utils/match';
 import { rankTeams } from '../../../utils/standings';
-import { matchLevelLabel } from '../../../data/playoffApi';
+import { matchLevelLabel, readPlan } from '../../../data/playoffApi';
+import { deriveLadder } from '../../../utils/playoffLadder';
+import { bracketTreeApplies, buildBracketTreesForCategory } from '../../../utils/bracketTree';
+import BracketTreeView from '../../../components/brackets/BracketTreeView';
 
 // Live data (brackets/teams/matches/live courts) polls this often. The
 // event/category/sponsors barely change during a tournament, so they're
@@ -49,6 +52,10 @@ const SLIDE_MS = 7000;
 // the venue can actually perform.
 const PAGE_SIZE = 4;
 const PAGE_MS = 10000;
+// A category's bracket trees (Single Elimination / playoff ladder) rotate
+// one at a time rather than sharing the grid — a tree is tall and needs the
+// full card to stay legible from a TV at a distance.
+const TREE_MS = 20000;
 
 // Two layouts. On a big screen (the venue TV/monitor, >= 1024px) the page is
 // a fixed, unscrollable display that pages through brackets and courts on
@@ -58,6 +65,40 @@ const PAGE_MS = 10000;
 // Match / Recent Winner sit side by side above the standings rather than
 // pinned below them, and sponsors are left off phones entirely.
 const WIDE_QUERY = '(min-width: 1024px)';
+
+// "Jasper Susada & Zeth Mansing" → "Jasper" — same trim BracketTreeView
+// uses for a compact box, applied here to the court strip's live matchup so
+// a chip stays one line regardless of how long real names run.
+function briefTeamName(team) {
+  const label = teamLabel(team);
+  if (!label) return label;
+  return label.split('&')[0].trim().split(' ')[0] || label;
+}
+
+// Single Elimination's compact court strip: one line per court instead of
+// the full-size card grid, so courts cost a row of chips, not a third of
+// the screen, leaving the bracket tree the height it needs.
+function CourtChip({ court, match }) {
+  return (
+    <div
+      className={`flex min-w-0 shrink-0 items-center gap-1.5 rounded-xl px-2.5 py-1.5 ${
+        match ? 'bg-emerald-50 ring-1 ring-emerald-200' : 'bg-ink-50/70 ring-1 ring-ink-100'
+      }`}
+    >
+      <span className={`shrink-0 text-[10px] font-extrabold ${match ? 'text-emerald-700' : 'text-ink-400'}`}>C{court}</span>
+      {match ? (
+        <>
+          <Radio size={8} className="shrink-0 animate-pulse text-emerald-500 motion-reduce:animate-none" />
+          <span className="min-w-0 truncate text-[10px] font-semibold text-ink-800">
+            {briefTeamName(match.team_a)} v {briefTeamName(match.team_b)}
+          </span>
+        </>
+      ) : (
+        <span className="text-[10px] text-ink-300">Open</span>
+      )}
+    </div>
+  );
+}
 
 export default function PreviewDisplayPage() {
   const { eventId, categoryId } = useParams();
@@ -293,6 +334,28 @@ export default function PreviewDisplayPage() {
     totalPages: bracketTotalPages,
   } = usePagedItems(standingsByBracket, isWide ? PAGE_SIZE : Infinity, PAGE_MS);
 
+  // Single Elimination / playoff-ladder categories only (utils/bracketTree.js)
+  // — reuses the matches/category this page already has, same inputs the
+  // public Bracket View tab and organizer Brackets page use. buildBracketTreesForCategory
+  // expects each team tagged with `bracket_letter` the way listTeamsForEvent
+  // (used by useMatchSchedule) attaches it — this page's own team fetches
+  // (the preview_live_snapshot RPC and its listTeamsForCategory fallback)
+  // return raw team rows with only bracket_id, so it's attached here from
+  // the brackets this page already has, or a bye recipient never appears.
+  const categoryTrees = useMemo(() => {
+    if (!category || !bracketTreeApplies(category)) return [];
+    const withLadder = { ...category, ladder: category.playoff_enabled ? deriveLadder(readPlan(category)) : null };
+    const letterByBracketId = new Map(brackets.map((b) => [b.id, b.letter]));
+    const teamsWithLetter = teams.map((t) => ({ ...t, bracket_letter: t.bracket_letter ?? letterByBracketId.get(t.bracket_id) }));
+    return buildBracketTreesForCategory(withLadder, matches, teamsWithLetter).trees;
+  }, [category, matches, teams, brackets]);
+  const { page: treesPage, pageIndex: treePageIndex, totalPages: treeTotalPages } = usePagedItems(categoryTrees, 1, TREE_MS);
+  // Single Elimination (or a playoff ladder) gets its own, much more
+  // compact layout — see isSingleElim below — so the bracket tree can be
+  // the primary content, full height, with no other cards competing for
+  // space. Round Robin / pool-only categories (no tree) are unaffected.
+  const isSingleElim = categoryTrees.length > 0;
+
   const nextMatches = useMemo(() => matches.filter((m) => m.status === 'scheduled').slice(0, 3), [matches]);
 
   const recentWinners = useMemo(
@@ -406,7 +469,11 @@ export default function PreviewDisplayPage() {
     // of clamping to the screen — the whole point of the TV layout needing
     // zero scrolling on a display nobody can scroll. Smaller screens scroll
     // normally (see WIDE_QUERY).
-    <div className="flex min-h-screen w-full flex-col bg-gradient-to-br from-[#f5f5f7] to-[#e7e8ec] p-3 sm:p-5 lg:h-screen lg:overflow-hidden lg:p-6 print:hidden">
+    <div
+      className={`flex min-h-screen w-full flex-col bg-gradient-to-br from-[#f5f5f7] to-[#e7e8ec] p-3 sm:p-5 lg:h-screen lg:overflow-hidden print:hidden ${
+        isWide && isSingleElim ? 'lg:p-4' : 'lg:p-6'
+      }`}
+    >
       {/* Only reachable by the organizer (signed in as owner/staff) — a
           signed-out visitor on the same draft gets pageState 'not_public'
           above instead. Warns them the public can't see this yet. */}
@@ -415,12 +482,15 @@ export default function PreviewDisplayPage() {
           <AlertTriangle size={13} className="shrink-0" /> Draft — the public sees a blank screen until you publish this event.
         </div>
       )}
-      {/* Top frame: event, time left, and the courts. */}
-      <div className="shrink-0 rounded-3xl border border-white/60 bg-white/70 shadow-[0_8px_30px_rgb(0,0,0,0.06)] backdrop-blur-xl">
-        <div className="flex items-center justify-between gap-4 px-4 py-3.5 sm:px-6 sm:py-4">
-          <div className="min-w-0">
-            <div className="truncate font-display text-base font-extrabold tracking-tight text-ink-900 sm:text-xl">{event?.name}</div>
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-ink-500 sm:text-sm">
+      {/* Top frame: event, time left, and the courts. Single Elimination on
+          a wide/TV screen gets one compact merged bar instead of two
+          stacked sections — the bracket tree needs that height far more
+          than the event header does. */}
+      {isWide && isSingleElim ? (
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-3xl border border-white/60 bg-white/70 px-4 py-2.5 shadow-[0_8px_30px_rgb(0,0,0,0.06)] backdrop-blur-xl">
+          <div className="min-w-0 shrink-0">
+            <div className="truncate font-display text-base font-extrabold tracking-tight text-ink-900">{event?.name}</div>
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-ink-500">
               <span className="truncate">{category?.name}</span>
               {stale ? (
                 <span className="flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">
@@ -429,52 +499,116 @@ export default function PreviewDisplayPage() {
               ) : (
                 lastUpdated && (
                   <span className="shrink-0 text-[10px] font-medium text-ink-300">
-                    Updated {lastUpdated.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    {courtsInPlay}/{numCourts} courts in play
                   </span>
                 )
               )}
             </div>
           </div>
+          <div className="flex min-w-0 flex-1 flex-wrap items-center justify-center gap-1.5">
+            {courtNumbers.map((c) => (
+              <CourtChip key={c} court={c} match={liveMatches.find((lm) => lm.court === c)} />
+            ))}
+          </div>
           {progress.totalMatches > 0 && (
             <div className="shrink-0 text-right leading-tight">
-              <div className="flex items-center justify-end gap-1.5 text-sm font-extrabold text-ink-900 sm:text-lg">
-                <Timer size={16} className="text-brand-500" />
+              <div className="flex items-center justify-end gap-1.5 text-sm font-extrabold text-ink-900">
+                <Timer size={15} className="text-brand-500" />
                 {progress.remaining > 0 ? `~${formatDuration(progress.estimatedMinutes)}` : 'Done'}
               </div>
               <div className="text-[10px] font-semibold text-ink-400">
-                {progress.remaining > 0 ? `${progress.remaining} matches left` : 'All matches played'}
+                {progress.remaining > 0 ? `${progress.remaining} left` : 'All played'}
               </div>
             </div>
           )}
         </div>
-
-        <div className="border-t border-ink-100/70 py-3.5 sm:px-6">
-          <div className="mb-2 flex items-center justify-between px-4 text-[10px] font-bold uppercase tracking-wide text-ink-400 sm:px-0">
-            <span>Courts</span>
-            <span>
-              {courtsInPlay}/{numCourts} in play
-            </span>
-          </div>
-          {isWide ? (
-            <div className="grid grid-cols-4 gap-2">{visibleCourts.map(courtCard)}</div>
-          ) : (
-            // Swipeable strip; the side padding lets the first/last card
-            // line up with the frame's edge while still scrolling edge to edge.
-            <div className="flex snap-x snap-mandatory gap-2 overflow-x-auto scroll-px-4 px-4 pb-1 [scrollbar-width:none] sm:scroll-px-0 sm:px-0 [&::-webkit-scrollbar]:hidden">
-              {visibleCourts.map(courtCard)}
+      ) : (
+        <div className="shrink-0 rounded-3xl border border-white/60 bg-white/70 shadow-[0_8px_30px_rgb(0,0,0,0.06)] backdrop-blur-xl">
+          <div className="flex items-center justify-between gap-4 px-4 py-3.5 sm:px-6 sm:py-4">
+            <div className="min-w-0">
+              <div className="truncate font-display text-base font-extrabold tracking-tight text-ink-900 sm:text-xl">{event?.name}</div>
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-ink-500 sm:text-sm">
+                <span className="truncate">{category?.name}</span>
+                {stale ? (
+                  <span className="flex shrink-0 items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-amber-700">
+                    <Radio size={9} className="animate-pulse" /> Reconnecting…
+                  </span>
+                ) : (
+                  lastUpdated && (
+                    <span className="shrink-0 text-[10px] font-medium text-ink-300">
+                      Updated {lastUpdated.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                    </span>
+                  )
+                )}
+              </div>
             </div>
-          )}
-          {isWide && courtTotalPages > 1 && (
-            <div className="mt-2 flex justify-center gap-1.5">
-              {Array.from({ length: courtTotalPages }, (_, i) => (
-                <span key={i} className={`h-1.5 rounded-full transition-all duration-500 ${i === courtPageIndex ? 'w-4 bg-brand-500' : 'w-1.5 bg-ink-200'}`} />
+            {progress.totalMatches > 0 && (
+              <div className="shrink-0 text-right leading-tight">
+                <div className="flex items-center justify-end gap-1.5 text-sm font-extrabold text-ink-900 sm:text-lg">
+                  <Timer size={16} className="text-brand-500" />
+                  {progress.remaining > 0 ? `~${formatDuration(progress.estimatedMinutes)}` : 'Done'}
+                </div>
+                <div className="text-[10px] font-semibold text-ink-400">
+                  {progress.remaining > 0 ? `${progress.remaining} matches left` : 'All matches played'}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="border-t border-ink-100/70 py-3.5 sm:px-6">
+            <div className="mb-2 flex items-center justify-between px-4 text-[10px] font-bold uppercase tracking-wide text-ink-400 sm:px-0">
+              <span>Courts</span>
+              <span>
+                {courtsInPlay}/{numCourts} in play
+              </span>
+            </div>
+            {isWide ? (
+              <div className="grid grid-cols-4 gap-2">{visibleCourts.map(courtCard)}</div>
+            ) : (
+              // Swipeable strip; the side padding lets the first/last card
+              // line up with the frame's edge while still scrolling edge to edge.
+              <div className="flex snap-x snap-mandatory gap-2 overflow-x-auto scroll-px-4 px-4 pb-1 [scrollbar-width:none] sm:scroll-px-0 sm:px-0 [&::-webkit-scrollbar]:hidden">
+                {visibleCourts.map(courtCard)}
+              </div>
+            )}
+            {isWide && courtTotalPages > 1 && (
+              <div className="mt-2 flex justify-center gap-1.5">
+                {Array.from({ length: courtTotalPages }, (_, i) => (
+                  <span key={i} className={`h-1.5 rounded-full transition-all duration-500 ${i === courtPageIndex ? 'w-4 bg-brand-500' : 'w-1.5 bg-ink-200'}`} />
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {isWide && isSingleElim ? (
+        // Single Elimination, wide/TV only: the bracket tree is the only
+        // thing that matters here, so it gets the entire remaining height
+        // to itself — no standings/next-match/recent-winner/sponsor strip
+        // competing with it (that secondary strip is deliberately not shown
+        // for this format; the bottom sponsor ticker below is unaffected).
+        <div className="mt-2 flex min-h-0 flex-1 flex-col">
+          {treesPage.map((tree) => (
+            <div key={tree.key} className={`flex min-h-0 flex-1 flex-col overflow-hidden ${cardClass}`}>
+              <div className="flex shrink-0 items-center justify-between border-b border-ink-100/70 px-4 py-2">
+                <span className="font-display text-sm font-extrabold text-ink-900">{tree.title}</span>
+              </div>
+              <div className="flex min-h-0 flex-1 items-center justify-center p-2 sm:p-3">
+                <BracketTreeView tree={tree} fullNames />
+              </div>
+            </div>
+          ))}
+          {treeTotalPages > 1 && (
+            <div className="mt-2 flex shrink-0 justify-center gap-1.5">
+              {Array.from({ length: treeTotalPages }, (_, i) => (
+                <span key={i} className={`h-1.5 rounded-full transition-all duration-500 ${i === treePageIndex ? 'w-4 bg-brand-500' : 'w-1.5 bg-ink-200'}`} />
               ))}
             </div>
           )}
         </div>
-      </div>
-
-      <div className="mt-3 flex flex-col gap-3 sm:mt-4 sm:gap-4 lg:grid lg:min-h-0 lg:flex-1 lg:grid-cols-4">
+      ) : (
+        <div className="mt-3 flex flex-col gap-3 sm:mt-4 sm:gap-4 lg:grid lg:min-h-0 lg:flex-1 lg:grid-cols-4">
         <div className="flex flex-col lg:col-span-3 lg:min-h-0">
           {standingsByBracket.length === 0 ? (
             <div className="rounded-3xl border border-white/60 bg-white/70 p-10 text-center text-sm text-ink-400 shadow-sm backdrop-blur-xl">
@@ -534,6 +668,34 @@ export default function PreviewDisplayPage() {
                     </table>
                   </div>
                 </div>
+              ))}
+              {treesPage.map((tree) => (
+                <div key={tree.key} className={`flex flex-col overflow-hidden xl:col-span-2 ${cardClass}`}>
+                  <div className="flex shrink-0 items-center justify-between border-b border-ink-100/70 px-4 py-3 sm:px-5 sm:py-3.5">
+                    <span className="font-display text-base font-extrabold text-ink-900">{tree.title}</span>
+                  </div>
+                  <div className="p-3 sm:p-4">
+                    <BracketTreeView tree={tree} fullNames />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {standingsByBracket.length === 0 &&
+            treesPage.map((tree) => (
+              <div key={tree.key} className={`flex flex-col overflow-hidden ${cardClass}`}>
+                <div className="flex shrink-0 items-center justify-between border-b border-ink-100/70 px-4 py-3 sm:px-5 sm:py-3.5">
+                  <span className="font-display text-base font-extrabold text-ink-900">{tree.title}</span>
+                </div>
+                <div className="p-3 sm:p-4">
+                  <BracketTreeView tree={tree} fullNames />
+                </div>
+              </div>
+            ))}
+          {treeTotalPages > 1 && (
+            <div className="mt-2 flex shrink-0 justify-center gap-1.5">
+              {Array.from({ length: treeTotalPages }, (_, i) => (
+                <span key={i} className={`h-1.5 rounded-full transition-all duration-500 ${i === treePageIndex ? 'w-4 bg-brand-500' : 'w-1.5 bg-ink-200'}`} />
               ))}
             </div>
           )}
@@ -609,6 +771,7 @@ export default function PreviewDisplayPage() {
           )}
         </div>
       </div>
+      )}
 
       <div className="mt-3 hidden shrink-0 sm:mt-4 md:block">
         <SponsorMarquee sponsors={otherSponsors} />

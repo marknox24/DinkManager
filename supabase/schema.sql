@@ -505,6 +505,12 @@ alter table categories add column if not exists estimated_match_minutes integer;
 alter table categories add column if not exists qualification jsonb not null default '[]';
 alter table categories add column if not exists qualification_notes text;
 alter table categories add column if not exists disqualification_notes text;
+-- Which day of a multi-day event this category plays on. Null = unassigned,
+-- meaning the estimated Match Schedule (utils/timetable.js) can queue its
+-- matches continuously like every category did before this column existed.
+-- Must fall within the event's start_date/end_date range (not enforced in
+-- SQL — Settings only ever offers days inside that range as choices).
+alter table categories add column if not exists scheduled_date date;
 
 alter table categories enable row level security;
 

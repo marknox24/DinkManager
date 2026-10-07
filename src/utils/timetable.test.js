@@ -132,3 +132,41 @@ test('a match left in progress from an earlier day does not create a phantom del
   const t = run([stale, match({}), match({})]);
   assert.equal(t.summary.behindMinutes, null);
 });
+
+// A category assigned to a specific tournament day (categories.scheduled_date)
+// can't be scheduled before that day begins, even if courts are idle earlier.
+const multiDayEvent = { num_courts: 2, match_duration_minutes: 20, start_date: '2026-10-10', end_date: '2026-10-11', daily_start_time: null };
+const day2CatMatch = (over) => match({ category_id: 'c2', bracket_letter: 'B', match_code: `B${n}`, team_a_id: `x${n}`, team_b_id: `y${n}`, team_a: team(`x${n}`), team_b: team(`y${n}`), ...over });
+
+test('a category assigned to day 2 does not start on day 1, even with free courts', () => {
+  n = 0;
+  const day2Cats = [cats[0], { ...cats[1], scheduled_date: '2026-10-11' }];
+  const t = buildTimetable({ event: multiDayEvent, categories: day2Cats, matches: [day2CatMatch({})], now: NOW });
+  const row = t.rows[0];
+  assert.equal(row.startMs, new Date(2026, 9, 11).getTime());
+});
+
+test('a category assigned to day 1 is unaffected by another category\'s day 2 assignment', () => {
+  n = 0;
+  const day2Cats = [cats[0], { ...cats[1], scheduled_date: '2026-10-11' }];
+  const t = buildTimetable({ event: multiDayEvent, categories: day2Cats, matches: [match({}), day2CatMatch({})], now: NOW });
+  const day1Row = t.rows.find((r) => r.categoryId === 'c1');
+  assert.equal(day1Row.startMs, NOW); // not pushed out by the day-2 item queued after it
+});
+
+test('a day floor respects the daily start time, not just midnight', () => {
+  n = 0;
+  const withStartTime = { ...multiDayEvent, daily_start_time: '09:30:00' };
+  const day2Cats = [{ ...cats[1], scheduled_date: '2026-10-11' }];
+  const t = buildTimetable({ event: withStartTime, categories: day2Cats, matches: [day2CatMatch({})], now: NOW });
+  assert.equal(t.rows[0].startMs, new Date(2026, 9, 11, 9, 30).getTime());
+});
+
+test('a category with no day assignment schedules continuously like before', () => {
+  n = 0;
+  const day2Cats = [cats[0], { ...cats[1], scheduled_date: null }];
+  const singleCourtEvent = { ...multiDayEvent, num_courts: 1 };
+  const t = buildTimetable({ event: singleCourtEvent, categories: day2Cats, matches: [match({}), day2CatMatch({})], now: NOW });
+  const unassignedRow = t.rows.find((r) => r.categoryId === 'c2');
+  assert.equal(unassignedRow.startMs, NOW + 20 * MIN); // queues right behind c1 on the one shared court, no day gap
+});

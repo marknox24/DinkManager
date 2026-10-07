@@ -76,7 +76,7 @@ export default function MatchlistPreviewModal({ category, generating, onGenerate
         target: p.kind === 'round_robin' ? (games ?? expectedRoundRobin(teams.length, p.isDouble).perTeam) : null,
         generatedMin: counts.length ? Math.min(...counts) : 0,
         generatedMax: counts.length ? Math.max(...counts) : 0,
-        seBye: p.byes.find((x) => x.bracket.id === b.id)?.team,
+        seByes: p.byes.filter((x) => x.bracket.id === b.id).map((x) => x.team),
         skipped: p.skippedByBracket?.[b.id] ?? [],
       };
     });
@@ -130,7 +130,7 @@ export default function MatchlistPreviewModal({ category, generating, onGenerate
             </p>
           </div>
 
-          {view.sections.map(({ bracket, teams, rounds, games, total, completed, target, generatedMin, generatedMax, seBye, skipped }) => (
+          {view.sections.map(({ bracket, teams, rounds, games, total, completed, target, generatedMin, generatedMax, seByes, skipped }) => (
             <section key={bracket.id} className="rounded-2xl border border-ink-100">
               <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-ink-100 bg-ink-50/60 px-4 py-3">
                 <h4 className="font-display text-sm font-bold text-ink-900">Bracket {bracket.letter}</h4>
@@ -182,7 +182,13 @@ export default function MatchlistPreviewModal({ category, generating, onGenerate
                               Bye: {teamLabel(t)}
                             </li>
                           ))}
-                        {!isRR && !isProgress && seBye && <li className="px-2.5 text-[11px] text-ink-400">Bye: {teamLabel(seBye)}</li>}
+                        {!isRR &&
+                          !isProgress &&
+                          seByes.map((t) => (
+                            <li key={t.id} className="px-2.5 text-[11px] text-ink-400">
+                              Bye: {teamLabel(t)}
+                            </li>
+                          ))}
                       </ul>
                     </div>
                   ))}

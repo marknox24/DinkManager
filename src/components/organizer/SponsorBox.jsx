@@ -34,7 +34,7 @@ const SLIDE_MS = 4500;
 // more slide horizontally, one at a time, auto-advancing with manual
 // arrow/dot override. Renders nothing when there are no sponsors, so an
 // empty category never shows a blank box on the display.
-export default function SponsorBox({ sponsors }) {
+export default function SponsorBox({ sponsors, compact = false }) {
   const count = sponsors.length;
   const [index, setIndex] = useState(0);
 
@@ -62,14 +62,16 @@ export default function SponsorBox({ sponsors }) {
   const goTo = (next) => setIndex(((next % count) + count) % count);
 
   return (
-    <div className={`rounded-2xl border p-3.5 transition-colors duration-500 sm:p-4 ${style.wrapper}`}>
-      <div className="mb-3 flex items-center justify-center">
-        <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide transition-colors duration-500 ${style.badge}`}>
+    <div className={`rounded-2xl border transition-colors duration-500 ${compact ? 'p-2.5' : 'p-3.5 sm:p-4'} ${style.wrapper}`}>
+      <div className={`${compact ? 'mb-1.5' : 'mb-3'} flex items-center justify-center`}>
+        <span
+          className={`rounded-full font-bold uppercase tracking-wide transition-colors duration-500 ${compact ? 'px-2 py-0.5 text-[9px]' : 'px-2.5 py-1 text-[10px]'} ${style.badge}`}
+        >
           {style.label}
         </span>
       </div>
 
-      <div className="relative h-16 overflow-hidden sm:h-20 lg:h-24">
+      <div className={`relative overflow-hidden ${compact ? 'h-9' : 'h-16 sm:h-20 lg:h-24'}`}>
         {/* Every slide sits side by side in one flex row; sliding the whole
             row by index * 100% is what makes this a true horizontal
             carousel rather than a crossfade — only one logo is ever
@@ -94,7 +96,7 @@ export default function SponsorBox({ sponsors }) {
           ))}
         </div>
 
-        {count > 1 && (
+        {count > 1 && !compact && (
           <>
             <button
               onClick={() => goTo(safeIndex - 1)}
@@ -115,7 +117,7 @@ export default function SponsorBox({ sponsors }) {
       </div>
 
       {count > 1 && (
-        <div className="mt-2.5 flex justify-center gap-1.5">
+        <div className={`${compact ? 'mt-1.5' : 'mt-2.5'} flex justify-center gap-1.5`}>
           {sponsors.map((_, i) => (
             <button
               key={i}

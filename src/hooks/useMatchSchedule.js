@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getEventById, listCategories } from '../data/eventsApi';
-import { listScheduleMatchesForEvent } from '../data/bracketsApi';
+import { listScheduleMatchesForEvent, listTeamsForEvent } from '../data/bracketsApi';
 import { deriveLadder, readPlan } from '../data/playoffApi';
 import { readWithFallback } from '../lib/offlineRead';
 import { getMeta, setMeta } from '../lib/offlineDb';
 import { buildTimetable } from '../utils/timetable';
+import { bracketTreeApplies, buildBracketTreesForCategory } from '../utils/bracketTree';
 import { useNow } from './useNow';
 
 const REFRESH_MS = 10000;
@@ -25,6 +26,7 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
   const [event, setEvent] = useState(initialEvent);
   const [categories, setCategories] = useState(initialCategories);
   const [matches, setMatches] = useState(null);
+  const [teams, setTeams] = useState([]);
   const [error, setError] = useState(null);
   const [fromCache, setFromCache] = useState(false);
   const [updatedAt, setUpdatedAt] = useState(null);
@@ -40,11 +42,17 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
       if (Date.now() - lastStaticRef.current >= STATIC_REFRESH_MS) {
         lastStaticRef.current = Date.now();
         // Non-fatal: keep showing the last known settings if this blips.
+        // Teams ride along on this slow cadence, not the 10s match poll —
+        // who's registered for a bracket doesn't change mid-match the way
+        // scores and live status do.
         const [ev, cats] = await Promise.all([getEventById(eventId).catch(() => null), listCategories(eventId).catch(() => null)]);
         if (ev) setEvent(ev);
         if (cats) {
           setCategories(cats);
           categoriesRef.current = cats;
+          listTeamsForEvent(cats.map((c) => c.id))
+            .then(setTeams)
+            .catch(() => {});
         }
       }
       const ids = categoriesRef.current.map((c) => c.id);
@@ -99,6 +107,12 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
       }
     };
     lastStaticRef.current = Date.now(); // event + categories just arrived as props
+    // ...but teams didn't — unlike event/categories there's no fresh initial
+    // value for them to skip re-fetching, so they need their own one-time
+    // mount fetch instead of waiting for the next STATIC_REFRESH_MS tick.
+    listTeamsForEvent(categoriesRef.current.map((c) => c.id))
+      .then(setTeams)
+      .catch(() => {});
     refresh();
     if (document.visibilityState !== 'hidden') start();
     document.addEventListener('visibilitychange', onVisibility);
@@ -108,11 +122,27 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
     };
   }, [refresh]);
 
+  const withLadders = useMemo(() => categories.map((c) => ({ ...c, ladder: c.playoff_enabled ? deriveLadder(readPlan(c)) : null })), [categories]);
+
   const timetable = useMemo(() => {
     if (!matches) return null;
-    const withLadders = categories.map((c) => ({ ...c, ladder: c.playoff_enabled ? deriveLadder(readPlan(c)) : null }));
     return buildTimetable({ event, categories: withLadders, matches, now });
-  }, [event, categories, matches, now]);
+  }, [event, withLadders, matches, now]);
 
-  return { event, categories, timetable, loading: matches == null && !error, error: matches == null ? error : null, fromCache, updatedAt, refresh };
+  // One entry per category that has a drawable bracket shape (Single
+  // Elimination, or playoff-enabled) — reuses the same matches/categories
+  // already fetched for the schedule, no extra network round trip. See
+  // utils/bracketTree.js for what "applicable"/"trees"/"entrants" mean.
+  // Kept even when `trees` is empty but `entrants` isn't — a Single
+  // Elimination category with teams registered but no bracket drawn yet
+  // still has an entrant list worth showing.
+  const categoryTrees = useMemo(() => {
+    if (!matches) return [];
+    return withLadders
+      .filter((c) => bracketTreeApplies(c))
+      .map((c) => ({ category: c, ...buildBracketTreesForCategory(c, matches, teams) }))
+      .filter((entry) => entry.trees.length > 0 || entry.entrants.length > 0);
+  }, [withLadders, matches, teams]);
+
+  return { event, categories, timetable, categoryTrees, loading: matches == null && !error, error: matches == null ? error : null, fromCache, updatedAt, refresh };
 }

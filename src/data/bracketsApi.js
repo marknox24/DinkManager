@@ -14,6 +14,7 @@ import {
 import { getCustomFormat } from './customFormats';
 import { compareMatchCode } from '../utils/match';
 import { getDeviceId } from '../lib/deviceId';
+import { computeReadySingleEliminationMatches } from '../utils/bracketTree';
 
 // ---------------------------------------------------------------------------
 // OFFLINE-SYNC-AWARE MATCH WRITES
@@ -425,7 +426,9 @@ export async function finishMatch(matchId, { score_a, score_b, winner_team_id, d
     p_duration_minutes: duration_minutes,
   });
   if (error) throw error;
-  return unwrapSyncResult(data);
+  const match = unwrapSyncResult(data);
+  await advanceSingleEliminationBracket(match?.bracket_id);
+  return match;
 }
 
 export async function deleteMatch(matchId, opts) {
@@ -504,6 +507,31 @@ export async function listScheduleMatchesForEvent(categoryIds) {
     if (data.length < PAGE) break;
   }
   return rows.map(({ bracket, ...m }) => ({ ...m, bracket_letter: bracket.letter, bracket_kind: bracket.kind, category_id: bracket.category_id }));
+}
+
+// Every team across every category in the event, in one call — the entrant
+// list a public Single Elimination bracket needs (utils/bracketTree.js),
+// since a bye never gets a match row and so can't be found via
+// listScheduleMatchesForEvent alone. Same anon-safe table (teams_select_
+// public_or_owner, schema.sql) and the same 1000-row paging as that
+// function, for the same reason.
+export async function listTeamsForEvent(categoryIds) {
+  if (categoryIds.length === 0) return [];
+  const PAGE = 1000;
+  const rows = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('teams')
+      .select('*, bracket:bracket_id!inner(letter, kind, category_id)')
+      .in('bracket.category_id', categoryIds)
+      .order('created_at')
+      .order('id')
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    rows.push(...data);
+    if (data.length < PAGE) break;
+  }
+  return rows.map(({ bracket, ...t }) => ({ ...t, bracket_letter: bracket.letter, bracket_kind: bracket.kind, category_id: bracket.category_id }));
 }
 
 // Everything the Preview Screen's poll needs (brackets, teams, matches for
@@ -751,15 +779,86 @@ export async function setGamesPerTeam(categoryId, bracketId, games) {
   if (error) throw error;
 }
 
+// Single Elimination only: after a match finishes, checks whether the
+// bracket's next round is now fully decided (both feeding teams known —
+// see computeReadySingleEliminationMatches) and inserts any newly-ready
+// match rows, continuing the same flat per-bracket match_code counter
+// generateSingleEliminationRound1 started. A losing team never produces a
+// row, by construction — only winner_team_id (and a bye's own id) ever
+// flow into a pairing.
+//
+// Fully additive and resilient: called from finishMatch/
+// recordScheduledMatchResult right after their write succeeds, for every
+// finish path (Match List, Brackets page, Live Match Card, and the offline
+// sync queue flush, since they all funnel through those two functions). It
+// must never fail the match-finish write itself, so every error here is
+// caught and logged, not rethrown.
+//
+// Known, accepted limitation: there's no DB unique constraint on
+// (bracket_id, round_number, team pair), so two matches finishing in the
+// same instant could theoretically both insert the same next-round row —
+// not worth a schema migration for this pass.
+async function advanceSingleEliminationBracket(bracketId) {
+  if (!bracketId) return;
+  try {
+    const { data: bracket, error: bracketErr } = await supabase.from('brackets').select('id, letter, category_id').eq('id', bracketId).single();
+    if (bracketErr || !bracket) return;
+    const { data: category, error: catErr } = await supabase.from('categories').select('format').eq('id', bracket.category_id).single();
+    if (catErr || category?.format !== 'Single Elimination') return;
+
+    const [{ data: bracketMatches, error: matchErr }, { data: bracketTeams, error: teamErr }] = await Promise.all([
+      supabase.from('matches').select('id, team_a_id, team_b_id, round_number, match_code, status, winner_team_id, playoff_stage').eq('bracket_id', bracketId).neq('status', 'canceled'),
+      supabase.from('teams').select('id, created_at').eq('bracket_id', bracketId),
+    ]);
+    if (matchErr || teamErr || !bracketMatches) return;
+
+    const ready = computeReadySingleEliminationMatches(bracketMatches, bracketTeams || []);
+    if (ready.length === 0) return;
+
+    // match_code uses computeReadySingleEliminationMatches's own
+    // position-based codeNumber, NOT a flat "next available number"
+    // counter — a flat counter numbers matches in whatever order they
+    // happen to become ready (a bye's resulting match can resolve before
+    // an adjacent real match that's still being played), which can land a
+    // LOWER number on a visually-later bracket box than its neighbor and
+    // point the bracket tree's connector lines at the wrong match. See
+    // that function's codeNumber comment for the full reasoning.
+    const rows = ready.map((r) => ({
+      bracket_id: bracketId,
+      team_a_id: r.team_a_id,
+      team_b_id: r.team_b_id,
+      status: 'scheduled',
+      round_number: r.round_number,
+      match_code: `${bracket.letter}${r.codeNumber}`,
+      ...(r.playoff_stage ? { playoff_stage: r.playoff_stage } : {}),
+    }));
+    const { error: insertErr } = await supabase.from('matches').insert(rows);
+    if (insertErr) console.error('advanceSingleEliminationBracket insert failed', insertErr);
+  } catch (e) {
+    console.error('advanceSingleEliminationBracket failed', e);
+  }
+}
+
 // Single elimination Round 1 only: pairs teams sequentially per bracket
-// (1v2, 3v4, ...); an odd leftover team gets a bye (no Round 1 row) rather
-// than an auto-advance record. Round 2+ is played via the existing
-// Start-match/Log-score flow on the Brackets page.
+// (1v2, 3v4, ...), rounded up to the bracket's next power of two — however
+// many leftover teams that takes get a bye (no Round 1 row) rather than an
+// auto-advance record, so every later round (including the semifinal,
+// always exactly 4 real players) comes out a clean power of two too. Round
+// 2+ is created automatically once both of its feeding teams are decided —
+// see advanceSingleEliminationBracket, called from finishMatch/
+// recordScheduledMatchResult below.
 export async function generateSingleEliminationRound1(categoryId) {
   const { rows, byes } = await planMatchListForCategory(categoryId);
   if (rows.length === 0) throw new Error('Not enough teams to generate matches.');
   const { data, error } = await supabase.from('matches').insert(rows).select();
   if (error) throw error;
+  // A bracket with more byes than real Round 1 matches has leftover byes
+  // that pair with EACH OTHER (see interleaveRound1Slots in bracketTree.js)
+  // — that Round 2 pairing is fully decided the instant the bracket is
+  // drawn, with no match to finish first, so it needs this one explicit
+  // advancement call right after insert rather than waiting on finishMatch/
+  // recordScheduledMatchResult (which only fire once something is played).
+  await Promise.all([...new Set(rows.map((r) => r.bracket_id))].map((bracketId) => advanceSingleEliminationBracket(bracketId)));
   return {
     matches: data,
     byes: byes.map(({ bracket, team }) => ({ letter: bracket.letter, name: team.player2_name ? `${team.player1_name} & ${team.player2_name}` : team.player1_name })),
@@ -801,5 +900,7 @@ export async function recordScheduledMatchResult(matchId, { score_a, score_b, wi
     p_umpire_name: umpire_name ?? null,
   });
   if (error) throw error;
-  return unwrapSyncResult(data);
+  const match = unwrapSyncResult(data);
+  await advanceSingleEliminationBracket(match?.bracket_id);
+  return match;
 }
