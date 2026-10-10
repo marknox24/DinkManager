@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { AlertTriangle, Clock, Crown, Radio, Timer, Trophy } from 'lucide-react';
-import { getEventById, listCategories, listSponsors } from '../../../data/eventsApi';
+import {
+  loadPublicEventBundle,
+} from '../../../data/eventsApi';
 import {
   computeBracketProgress,
   getPreviewLiveSnapshot,
@@ -44,7 +46,12 @@ import BracketTreeView from '../../../components/brackets/BracketTreeView';
 // category hasn't resolved yet (draft not published, category deleted) —
 // see poll() below.
 const REFRESH_MS = 10000;
-const STATIC_REFRESH_MS = 5 * 60 * 1000;
+// Event/category/sponsor data rarely changes mid-event; 15 min (was 5) per
+// screen keeps a room full of TVs and phones off the database.
+const STATIC_REFRESH_MS = 15 * 60 * 1000;
+// While the event hasn't resolved yet (draft, not public, or a blip) retry
+// calmly instead of on every 10s live tick.
+const UNRESOLVED_RETRY_MS = 30 * 1000;
 const SLIDE_MS = 7000;
 // Both the bracket grid (2x2) and the court row (4 across) are sized so 4
 // per page is exactly what fits a screen without wrapping into extra rows —
@@ -148,7 +155,7 @@ export default function PreviewDisplayPage() {
   const loadStatic = useCallback(async () => {
     if (!isOnline() && (await loadStaticFromCache())) return true;
     try {
-      const [ev, cats, sponsorsData] = await Promise.all([getEventById(eventId), listCategories(eventId), listSponsors(eventId)]);
+      const { event: ev, categories: cats, sponsors: sponsorsData } = await loadPublicEventBundle({ id: eventId }, ['sponsors']);
       const cat = cats.find((c) => c.id === categoryId) || null;
       cacheEvent(ev).catch(() => {});
       cacheCategories(eventId, cats).catch(() => {});
@@ -285,11 +292,11 @@ export default function PreviewDisplayPage() {
     inFlightRef.current = true;
     try {
       const now = Date.now();
-      // Re-check event/category whenever they haven't resolved yet (so a
-      // draft that gets published, or a re-added category, shows up within
-      // one poll instead of waiting the full 5 minutes) or the static
-      // refresh interval has elapsed.
-      if (!resolvedRef.current || now - lastStaticRef.current >= STATIC_REFRESH_MS) {
+      // Re-check event/category on the (slow) static interval, or every
+      // UNRESOLVED_RETRY_MS while they haven't resolved yet (so a draft that
+      // gets published shows up within about half a minute).
+      const sinceStatic = now - lastStaticRef.current;
+      if (resolvedRef.current ? sinceStatic >= STATIC_REFRESH_MS : sinceStatic >= UNRESOLVED_RETRY_MS) {
         resolvedRef.current = await loadStatic();
         lastStaticRef.current = now;
       }

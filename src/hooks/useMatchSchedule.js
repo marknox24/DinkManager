@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getEventById, listCategories } from '../data/eventsApi';
-import { listScheduleMatchesForEvent, listScheduleMatchesPublic, listTeamsForEvent } from '../data/bracketsApi';
+import { listScheduleMatchesForEvent, listScheduleMatchesPublic, listTeamsForEvent, listTeamsPublic } from '../data/bracketsApi';
 import { deriveLadder, readPlan } from '../data/playoffApi';
 import { readWithFallback } from '../lib/offlineRead';
 import { getMeta, setMeta } from '../lib/offlineDb';
@@ -16,7 +16,7 @@ const PUBLIC_REFRESH_MS = 30000;
 // Event settings (courts, match length, start time) and the category list
 // change rarely — re-read them on a slower cadence than the matches.
 const ORGANIZER_STATIC_REFRESH_MS = 60000;
-const PUBLIC_STATIC_REFRESH_MS = 180000;
+const PUBLIC_STATIC_REFRESH_MS = 600000;
 
 const cacheKey = (eventId) => `schedule:${eventId}`;
 
@@ -48,16 +48,25 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
     try {
       if (Date.now() - lastStaticRef.current >= staticRefreshMs) {
         lastStaticRef.current = Date.now();
-        // Non-fatal: keep showing the last known settings if this blips.
-        // Teams ride along on this slow cadence, not the 10s match poll —
-        // who's registered for a bracket doesn't change mid-match the way
-        // scores and live status do.
-        const [ev, cats] = await Promise.all([getEventById(eventId).catch(() => null), listCategories(eventId).catch(() => null)]);
-        if (ev) setEvent(ev);
-        if (cats) {
-          setCategories(cats);
-          categoriesRef.current = cats;
-          listTeamsForEvent(cats.map((c) => c.id))
+        if (offlineCapable) {
+          // Non-fatal: keep showing the last known settings if this blips.
+          // Teams ride along on this slow cadence, not the 10s match poll —
+          // who's registered for a bracket doesn't change mid-match the way
+          // scores and live status do.
+          const [ev, cats] = await Promise.all([getEventById(eventId).catch(() => null), listCategories(eventId).catch(() => null)]);
+          if (ev) setEvent(ev);
+          if (cats) {
+            setCategories(cats);
+            categoriesRef.current = cats;
+            listTeamsForEvent(cats.map((c) => c.id))
+              .then(setTeams)
+              .catch(() => {});
+          }
+        } else {
+          // Public viewers already hold the event and categories from the
+          // page that mounted this hook, so only the (CDN-cached) teams are
+          // worth re-reading — and only rarely.
+          listTeamsPublic(categoriesRef.current.map((c) => c.id))
             .then(setTeams)
             .catch(() => {});
         }
@@ -119,7 +128,7 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
     // ...but teams didn't — unlike event/categories there's no fresh initial
     // value for them to skip re-fetching, so they need their own one-time
     // mount fetch instead of waiting for the next static-refresh tick.
-    listTeamsForEvent(categoriesRef.current.map((c) => c.id))
+    (offlineCapable ? listTeamsForEvent : listTeamsPublic)(categoriesRef.current.map((c) => c.id))
       .then(setTeams)
       .catch(() => {});
     refresh();
@@ -129,7 +138,7 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
       stop();
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [refresh, refreshMs]);
+  }, [refresh, refreshMs, offlineCapable]);
 
   const withLadders = useMemo(() => categories.map((c) => ({ ...c, ladder: c.playoff_enabled ? deriveLadder(readPlan(c)) : null })), [categories]);
 

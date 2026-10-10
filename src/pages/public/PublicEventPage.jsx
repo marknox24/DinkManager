@@ -38,11 +38,7 @@ const ShareEventQrModal = lazy(() => import('../../components/organizer/ShareEve
 import {
   getEventMediaUrl,
   getCoverPhotoObjectPosition,
-  getPublicEventByShareToken,
-  getPublicEventBySlug,
-  listCategories,
-  listCategoryCounts,
-  listSponsors,
+  loadPublicEventBundle,
 } from '../../data/eventsApi';
 import { getMyRegistrationsForEvent } from '../../data/playerApi';
 import { COURT_TYPES } from '../../data/constants';
@@ -322,11 +318,9 @@ export default function PublicEventPage() {
   const linkBase = token ? `/t/${token}` : `/e/${slug}`;
 
   useEffect(() => {
-    const load = token ? getPublicEventByShareToken(token) : getPublicEventBySlug(slug);
-    load
-      .then(async (ev) => {
+    loadPublicEventBundle(token ? { token } : { slug }, ['counts', 'sponsors'])
+      .then(({ event: ev, categories: cats, counts: cnts, sponsors: sps }) => {
         setEvent(ev);
-        const [cats, cnts, sps] = await Promise.all([listCategories(ev.id), listCategoryCounts(ev.id), listSponsors(ev.id)]);
         setCategories(cats);
         setCounts(cnts);
         setSponsors(sps);

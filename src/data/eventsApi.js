@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabaseClient';
 import { compressImage, COVER_PHOTO, DOCUMENT_PHOTO } from '../utils/imageCompress';
+import { fetchCachedJson } from '../lib/cachedFetch';
 
 function slugify(text) {
   return text
@@ -270,6 +271,30 @@ export async function updateCategory(categoryId, payload) {
 export async function deleteCategory(categoryId) {
   const { error } = await supabase.from('categories').delete().eq('id', categoryId);
   if (error) throw error;
+}
+
+// One call for everything an anonymous visitor's page needs about an event.
+// Tries the CDN-cached /api/public-event bundle first (one shared copy for
+// the whole crowd); on any failure it runs the same direct queries the pages
+// used to run themselves, so errors (e.g. a draft event) behave as before.
+//   key:     { slug } | { token } | { id }
+//   include: any of 'counts' | 'sponsors' | 'fields'
+export async function loadPublicEventBundle(key, include = []) {
+  const params = new URLSearchParams();
+  Object.entries(key).forEach(([k, v]) => v && params.set(k, v));
+  if (include.length) params.set('include', [...include].sort().join(','));
+  const cached = await fetchCachedJson(`/api/public-event?${params}`, (b) => b && b.event?.id && Array.isArray(b.categories));
+  if (cached) {
+    return { event: cached.event, categories: cached.categories, counts: cached.counts ?? [], sponsors: cached.sponsors ?? [], fields: cached.fields ?? [] };
+  }
+  const event = key.token ? await getPublicEventByShareToken(key.token) : key.slug ? await getPublicEventBySlug(key.slug) : await getEventById(key.id);
+  const [categories, counts, sponsors, fields] = await Promise.all([
+    listCategories(event.id),
+    include.includes('counts') ? listCategoryCounts(event.id) : [],
+    include.includes('sponsors') ? listSponsors(event.id) : [],
+    include.includes('fields') ? listRegistrationFields(event.id) : [],
+  ]);
+  return { event, categories, counts, sponsors, fields };
 }
 
 export async function listCategoryCounts(eventId) {

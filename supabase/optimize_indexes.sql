@@ -13,6 +13,10 @@ create index if not exists matches_status_idx        on matches       (status) w
 create index if not exists registrations_event_idx   on registrations (event_id);
 create index if not exists registrations_category_idx on registrations (category_id);
 create index if not exists registrations_player_idx  on registrations (player_id);
+-- Registration triggers filter by (category, status) on every insert, and the
+-- duplicate-player check compares lower(trim(player_name)).
+create index if not exists registrations_category_status_idx on registrations (category_id, status);
+create index if not exists registrations_player_name_idx on registrations (lower(trim(player_name)));
 create index if not exists events_published_idx      on events        (is_published, visibility);
 
 analyze categories;

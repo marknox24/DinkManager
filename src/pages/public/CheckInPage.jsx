@@ -5,16 +5,18 @@ import {
   checkInPlayer,
   expireCheckin,
   getCheckinRegistration,
-  getPublicEventBySlug,
-  listCategories,
   listCheckinRoster,
   listCheckinRosterForEvent,
+  loadPublicEventBundle,
 } from '../../data/eventsApi';
 import { flattenCheckinRows, findOtherCategoryMatches } from '../../utils/checkin';
 import { useConfirm } from '../../context/ConfirmContext';
 import Logo from '../../components/ui/Logo';
 
-const POLL_MS = 4000;
+// Was 4s: a hundred phones waiting on a partner meant ~25 queries/second.
+// 12s (+jitter, paused while the phone is hidden) is still quick enough that
+// the screen moves on within a few seconds of the partner checking in.
+const POLL_MS = 12000;
 // In doubles, a lone check-in only holds the team's spot for 5 minutes. If
 // the partner hasn't also checked in by then, the first player's check-in
 // expires and they're sent back to step 1 to try again — otherwise one
@@ -136,10 +138,9 @@ export default function CheckInPage() {
   }, [event]);
 
   useEffect(() => {
-    getPublicEventBySlug(slug)
-      .then(async (ev) => {
+    loadPublicEventBundle({ slug })
+      .then(({ event: ev, categories: cats }) => {
         setEvent(ev);
-        const cats = await listCategories(ev.id);
         setCategories(cats);
       })
       .catch(() => setEvent(null));
@@ -149,26 +150,55 @@ export default function CheckInPage() {
   // there's no one to click "refresh" on a phone someone set down to go play.
   useEffect(() => {
     if (phase !== 'waiting' || !activeReg) return undefined;
-    pollRef.current = setInterval(async () => {
+    let cancelled = false;
+    let inFlight = false;
+    const schedule = () => {
+      pollRef.current = setTimeout(tick, POLL_MS * (0.85 + Math.random() * 0.3));
+    };
+    const tick = async () => {
+      pollRef.current = null;
+      if (inFlight) return;
+      inFlight = true;
       try {
         const fresh = await getCheckinRegistration(activeReg.id);
-        if (fresh && isFullyCheckedIn(fresh)) {
-          clearInterval(pollRef.current);
-          redirectToPreview(fresh.category_id);
-        } else if (fresh) {
-          setActiveReg(fresh);
+        if (cancelled) {
+          inFlight = false;
+          return;
         }
+        if (fresh && isFullyCheckedIn(fresh)) {
+          inFlight = false;
+          redirectToPreview(fresh.category_id);
+          return;
+        }
+        if (fresh) setActiveReg(fresh);
       } catch {
         // Transient network hiccup — just try again on the next tick.
       }
-    }, POLL_MS);
-    return () => clearInterval(pollRef.current);
+      inFlight = false;
+      if (!cancelled && document.visibilityState !== 'hidden') schedule();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        clearTimeout(pollRef.current);
+        pollRef.current = null;
+      } else if (pollRef.current == null && !cancelled) {
+        tick();
+      }
+    };
+    schedule();
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      cancelled = true;
+      clearTimeout(pollRef.current);
+      pollRef.current = null;
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
   }, [phase, activeReg, redirectToPreview]);
 
   // Doubles only: once one player checks in, their spot only holds for 5
   // minutes while the partner hasn't checked in too. Depending on the
   // booleans/id rather than the whole activeReg object keeps this from
-  // restarting every 4s poll tick (activeReg is a fresh object each poll
+  // restarting every poll tick (activeReg is a fresh object each poll
   // even when nothing relevant changed) — it should only reset when the
   // team actually completes or a different registration takes over.
   const activeRegId = activeReg?.id ?? null;

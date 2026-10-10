@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabaseClient';
+import { fetchCachedJson } from '../lib/cachedFetch';
 import {
   computeMissingPairs,
   effectiveGames,
@@ -525,6 +526,15 @@ export async function listScheduleMatchesForEvent(categoryIds) {
 // listScheduleMatchesForEvent alone. Same anon-safe table (teams_select_
 // public_or_owner, schema.sql) and the same 1000-row paging as that
 // function, for the same reason.
+// Public-page variant of listTeamsForEvent via the CDN-cached
+// /api/event-teams endpoint, falling back to the direct query.
+export async function listTeamsPublic(categoryIds) {
+  if (categoryIds.length === 0) return [];
+  const sorted = [...categoryIds].sort(); // stable URL = shared cache entry
+  const cached = await fetchCachedJson(`/api/event-teams?categories=${sorted.join(',')}`, Array.isArray);
+  return cached ?? listTeamsForEvent(categoryIds);
+}
+
 export async function listTeamsForEvent(categoryIds) {
   if (categoryIds.length === 0) return [];
   const PAGE = 1000;
@@ -557,21 +567,6 @@ export async function listTeamsForEvent(categoryIds) {
 // (error code PGRST202, "function not found") — PreviewDisplayPage.jsx
 // falls back to the multi-query path in that case, so the frontend and this
 // migration can ship independently of each other.
-// Reads from a CDN-cached /api endpoint (api/*.js) so a crowd of viewers
-// shares one database query. Returns null on ANY problem — endpoint missing
-// (local dev serves index.html there), erroring, or malformed — so callers
-// fall straight back to querying Supabase directly, as before.
-async function fetchCachedJson(url, isValid) {
-  try {
-    const res = await fetch(url, { headers: { Accept: 'application/json' } });
-    if (!res.ok) return null;
-    const body = await res.json();
-    return isValid(body) ? body : null;
-  } catch {
-    return null;
-  }
-}
-
 export async function getPreviewLiveSnapshot(eventId, categoryId) {
   // The cached copy is fetched anonymously, so a signed-in organizer
   // (who may see rows RLS hides from the public, e.g. an unpublished

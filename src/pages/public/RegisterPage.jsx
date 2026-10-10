@@ -3,13 +3,10 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, IdCard, Loader2, Receipt, UploadCloud, Users } from 'lucide-react';
 import {
   getEventMediaUrl,
-  getPublicEventByShareToken,
-  getPublicEventBySlug,
   getPublicEventRoster,
-  listCategories,
-  listRegistrationFields,
   submitRegistration,
   uploadRegistrationFile,
+  loadPublicEventBundle,
 } from '../../data/eventsApi';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -60,11 +57,9 @@ export default function RegisterPage() {
   const [checkingDuplicate, setCheckingDuplicate] = useState(false);
 
   useEffect(() => {
-    const load = token ? getPublicEventByShareToken(token) : getPublicEventBySlug(slug);
-    load
-      .then(async (ev) => {
+    loadPublicEventBundle(token ? { token } : { slug }, ['fields'])
+      .then(({ event: ev, categories: cats, fields: flds }) => {
         setEvent(ev);
-        const [cats, flds] = await Promise.all([listCategories(ev.id), listRegistrationFields(ev.id)]);
         setCategories(cats);
         setFields(flds);
       })
