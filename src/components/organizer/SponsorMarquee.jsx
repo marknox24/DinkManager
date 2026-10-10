@@ -26,7 +26,7 @@ export default function SponsorMarquee({ sponsors }) {
             {track.map((s, i) => (
               <div key={`${s.id}-${i}`} className="flex shrink-0 items-center gap-2" aria-hidden={i >= sponsors.length}>
                 {s.logo_path ? (
-                  <img src={getEventMediaUrl(s.logo_path)} alt={s.name} className="h-7 w-auto max-w-[96px] object-contain opacity-80" />
+                  <img loading="lazy" decoding="async" src={getEventMediaUrl(s.logo_path)} alt={s.name} className="h-7 w-auto max-w-[96px] object-contain opacity-80" />
                 ) : (
                   <span className={`h-1.5 w-1.5 rounded-full ${SPONSOR_TIERS[s.tier]?.dot || 'bg-ink-300'}`} />
                 )}

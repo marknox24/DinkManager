@@ -124,6 +124,9 @@ export default function PreviewDisplayPage() {
   const resolvedRef = useRef(false); // event + category currently valid
   const lastStaticRef = useRef(0); // Date.now() of the last static fetch
   const inFlightRef = useRef(false); // guards against overlapping polls
+  const failuresRef = useRef(0); // consecutive failed live loads, drives poll backoff
+  const skipTicksRef = useRef(0);
+  const loadErrorRef = useRef(null);
 
   // Event/category/sponsors — rarely change mid-tournament, so this isn't
   // part of the fast poll (see poll() below for the cadence it actually
@@ -219,20 +222,18 @@ export default function PreviewDisplayPage() {
       }
       return;
     }
-    // One round trip via the snapshot function when it's deployed and
-    // healthy; falls back to the old multi-query path — both when
-    // getPreviewLiveSnapshot returns null (the migration isn't deployed
-    // yet) and when it throws for any other reason (e.g. a statement
-    // timeout under load). A TV/kiosk display has no one to retry it, so a
-    // single slow poll of the fast path shouldn't blank out data the slower
-    // path can still deliver.
-    let snapshot = null;
+    // One round trip via the snapshot function. Only a genuinely missing
+    // function (null: the migration isn't deployed yet) justifies the old
+    // 4-query path.
+    // A thrown error is usually the database being overloaded; falling back
+    // to four heavier queries then makes the overload worse, so it is
+    // rethrown into the cache fallback below and the poll backs off instead.
+    const snapshot = await getPreviewLiveSnapshot(eventId, categoryId).catch((e) => {
+      loadErrorRef.current = e;
+      return undefined;
+    });
     try {
-      snapshot = await getPreviewLiveSnapshot(eventId, categoryId);
-    } catch {
-      snapshot = null;
-    }
-    try {
+      if (snapshot === undefined) throw loadErrorRef.current;
       if (snapshot) {
         setBrackets(snapshot.brackets);
         setTeams(snapshot.teams);
@@ -254,7 +255,9 @@ export default function PreviewDisplayPage() {
       }
       setLastUpdated(new Date());
       setStale(false);
+      failuresRef.current = 0;
     } catch {
+      failuresRef.current += 1;
       // Both live paths failed — show what this device last saw rather
       // than leaving the courts empty.
       try {
@@ -268,6 +271,17 @@ export default function PreviewDisplayPage() {
 
   const poll = useCallback(async () => {
     if (inFlightRef.current) return;
+    // Exponential backoff while loads keep failing: skip 1, 3, 7 ticks
+    // (capped at 7, ~80s between attempts) so a struggling database isn't
+    // hit every 10s by every open screen.
+    if (failuresRef.current > 0) {
+      const skip = Math.min(2 ** failuresRef.current - 1, 7);
+      if (skipTicksRef.current < skip) {
+        skipTicksRef.current += 1;
+        return;
+      }
+      skipTicksRef.current = 0;
+    }
     inFlightRef.current = true;
     try {
       const now = Date.now();

@@ -263,7 +263,7 @@ export default function DashboardPage() {
               className="hover-lift animate-rise-in flex flex-col overflow-hidden rounded-2xl border border-ink-100 bg-white text-left shadow-sm"
             >
               {event.cover_photo_path ? (
-                <img
+                <img loading="lazy" decoding="async"
                   src={getEventMediaUrl(event.cover_photo_path)}
                   alt=""
                   className="h-32 w-full object-cover"
@@ -349,7 +349,7 @@ export default function DashboardPage() {
                 className="hover-lift animate-rise-in flex flex-col overflow-hidden rounded-2xl border border-ink-100 bg-white text-left shadow-sm"
               >
                 {event.cover_photo_path ? (
-                  <img
+                  <img loading="lazy" decoding="async"
                     src={getEventMediaUrl(event.cover_photo_path)}
                     alt=""
                     className="h-32 w-full object-cover"

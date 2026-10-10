@@ -3861,3 +3861,5 @@ as $$
 $$;
 
 grant execute on function preview_live_snapshot(uuid, uuid) to anon, authenticated;
+
+-- See supabase/optimize_indexes.sql for query-performance indexes (run once in the SQL editor).

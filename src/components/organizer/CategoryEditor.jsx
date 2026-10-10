@@ -74,7 +74,7 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete, de
         className="flex cursor-pointer items-center gap-3 px-4 py-3 transition hover:bg-ink-50/60"
       >
         {local.image_path ? (
-          <img src={getEventMediaUrl(local.image_path)} alt="" className="h-10 w-10 shrink-0 rounded-lg border border-ink-200 object-cover" />
+          <img loading="lazy" decoding="async" src={getEventMediaUrl(local.image_path)} alt="" className="h-10 w-10 shrink-0 rounded-lg border border-ink-200 object-cover" />
         ) : (
           <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-ink-50 text-ink-300">
             <ImagePlus size={16} />

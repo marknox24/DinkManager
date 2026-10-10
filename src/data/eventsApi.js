@@ -1,4 +1,5 @@
 import { supabase } from '../lib/supabaseClient';
+import { compressImage, COVER_PHOTO, DOCUMENT_PHOTO } from '../utils/imageCompress';
 
 function slugify(text) {
   return text
@@ -607,7 +608,8 @@ export async function listActivity(eventId, limit = 30) {
 // ---------------------------------------------------------------------------
 // STORAGE
 // ---------------------------------------------------------------------------
-export async function uploadEventMedia(eventId, file) {
+export async function uploadEventMedia(eventId, rawFile) {
+  const file = await compressImage(rawFile, COVER_PHOTO);
   const path = `${eventId}/${Date.now()}-${slugify(file.name)}`;
   const { error } = await supabase.storage.from('event-media').upload(path, file, { upsert: true });
   if (error) throw error;
@@ -615,14 +617,16 @@ export async function uploadEventMedia(eventId, file) {
   return { path, publicUrl: data.publicUrl };
 }
 
-export async function uploadRegistrationFile(eventId, file) {
+export async function uploadRegistrationFile(eventId, rawFile) {
+  const file = await compressImage(rawFile, DOCUMENT_PHOTO);
   const path = `${eventId}/${Date.now()}-${slugify(file.name)}`;
   const { error } = await supabase.storage.from('registration-uploads').upload(path, file);
   if (error) throw error;
   return { path };
 }
 
-export async function uploadExpenseReceipt(eventId, file) {
+export async function uploadExpenseReceipt(eventId, rawFile) {
+  const file = await compressImage(rawFile, DOCUMENT_PHOTO);
   const path = `${eventId}/${Date.now()}-${slugify(file.name)}`;
   const { error } = await supabase.storage.from('event-receipts').upload(path, file);
   if (error) throw error;
@@ -658,7 +662,8 @@ export function getCoverPhotoObjectPosition(event) {
 // SUBSCRIPTION REQUESTS  (manual/QR payment flow — see supabase/schema.sql's
 // "SUBSCRIPTION REQUESTS" section and supabase/functions/approve-subscription-request)
 // ---------------------------------------------------------------------------
-export async function uploadSubscriptionProof(file) {
+export async function uploadSubscriptionProof(rawFile) {
+  const file = await compressImage(rawFile, DOCUMENT_PHOTO);
   const path = `${Date.now()}-${slugify(file.name)}`;
   const { error } = await supabase.storage.from('subscription-proofs').upload(path, file);
   if (error) throw error;

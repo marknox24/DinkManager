@@ -8,7 +8,7 @@ export default function FinalCTA() {
 
   return (
     <section className="relative overflow-hidden bg-ink-950 py-28">
-      <img src="/images/landing/outdoor-court.jpg" alt="" aria-hidden="true" className="absolute inset-0 h-full w-full object-cover opacity-30" />
+      <img loading="lazy" decoding="async" src="/images/landing/outdoor-court.jpg" alt="" aria-hidden="true" className="absolute inset-0 h-full w-full object-cover opacity-30" />
       <div className="absolute inset-0 bg-gradient-to-t from-ink-950 via-ink-950/85 to-ink-950/60" />
 
       <div className="relative mx-auto max-w-2xl px-4 text-center">

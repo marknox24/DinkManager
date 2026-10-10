@@ -8,10 +8,15 @@ import { buildTimetable } from '../utils/timetable';
 import { bracketTreeApplies, buildBracketTreesForCategory } from '../utils/bracketTree';
 import { useNow } from './useNow';
 
-const REFRESH_MS = 10000;
+// The organizer desk needs near-live scores; spectators on the public page
+// don't, and there can be hundreds of them each downloading every match in
+// the event — so they poll 3x less often (and the static data 3x less again).
+const ORGANIZER_REFRESH_MS = 10000;
+const PUBLIC_REFRESH_MS = 30000;
 // Event settings (courts, match length, start time) and the category list
 // change rarely — re-read them on a slower cadence than the matches.
-const STATIC_REFRESH_MS = 60000;
+const ORGANIZER_STATIC_REFRESH_MS = 60000;
+const PUBLIC_STATIC_REFRESH_MS = 180000;
 
 const cacheKey = (eventId) => `schedule:${eventId}`;
 
@@ -34,12 +39,14 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
   const lastStaticRef = useRef(0);
   const categoriesRef = useRef(initialCategories);
   const now = useNow(15000);
+  const refreshMs = offlineCapable ? ORGANIZER_REFRESH_MS : PUBLIC_REFRESH_MS;
+  const staticRefreshMs = offlineCapable ? ORGANIZER_STATIC_REFRESH_MS : PUBLIC_STATIC_REFRESH_MS;
 
   const refresh = useCallback(async () => {
     if (inFlightRef.current) return;
     inFlightRef.current = true;
     try {
-      if (Date.now() - lastStaticRef.current >= STATIC_REFRESH_MS) {
+      if (Date.now() - lastStaticRef.current >= staticRefreshMs) {
         lastStaticRef.current = Date.now();
         // Non-fatal: keep showing the last known settings if this blips.
         // Teams ride along on this slow cadence, not the 10s match poll —
@@ -85,12 +92,14 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
     } finally {
       inFlightRef.current = false;
     }
-  }, [eventId, offlineCapable]);
+  }, [eventId, offlineCapable, staticRefreshMs]);
 
   useEffect(() => {
     let intervalId = null;
     const start = () => {
-      if (intervalId == null) intervalId = setInterval(refresh, REFRESH_MS);
+      // ±15% jitter so a crowd that opened the page together doesn't hit the
+      // database in lockstep every interval.
+      if (intervalId == null) intervalId = setInterval(refresh, Math.round(refreshMs * (0.85 + Math.random() * 0.3)));
     };
     const stop = () => {
       if (intervalId != null) {
@@ -109,7 +118,7 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
     lastStaticRef.current = Date.now(); // event + categories just arrived as props
     // ...but teams didn't — unlike event/categories there's no fresh initial
     // value for them to skip re-fetching, so they need their own one-time
-    // mount fetch instead of waiting for the next STATIC_REFRESH_MS tick.
+    // mount fetch instead of waiting for the next static-refresh tick.
     listTeamsForEvent(categoriesRef.current.map((c) => c.id))
       .then(setTeams)
       .catch(() => {});
@@ -120,7 +129,7 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
       stop();
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [refresh]);
+  }, [refresh, refreshMs]);
 
   const withLadders = useMemo(() => categories.map((c) => ({ ...c, ladder: c.playoff_enabled ? deriveLadder(readPlan(c)) : null })), [categories]);
 
