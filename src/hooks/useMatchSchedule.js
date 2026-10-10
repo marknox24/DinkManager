@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getEventById, listCategories } from '../data/eventsApi';
-import { listScheduleMatchesForEvent, listTeamsForEvent } from '../data/bracketsApi';
+import { listScheduleMatchesForEvent, listScheduleMatchesPublic, listTeamsForEvent } from '../data/bracketsApi';
 import { deriveLadder, readPlan } from '../data/playoffApi';
 import { readWithFallback } from '../lib/offlineRead';
 import { getMeta, setMeta } from '../lib/offlineDb';
@@ -80,7 +80,7 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
           setError(result.error?.message || 'Could not load the schedule.');
         }
       } else {
-        setMatches(await listScheduleMatchesForEvent(ids));
+        setMatches(await listScheduleMatchesPublic(ids));
         setFromCache(false);
         setError(null);
         setUpdatedAt(Date.now());

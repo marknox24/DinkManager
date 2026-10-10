@@ -486,6 +486,16 @@ export async function listMatchesForCategory(categoryId) {
 // timetable (utils/timetable.js). Works for signed-out visitors on a
 // published event: matches/brackets/teams are anon-readable under the same
 // RLS the Preview Screen's snapshot relies on.
+// Public-page variant: same rows, but served through the CDN-cached
+// /api/schedule-matches endpoint. The organizer's own schedule keeps calling
+// listScheduleMatchesForEvent directly (it needs live, authenticated reads).
+export async function listScheduleMatchesPublic(categoryIds) {
+  if (categoryIds.length === 0) return [];
+  const sorted = [...categoryIds].sort(); // stable URL = shared cache entry
+  const cached = await fetchCachedJson(`/api/schedule-matches?categories=${sorted.join(',')}`, Array.isArray);
+  return cached ?? listScheduleMatchesForEvent(categoryIds);
+}
+
 export async function listScheduleMatchesForEvent(categoryIds) {
   if (categoryIds.length === 0) return [];
   // PostgREST caps a response at 1000 rows; a big multi-category event can
@@ -547,11 +557,39 @@ export async function listTeamsForEvent(categoryIds) {
 // (error code PGRST202, "function not found") — PreviewDisplayPage.jsx
 // falls back to the multi-query path in that case, so the frontend and this
 // migration can ship independently of each other.
+// Reads from a CDN-cached /api endpoint (api/*.js) so a crowd of viewers
+// shares one database query. Returns null on ANY problem — endpoint missing
+// (local dev serves index.html there), erroring, or malformed — so callers
+// fall straight back to querying Supabase directly, as before.
+async function fetchCachedJson(url, isValid) {
+  try {
+    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!res.ok) return null;
+    const body = await res.json();
+    return isValid(body) ? body : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function getPreviewLiveSnapshot(eventId, categoryId) {
-  const { data, error } = await supabase.rpc('preview_live_snapshot', { p_event_id: eventId, p_category_id: categoryId });
-  if (error) {
-    if (error.code === 'PGRST202') return null;
-    throw error;
+  // The cached copy is fetched anonymously, so a signed-in organizer
+  // (who may see rows RLS hides from the public, e.g. an unpublished
+  // event) keeps reading directly. Spectators are the crowd that matters.
+  const { data: auth } = await supabase.auth.getSession();
+  let data = auth?.session
+    ? null
+    : await fetchCachedJson(
+        `/api/preview-snapshot?event=${encodeURIComponent(eventId)}&category=${encodeURIComponent(categoryId)}`,
+        (body) => body && typeof body === 'object' && !Array.isArray(body)
+      );
+  if (!data) {
+    const result = await supabase.rpc('preview_live_snapshot', { p_event_id: eventId, p_category_id: categoryId });
+    if (result.error) {
+      if (result.error.code === 'PGRST202') return null;
+      throw result.error;
+    }
+    data = result.data;
   }
   const matches = (data.matches || []).sort(
     (a, b) =>
