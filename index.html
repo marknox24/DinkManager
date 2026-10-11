@@ -9,7 +9,23 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+    <!-- media="print" + onload swap: the stylesheet still loads immediately,
+         but doesn't block the first paint on a slow mobile connection while
+         it does. display=swap in the URL already means text renders in a
+         fallback font and swaps in once this loads either way — this just
+         stops that wait from blocking everything else too. -->
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap"
+      media="print"
+      onload="this.media='all'"
+    />
+    <noscript>
+      <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap"
+      />
+    </noscript>
     <!-- These are the defaults; src/hooks/useSeo.js swaps them per page (and
          keeps its DEFAULTS in sync with the title/description here). -->
     <title>Pickleball Tournament Software &amp; Bracket Maker | DinkManager</title>

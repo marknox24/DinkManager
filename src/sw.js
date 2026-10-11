@@ -1,6 +1,7 @@
-import { precacheAndRoute } from 'workbox-precaching';
+import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching';
 import { registerRoute, NavigationRoute } from 'workbox-routing';
 import { NetworkOnly, CacheFirst, StaleWhileRevalidate } from 'workbox-strategies';
+import { ExpirationPlugin } from 'workbox-expiration';
 import { createHandlerBoundToURL } from 'workbox-precaching';
 
 // injectManifest (not generateSW) so the Supabase-exclusion rule below is
@@ -8,6 +9,12 @@ import { createHandlerBoundToURL } from 'workbox-precaching';
 // could accidentally grow a catch-all rule later. Registered FIRST — Workbox
 // matches routes in registration order — so nothing below can shadow it.
 precacheAndRoute(self.__WB_MANIFEST);
+
+// Drops the previous deploy's now-unreferenced precache entries once this
+// worker activates — unrelated to the skip-waiting decision below (that's
+// about WHEN a new worker takes over; this is just not leaving the old
+// worker's cached JS/CSS sitting in storage forever afterward).
+cleanupOutdatedCaches();
 
 // NON-NEGOTIABLE: every Supabase request (REST/Auth/Storage/Functions/
 // Realtime) bypasses the service worker entirely. All real offline data
@@ -32,7 +39,17 @@ registerRoute(
   new StaleWhileRevalidate({ cacheName: 'google-fonts' })
 );
 
-registerRoute(({ url }) => url.pathname.startsWith('/images/'), new CacheFirst({ cacheName: 'app-images' }));
+registerRoute(
+  ({ url }) => url.pathname.startsWith('/images/'),
+  new CacheFirst({
+    cacheName: 'app-images',
+    // These were unbounded — a phone that visited a lot of different
+    // events over time would keep every cover photo/sponsor logo it ever
+    // saw. 60 entries / 30 days is plenty for "load instantly on repeat
+    // visits" without growing forever on a low-end phone's limited storage.
+    plugins: [new ExpirationPlugin({ maxEntries: 60, maxAgeSeconds: 30 * 24 * 60 * 60 })],
+  })
+);
 
 // Update flow: a new SW install now waits (the browser's default) instead
 // of self-activating. Unconditional skipWaiting() used to swap an

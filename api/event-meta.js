@@ -49,9 +49,9 @@ async function fetchEvent(column, value) {
   const cols = 'name,slug,description,cover_photo_path,location_address,start_date,end_date,is_published';
   const res = await fetch(
     `${url}/rest/v1/events?${column}=eq.${encodeURIComponent(value)}&is_published=eq.true&select=${cols}&limit=1`,
-    { headers: { apikey: key, Authorization: `Bearer ${key}` } }
+    { headers: { apikey: key, Authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(8000) }
   );
-  if (!res.ok) return null;
+  if (!res.ok) throw new Error(`events lookup: ${res.status}`);
   const rows = await res.json();
   return Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
 }
@@ -97,19 +97,29 @@ function renderHtml({ title, description, image, url, noindex }) {
 export default async function handler(req, res) {
   const { slug, token } = req.query;
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
-  res.setHeader('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400');
 
   let event = null;
+  let lookupFailed = false;
   try {
     event = slug ? await fetchEvent('slug', slug) : token ? await fetchEvent('share_token', token) : null;
   } catch {
-    // Fall through to the sitewide default below.
+    // A real failure (Supabase down/slow, bad response) — fall through to
+    // the sitewide default below, but don't cache it: caching an error
+    // response for an hour (let alone the 24h stale window) would keep
+    // every crawler seeing the generic fallback long after Supabase
+    // recovers, exactly what happened to this event on Oct 10.
+    lookupFailed = true;
   }
 
   if (!event) {
+    // Genuinely no such public event (bad/old link, unpublished) is worth
+    // a short cache — crawlers re-fetch these often and it'll never
+    // resolve differently on its own. A lookup failure gets none at all.
+    res.setHeader('Cache-Control', lookupFailed ? 'no-store' : 'public, s-maxage=300, stale-while-revalidate=300');
     res.status(200).send(renderHtml({ title: FALLBACK_TITLE, description: FALLBACK_DESCRIPTION, image: FALLBACK_IMAGE, url: SITE_URL, noindex: !!token }));
     return;
   }
+  res.setHeader('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400');
 
   const city = cityOf(event.location_address);
   const when = formatDateRange(event.start_date, event.end_date);

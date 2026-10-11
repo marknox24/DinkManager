@@ -30,6 +30,15 @@ export default function PlayerLoginPage() {
     if (saved) setEmail(saved);
   }, []);
 
+  // A hung request (slow wifi at a crowded venue) used to leave the button
+  // disabled forever with no feedback — the exact condition that makes
+  // someone reload and try again, doubling the load on an already-struggling
+  // server. This caps every network step in the login flow so the form
+  // always re-enables with a clear message instead of hanging silently.
+  const SIGN_IN_TIMEOUT_MS = 15000;
+  const withTimeout = (promise, message) =>
+    Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(message)), SIGN_IN_TIMEOUT_MS))]);
+
   const finishLogin = () => {
     if (rememberMe) {
       localStorage.setItem(REMEMBER_KEY, email);
@@ -42,40 +51,43 @@ export default function PlayerLoginPage() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     setSubmitting(true);
-    const { error } = await signIn(email, password);
-    if (error) {
-      setSubmitting(false);
-      pushToast(error.message, 'error');
-      return;
-    }
-    const { data: aal } = await getAal();
-    if (aal && aal.currentLevel !== aal.nextLevel) {
-      const { data: factorsData, error: factorsError } = await mfaListFactors();
-      setSubmitting(false);
-      if (factorsError) {
-        pushToast(factorsError.message, 'error');
+    try {
+      const { error } = await withTimeout(signIn(email, password), "Taking longer than usual. Please wait — don't tap Sign in again.");
+      if (error) {
+        pushToast(error.message, 'error');
         return;
       }
-      const totpFactor = factorsData?.totp?.find((f) => f.status === 'verified');
-      if (!totpFactor) {
-        pushToast('Could not find your authenticator factor. Please try again.', 'error');
+      const { data: aal } = await withTimeout(getAal(), "Taking longer than usual — please try again.");
+      if (aal && aal.currentLevel !== aal.nextLevel) {
+        const { data: factorsData, error: factorsError } = await mfaListFactors();
+        if (factorsError) {
+          pushToast(factorsError.message, 'error');
+          return;
+        }
+        const totpFactor = factorsData?.totp?.find((f) => f.status === 'verified');
+        if (!totpFactor) {
+          pushToast('Could not find your authenticator factor. Please try again.', 'error');
+          return;
+        }
+        setMfaFactorId(totpFactor.id);
+        setStep('mfa');
         return;
       }
-      setMfaFactorId(totpFactor.id);
-      setStep('mfa');
-      return;
+      finishLogin();
+    } catch (err) {
+      pushToast(err.message, 'error');
+    } finally {
+      setSubmitting(false);
     }
-    setSubmitting(false);
-    finishLogin();
   };
 
   const handleVerifyMfa = async (e) => {
     e.preventDefault();
     setSubmitting(true);
     try {
-      const { data: challenge, error: challengeError } = await mfaChallenge(mfaFactorId);
+      const { data: challenge, error: challengeError } = await withTimeout(mfaChallenge(mfaFactorId), "Taking longer than usual — please try again.");
       if (challengeError) throw challengeError;
-      const { error: verifyError } = await mfaVerify(mfaFactorId, challenge.id, mfaCode);
+      const { error: verifyError } = await withTimeout(mfaVerify(mfaFactorId, challenge.id, mfaCode), "Taking longer than usual — please try again.");
       if (verifyError) throw verifyError;
       await refreshAal();
       finishLogin();

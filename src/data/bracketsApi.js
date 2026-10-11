@@ -567,25 +567,7 @@ export async function listTeamsForEvent(categoryIds) {
 // (error code PGRST202, "function not found") — PreviewDisplayPage.jsx
 // falls back to the multi-query path in that case, so the frontend and this
 // migration can ship independently of each other.
-export async function getPreviewLiveSnapshot(eventId, categoryId) {
-  // The cached copy is fetched anonymously, so a signed-in organizer
-  // (who may see rows RLS hides from the public, e.g. an unpublished
-  // event) keeps reading directly. Spectators are the crowd that matters.
-  const { data: auth } = await supabase.auth.getSession();
-  let data = auth?.session
-    ? null
-    : await fetchCachedJson(
-        `/api/preview-snapshot?event=${encodeURIComponent(eventId)}&category=${encodeURIComponent(categoryId)}`,
-        (body) => body && typeof body === 'object' && !Array.isArray(body)
-      );
-  if (!data) {
-    const result = await supabase.rpc('preview_live_snapshot', { p_event_id: eventId, p_category_id: categoryId });
-    if (result.error) {
-      if (result.error.code === 'PGRST202') return null;
-      throw result.error;
-    }
-    data = result.data;
-  }
+function normalizePreviewSnapshot(data) {
   const matches = (data.matches || []).sort(
     (a, b) =>
       (a.round_number || 0) - (b.round_number || 0) ||
@@ -593,6 +575,62 @@ export async function getPreviewLiveSnapshot(eventId, categoryId) {
       compareMatchCode(a.match_code, b.match_code)
   );
   return { brackets: data.brackets || [], teams: data.teams || [], matches, live: data.live || [] };
+}
+
+// At most one direct-Supabase fallback attempt (CDN retry doesn't count —
+// that's cheap and CDN-side) per event+category pair within this window, no
+// matter how many of the crowd are polling it. Without this, a CDN hiccup
+// or an organizer's own still-draft event would turn into every viewer's
+// next poll hitting Postgres directly — the exact pile-up that overloaded
+// the database at the Oct 10 event.
+const FALLBACK_COOLDOWN_MS = 45000;
+const fallbackCooldownUntil = new Map();
+
+export async function getPreviewLiveSnapshot(eventId, categoryId) {
+  const key = `${eventId}:${categoryId}`;
+  // Tried for EVERY viewer now, signed in or not — previously a signed-in
+  // organizer (which, during an event, is most of the crowd: players sign
+  // in to check in and register) skipped the CDN cache entirely and hit
+  // Supabase directly on every single poll.
+  let data = await fetchCachedJson(
+    `/api/preview-snapshot?event=${encodeURIComponent(eventId)}&category=${encodeURIComponent(categoryId)}`,
+    (body) => body && typeof body === 'object' && !Array.isArray(body)
+  );
+
+  // Zero brackets from the cache is ambiguous: a genuinely empty category,
+  // or a draft/unpublished event the anonymous cache can't see (RLS hides
+  // it) but its signed-in owner/staff can. Only the second case is worth a
+  // direct check, and only for whoever is actually signed in.
+  const emptyFromCache = data && Array.isArray(data.brackets) && data.brackets.length === 0;
+  if (!data || emptyFromCache) {
+    const now = Date.now();
+    if ((fallbackCooldownUntil.get(key) || 0) <= now) {
+      fallbackCooldownUntil.set(key, now + FALLBACK_COOLDOWN_MS);
+      const { data: auth } = await supabase.auth.getSession();
+      if (auth?.session) {
+        const result = await supabase.rpc('preview_live_snapshot', { p_event_id: eventId, p_category_id: categoryId });
+        if (result.error) {
+          if (result.error.code === 'PGRST202') return data ? normalizePreviewSnapshot(data) : null;
+          if (!data) throw result.error;
+          // Direct check failed but the (possibly empty) cached answer is
+          // still usable — fall through and serve that instead of erroring.
+        } else if (!data || (result.data.brackets || []).length > data.brackets.length) {
+          data = result.data;
+          fallbackCooldownUntil.delete(key); // got a real answer — don't suppress the next poll
+        }
+      }
+    }
+  } else {
+    fallbackCooldownUntil.delete(key);
+  }
+
+  if (!data) {
+    // CDN unreachable and either nobody's signed in to fall back for, or
+    // we're inside the cooldown — throw so the caller's existing
+    // retry/backoff handles it, instead of hammering Supabase on every poll.
+    throw new Error('Preview snapshot temporarily unavailable');
+  }
+  return normalizePreviewSnapshot(data);
 }
 
 // Loads what a category's matchlist is generated from — its pool brackets

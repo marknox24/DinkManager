@@ -636,7 +636,7 @@ export async function listActivity(eventId, limit = 30) {
 export async function uploadEventMedia(eventId, rawFile) {
   const file = await compressImage(rawFile, COVER_PHOTO);
   const path = `${eventId}/${Date.now()}-${slugify(file.name)}`;
-  const { error } = await supabase.storage.from('event-media').upload(path, file, { upsert: true });
+  const { error } = await supabase.storage.from('event-media').upload(path, file, { upsert: true, cacheControl: '31536000' });
   if (error) throw error;
   const { data } = supabase.storage.from('event-media').getPublicUrl(path);
   return { path, publicUrl: data.publicUrl };
@@ -645,7 +645,7 @@ export async function uploadEventMedia(eventId, rawFile) {
 export async function uploadRegistrationFile(eventId, rawFile) {
   const file = await compressImage(rawFile, DOCUMENT_PHOTO);
   const path = `${eventId}/${Date.now()}-${slugify(file.name)}`;
-  const { error } = await supabase.storage.from('registration-uploads').upload(path, file);
+  const { error } = await supabase.storage.from('registration-uploads').upload(path, file, { cacheControl: '31536000' });
   if (error) throw error;
   return { path };
 }
@@ -653,7 +653,7 @@ export async function uploadRegistrationFile(eventId, rawFile) {
 export async function uploadExpenseReceipt(eventId, rawFile) {
   const file = await compressImage(rawFile, DOCUMENT_PHOTO);
   const path = `${eventId}/${Date.now()}-${slugify(file.name)}`;
-  const { error } = await supabase.storage.from('event-receipts').upload(path, file);
+  const { error } = await supabase.storage.from('event-receipts').upload(path, file, { cacheControl: '31536000' });
   if (error) throw error;
   return { path };
 }
@@ -690,7 +690,7 @@ export function getCoverPhotoObjectPosition(event) {
 export async function uploadSubscriptionProof(rawFile) {
   const file = await compressImage(rawFile, DOCUMENT_PHOTO);
   const path = `${Date.now()}-${slugify(file.name)}`;
-  const { error } = await supabase.storage.from('subscription-proofs').upload(path, file);
+  const { error } = await supabase.storage.from('subscription-proofs').upload(path, file, { cacheControl: '31536000' });
   if (error) throw error;
   return { path };
 }
@@ -888,7 +888,7 @@ export async function getAppSettings() {
 // visitors the same way event cover photos already are.
 export async function uploadPaymentQr(file) {
   const path = `platform/${Date.now()}-${slugify(file.name)}`;
-  const { error } = await supabase.storage.from('event-media').upload(path, file, { upsert: true });
+  const { error } = await supabase.storage.from('event-media').upload(path, file, { upsert: true, cacheControl: '31536000' });
   if (error) throw error;
   const { data, error: updateErr } = await supabase.from('app_settings').update({ payment_qr_path: path }).eq('id', true).select().single();
   if (updateErr) throw updateErr;

@@ -3863,3 +3863,6 @@ $$;
 grant execute on function preview_live_snapshot(uuid, uuid) to anon, authenticated;
 
 -- See supabase/optimize_indexes.sql for query-performance indexes (run once in the SQL editor).
+-- See supabase/optimize_preview_snapshot.sql for a security-definer rewrite of
+-- preview_live_snapshot above (fixes a per-row RLS cost and a cross-event
+-- data leak; run once in the SQL editor).

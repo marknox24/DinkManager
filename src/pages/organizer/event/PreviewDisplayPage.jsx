@@ -45,7 +45,10 @@ import BracketTreeView from '../../../components/brackets/BracketTreeView';
 // only re-fetched every STATIC_REFRESH_MS, or sooner while the event/
 // category hasn't resolved yet (draft not published, category deleted) —
 // see poll() below.
-const REFRESH_MS = 10000;
+// Was a flat 10s on every viewer — a crowd of phones all polling in
+// lockstep. 15s + jitter spreads the same crowd's requests out instead
+// of bunching them at the same instant every interval.
+const REFRESH_MS = 15000;
 // Event/category/sponsor data rarely changes mid-event; 15 min (was 5) per
 // screen keeps a room full of TVs and phones off the database.
 const STATIC_REFRESH_MS = 15 * 60 * 1000;
@@ -134,6 +137,7 @@ export default function PreviewDisplayPage() {
   const failuresRef = useRef(0); // consecutive failed live loads, drives poll backoff
   const skipTicksRef = useRef(0);
   const loadErrorRef = useRef(null);
+  const lastCacheWriteRef = useRef(0); // Date.now() of the last IndexedDB write
 
   // Event/category/sponsors — rarely change mid-tournament, so this isn't
   // part of the fast poll (see poll() below for the cadence it actually
@@ -201,8 +205,16 @@ export default function PreviewDisplayPage() {
 
   // Fire-and-forget: keeps what this screen last showed available offline
   // (live matches are merged in by cacheMatches, teams per bracket).
+  // At most once every 60s: this screen's own offline fallback (loadLiveFromCache,
+  // used when THIS device goes offline) only needs minute-granularity data, and
+  // IndexedDB writes every 10-15s from every open phone add up — disk IO is
+  // exactly what the small database is short on.
+  const CACHE_WRITE_THROTTLE_MS = 60000;
   const saveLiveToCache = useCallback(
     (bkts, tms, mts, live) => {
+      const now = Date.now();
+      if (now - lastCacheWriteRef.current < CACHE_WRITE_THROTTLE_MS) return;
+      lastCacheWriteRef.current = now;
       cacheBrackets(categoryId, bkts).catch(() => {});
       bkts.forEach((b) =>
         cacheTeams(
@@ -308,15 +320,22 @@ export default function PreviewDisplayPage() {
 
   useEffect(() => {
     let intervalId = null;
-    const start = () => {
-      if (intervalId == null) intervalId = setInterval(poll, REFRESH_MS);
-    };
     const stop = () => {
       clearInterval(intervalId);
       intervalId = null;
     };
 
-    poll();
+    const start = () => {
+      if (intervalId == null) {
+        // ±20% jitter so a room full of phones that all loaded the screen
+        // together don't keep polling in lockstep on every tick after.
+        intervalId = setInterval(poll, Math.round(REFRESH_MS * (0.8 + Math.random() * 0.4)));
+      }
+    };
+    // Stagger the very first poll too (0-3s) — otherwise everyone who
+    // opened the link at the same moment (e.g. from one announcement) still
+    // hits the database in the same instant before jitter ever kicks in.
+    const firstPollTimer = setTimeout(poll, Math.random() * 3000);
     start();
 
     // A phone or TV that isn't the front tab (browser minimized, kiosk
@@ -333,6 +352,7 @@ export default function PreviewDisplayPage() {
     document.addEventListener('visibilitychange', onVisibility);
 
     return () => {
+      clearTimeout(firstPollTimer);
       stop();
       document.removeEventListener('visibilitychange', onVisibility);
     };
@@ -481,7 +501,7 @@ export default function PreviewDisplayPage() {
     );
   };
 
-  const cardClass = 'rounded-3xl border border-white/60 bg-white/80 shadow-[0_8px_30px_rgb(0,0,0,0.05)] backdrop-blur-xl';
+  const cardClass = 'rounded-3xl border border-white/60 bg-white/95 shadow-[0_8px_30px_rgb(0,0,0,0.05)] lg:bg-white/80 lg:backdrop-blur-xl';
 
   return (
     // Big screen: h-screen (100vh), not h-dvh — dvh is a newer CSS unit that
@@ -508,7 +528,7 @@ export default function PreviewDisplayPage() {
           stacked sections — the bracket tree needs that height far more
           than the event header does. */}
       {isWide && isSingleElim ? (
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-3xl border border-white/60 bg-white/70 px-4 py-2.5 shadow-[0_8px_30px_rgb(0,0,0,0.06)] backdrop-blur-xl">
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 rounded-3xl border border-white/60 bg-white/95 px-4 py-2.5 shadow-[0_8px_30px_rgb(0,0,0,0.06)] lg:bg-white/70 lg:backdrop-blur-xl">
           <div className="min-w-0 shrink-0">
             <div className="truncate font-display text-base font-extrabold tracking-tight text-ink-900">{event?.name}</div>
             <div className="flex items-center gap-1.5 text-xs font-semibold text-ink-500">
@@ -544,7 +564,7 @@ export default function PreviewDisplayPage() {
           )}
         </div>
       ) : (
-        <div className="shrink-0 rounded-3xl border border-white/60 bg-white/70 shadow-[0_8px_30px_rgb(0,0,0,0.06)] backdrop-blur-xl">
+        <div className="shrink-0 rounded-3xl border border-white/60 bg-white/95 shadow-[0_8px_30px_rgb(0,0,0,0.06)] lg:bg-white/70 lg:backdrop-blur-xl">
           <div className="flex items-center justify-between gap-4 px-4 py-3.5 sm:px-6 sm:py-4">
             <div className="min-w-0">
               <div className="truncate font-display text-base font-extrabold tracking-tight text-ink-900 sm:text-xl">{event?.name}</div>
@@ -632,7 +652,7 @@ export default function PreviewDisplayPage() {
         <div className="mt-3 flex flex-col gap-3 sm:mt-4 sm:gap-4 lg:grid lg:min-h-0 lg:flex-1 lg:grid-cols-4">
         <div className="flex flex-col lg:col-span-3 lg:min-h-0">
           {standingsByBracket.length === 0 ? (
-            <div className="rounded-3xl border border-white/60 bg-white/70 p-10 text-center text-sm text-ink-400 shadow-sm backdrop-blur-xl">
+            <div className="rounded-3xl border border-white/60 bg-white/95 p-10 text-center text-sm text-ink-400 shadow-sm lg:bg-white/70 lg:backdrop-blur-xl">
               No brackets drawn yet for this category.
             </div>
           ) : (

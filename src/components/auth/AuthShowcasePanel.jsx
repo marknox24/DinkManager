@@ -1,5 +1,12 @@
 import { Star } from 'lucide-react';
 import AutoCarousel from '../organizer/AutoCarousel';
+import { useMediaQuery } from '../../hooks/useMediaQuery';
+
+// Matches Tailwind's `lg` breakpoint — this panel's own `hidden ... lg:flex`
+// below already keeps it invisible on phones, but a hidden element is still
+// MOUNTED: its AutoCarousel kept a 7s setInterval ticking on every phone
+// that ever loaded a login page, for a panel nobody could see.
+const LG_QUERY = '(min-width: 1024px)';
 
 // Sample content — swap for real customer quotes once DinkManager has them.
 const TESTIMONIALS = [
@@ -35,6 +42,8 @@ function Initials({ name }) {
 }
 
 export default function AuthShowcasePanel() {
+  const isWide = useMediaQuery(LG_QUERY);
+  if (!isWide) return null;
   return (
     <div className="relative hidden flex-col justify-between overflow-hidden bg-gradient-to-br from-brand-700 via-brand-800 to-ink-950 p-10 lg:flex">
       <div className="pointer-events-none absolute -right-24 -top-24 h-72 w-72 rounded-full bg-brand-400/30 blur-3xl" />

@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import { useOfflineSync } from '../../context/OfflineSyncContext';
 
 const STATUS_CONFIG = {
@@ -8,6 +9,10 @@ const STATUS_CONFIG = {
   syncing: { emoji: '🔄', label: 'Syncing…', className: 'bg-brand-50 text-brand-700 ring-brand-200' },
   synced: { emoji: '✅', label: 'Synced', className: 'bg-emerald-50 text-emerald-700 ring-emerald-200' },
   'sync-failed': { emoji: '🔴', label: 'Sync failed', className: 'bg-rose-50 text-rose-700 ring-rose-200' },
+  // Your session expired (e.g. a token refresh timed out under heavy load)
+  // — everything you logged is still saved on this device, but it needs a
+  // fresh sign-in to actually sync, not a retry.
+  'session-expired': { emoji: '🔑', label: 'Session expired — saved locally', className: 'bg-rose-50 text-rose-700 ring-rose-200' },
 };
 
 // The always-visible connection indicator for an event's offline-capable
@@ -23,7 +28,9 @@ export default function ConnectionStatusPill() {
   // nothing pending even if there's a failed entry sitting alongside it.
   // Hidden while forced offline too — turning the toggle off is the way to
   // sync, not a button that would just no-op until then.
-  const showSyncNow = online && pendingCount > 0;
+  // Not shown during a session-expiry — retrying would just hit the same
+  // "permission denied" again; signing in again is the only fix.
+  const showSyncNow = online && pendingCount > 0 && status !== 'session-expired';
 
   return (
     <div className="flex items-center gap-2">
@@ -34,6 +41,15 @@ export default function ConnectionStatusPill() {
           <span className="rounded-full bg-white/70 px-1.5 py-0.5 text-[10px] leading-none">{pendingCount}</span>
         )}
       </span>
+      {status === 'session-expired' && (
+        <Link
+          to="/login"
+          title="Everything you've logged is still saved on this device — signing in again will sync it"
+          className="rounded-full border border-rose-200 bg-white px-2.5 py-1.5 text-[11px] font-bold text-rose-700 transition hover:bg-rose-50"
+        >
+          Sign in again
+        </Link>
+      )}
       {showSyncNow && (
         <button
           onClick={syncNow}

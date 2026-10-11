@@ -1,5 +1,6 @@
 import { getAllByIndex, getAllRecords, putRecord, deleteRecord } from './offlineDb';
 import { isOnline, onConnectivityChange } from './connectivity';
+import { supabase } from './supabaseClient';
 import { startScheduledMatch, recordScheduledMatchResult, pauseMatch, resumeMatch, cancelLiveMatch, finishMatch, deleteMatch } from '../data/bracketsApi';
 
 // One entry per Match List write action — see bracketsApi.js's sync_* RPC
@@ -22,6 +23,34 @@ const ACTIONS = {
 // queue behind it forever.
 function isPermanentRejection(e) {
   return e.code === 'sync_rejected_stale' || e.code === 'sync_rejected_invalid_state' || e.code === '23514';
+}
+
+// A write that was rejected because this device's session had quietly
+// expired (token refresh timed out under load, so the request went out
+// effectively anonymous) — seen on event day as repeated Postgres
+// "permission denied for function sync_*" errors (code 42501), since those
+// functions are granted to `authenticated` only. PGRST301/"JWT expired" is
+// the same situation caught earlier, by PostgREST itself.
+function isSessionExpiry(e) {
+  return e.code === '42501' || e.code === 'PGRST301' || /jwt expired/i.test(e.message || '');
+}
+
+// At most one refresh attempt per cooldown window — several queued writes
+// hitting a session-expiry error back to back (normal: an organizer logs
+// several scores in a row) should trigger one refreshSession call, not one
+// per write.
+const SESSION_REFRESH_COOLDOWN_MS = 60000;
+let lastRefreshAttemptAt = 0;
+let sessionIssue = false;
+
+export function hasSessionIssue() {
+  return sessionIssue;
+}
+
+function setSessionIssue(value) {
+  if (sessionIssue === value) return;
+  sessionIssue = value;
+  notify();
 }
 
 const listeners = new Set();
@@ -96,24 +125,53 @@ export async function enqueueOperation({ eventId, matchId, operationType, payloa
   }
 }
 
-async function flushEntry(entry) {
+async function runAction(entry) {
   const action = ACTIONS[entry.operation_type];
+  const match = await action(entry.match_id, entry.payload, { operationId: entry.operation_id, clientTs: entry.client_ts });
+  await deleteRecord('sync_queue', entry.operation_id);
+  notify();
+  setSessionIssue(false); // a write just went through — whatever session problem there was is resolved
+  return match;
+}
+
+async function flushEntry(entry) {
+  let finalError;
   try {
-    const match = await action(entry.match_id, entry.payload, { operationId: entry.operation_id, clientTs: entry.client_ts });
-    await deleteRecord('sync_queue', entry.operation_id);
-    notify();
-    return match;
+    return await runAction(entry);
   } catch (e) {
-    const isSyncRejection = isPermanentRejection(e);
-    await putRecord('sync_queue', {
-      ...entry,
-      status: isSyncRejection ? 'failed' : 'pending',
-      retry_count: (entry.retry_count || 0) + 1,
-      last_error: e.message,
-    });
-    notify();
-    throw e;
+    finalError = e;
+    if (isSessionExpiry(e)) {
+      const now = Date.now();
+      if (now - lastRefreshAttemptAt > SESSION_REFRESH_COOLDOWN_MS) {
+        lastRefreshAttemptAt = now;
+        const { data, error: refreshError } = await supabase.auth.refreshSession().catch((err) => ({ data: null, error: err }));
+        if (!refreshError && data?.session) {
+          // Refresh worked — retry this exact write once before giving up,
+          // so the organizer doesn't see a failure for something that just
+          // silently fixed itself.
+          try {
+            return await runAction(entry);
+          } catch (retryErr) {
+            finalError = retryErr;
+          }
+        } else {
+          // Refresh token is gone too — this device is genuinely signed
+          // out and no amount of retrying will fix it until the organizer
+          // signs back in. The write stays safely queued either way.
+          setSessionIssue(true);
+        }
+      }
+    }
   }
+  const isSyncRejection = isPermanentRejection(finalError);
+  await putRecord('sync_queue', {
+    ...entry,
+    status: isSyncRejection ? 'failed' : 'pending',
+    retry_count: (entry.retry_count || 0) + 1,
+    last_error: finalError.message,
+  });
+  notify();
+  throw finalError;
 }
 
 let drainPromise = null;

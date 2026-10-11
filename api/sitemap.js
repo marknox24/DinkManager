@@ -26,8 +26,9 @@ async function fetchPublishedEvents() {
     method: 'POST',
     headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
     body: '{}',
+    signal: AbortSignal.timeout(8000),
   });
-  if (!res.ok) return [];
+  if (!res.ok) throw new Error(`public_published_events: ${res.status}`);
   return res.json();
 }
 
@@ -50,12 +51,19 @@ export function buildSitemap(events) {
 
 export default async function handler(req, res) {
   let events = [];
+  let failed = false;
   try {
     events = await fetchPublishedEvents();
   } catch {
-    // Still serve the static pages if Supabase is unreachable.
+    // Still serve the static pages if Supabase is unreachable — but don't
+    // cache that degraded result for a day (s-maxage=3600 +
+    // stale-while-revalidate=86400 = up to 25h), which would otherwise hide
+    // every event from Google until the next crawl happens to land outside
+    // that window. Only a genuinely successful fetch (even one returning
+    // zero events) gets the long cache.
+    failed = true;
   }
   res.setHeader('Content-Type', 'application/xml; charset=utf-8');
-  res.setHeader('Cache-Control', 'public, s-maxage=3600, stale-while-revalidate=86400');
+  res.setHeader('Cache-Control', failed ? 'no-store' : 'public, s-maxage=3600, stale-while-revalidate=86400');
   res.status(200).send(buildSitemap(Array.isArray(events) ? events : []));
 }

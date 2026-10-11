@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import { isForcedOffline, isOnline, onConnectivityChange, setForcedOffline } from '../lib/connectivity';
-import { onQueueChange, getQueueStatusCounts, enqueueOperation, drainQueue, dismissEntry as dismissQueueEntry } from '../lib/syncQueue';
+import { onQueueChange, getQueueStatusCounts, enqueueOperation, drainQueue, dismissEntry as dismissQueueEntry, hasSessionIssue } from '../lib/syncQueue';
 import { cacheMatches } from '../hooks/useOfflineCache';
 import { deleteRecord } from '../lib/offlineDb';
 
@@ -24,6 +24,7 @@ export function OfflineSyncProvider({ children }) {
   const [forcedOffline, setForcedOfflineState] = useState(isForcedOffline());
   const [pendingCount, setPendingCount] = useState(0);
   const [failedCount, setFailedCount] = useState(0);
+  const [sessionIssue, setSessionIssue] = useState(hasSessionIssue());
   const [syncing, setSyncing] = useState(false);
   const [lastSyncedAt, setLastSyncedAt] = useState(null);
   // Transient "✅ Synced" flash distinct from steady-state "🟢 Online" —
@@ -40,6 +41,7 @@ export function OfflineSyncProvider({ children }) {
     const { pending, failed } = await getQueueStatusCounts();
     setPendingCount(pending);
     setFailedCount(failed);
+    setSessionIssue(hasSessionIssue());
   }, []);
 
   useEffect(() => {
@@ -119,11 +121,14 @@ export function OfflineSyncProvider({ children }) {
     if (forcedOffline) return 'forced-offline';
     if (!online) return 'offline';
     if (syncing) return 'syncing';
+    // Checked ahead of 'sync-failed': a session problem has its own fix
+    // (sign in again), not "retry" — the generic failed-pill's advice.
+    if (sessionIssue) return 'session-expired';
     if (failedCount > 0) return 'sync-failed';
     if (pendingCount > 0) return 'pending';
     if (justSynced) return 'synced';
     return 'online';
-  }, [forcedOffline, online, syncing, failedCount, pendingCount, justSynced]);
+  }, [forcedOffline, online, syncing, sessionIssue, failedCount, pendingCount, justSynced]);
 
   const value = useMemo(
     () => ({
