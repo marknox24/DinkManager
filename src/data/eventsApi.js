@@ -424,24 +424,29 @@ export async function deleteRegistration(registrationId) {
 // the update would come back empty (RETURNING is itself SELECT-gated) —
 // re-fetching through the view afterward is what actually works.
 // ---------------------------------------------------------------------------
-export async function listCheckinRoster(eventId, categoryId) {
-  const { data, error } = await supabase
-    .from('public_checkin_roster')
-    .select('*')
-    .eq('event_id', eventId)
-    .eq('category_id', categoryId);
+async function listCheckinRosterDirect(eventId, categoryId) {
+  let query = supabase.from('public_checkin_roster').select('*').eq('event_id', eventId);
+  if (categoryId) query = query.eq('category_id', categoryId);
+  const { data, error } = await query;
   if (error) throw error;
   return data;
 }
 
+// Tries the CDN-cached /api/checkin-roster endpoint first — a crowd
+// checking in at once shares one query instead of each hitting Supabase
+// directly — falling back to the direct query on any failure.
+export async function listCheckinRoster(eventId, categoryId) {
+  const cached = await fetchCachedJson(`/api/checkin-roster?event=${eventId}&category=${categoryId}`, Array.isArray);
+  return cached ?? listCheckinRosterDirect(eventId, categoryId);
+}
+
 // Every category's roster in one call, not just one — used to find a
 // player's OTHER category registrations so check-in can prompt "also check
-// them in there?" (src/utils/checkin.js). Same anon-safe view as
+// them in there?" (src/utils/checkin.js). Same anon-safe view/cache as
 // listCheckinRoster above, just without the category filter.
 export async function listCheckinRosterForEvent(eventId) {
-  const { data, error } = await supabase.from('public_checkin_roster').select('*').eq('event_id', eventId);
-  if (error) throw error;
-  return data;
+  const cached = await fetchCachedJson(`/api/checkin-roster?event=${eventId}`, Array.isArray);
+  return cached ?? listCheckinRosterDirect(eventId);
 }
 
 export async function getCheckinRegistration(registrationId) {
