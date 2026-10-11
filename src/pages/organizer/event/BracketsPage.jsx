@@ -1067,7 +1067,7 @@ export default function BracketsPage() {
               </button>
               {showTree && (
                 <div className="mt-4 border-t border-ink-100 pt-4">
-                  <BracketView event={event} categories={[activeCategory]} />
+                  <BracketView event={event} categories={[activeCategory]} mode="organizer" />
                 </div>
               )}
             </div>

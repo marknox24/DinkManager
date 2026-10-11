@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { CloudOff, RefreshCw, X } from 'lucide-react';
 import { useOfflineSync } from '../../context/OfflineSyncContext';
 import { getQueueEntries } from '../../lib/syncQueue';
@@ -43,14 +44,29 @@ export default function OfflineQueueBanner({ onDiscarded }) {
                 online ? '' : forcedOffline ? ' — will sync when you turn off Offline mode' : " — will sync when you're back online"
               }`}
         </div>
-        {online && pendingCount > 0 && (
-          <button
-            onClick={syncNow}
-            disabled={status === 'syncing'}
-            className="flex shrink-0 items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-xs font-bold text-ink-700 shadow-sm ring-1 ring-ink-200 transition hover:bg-ink-50 disabled:opacity-50"
+        {status === 'session-expired' ? (
+          // Retrying would just hit the same "permission denied" again —
+          // matches ConnectionStatusPill's equivalent gate, which this
+          // banner didn't originally share, so the two could disagree
+          // about whether retrying was worth offering.
+          <Link
+            to="/login"
+            title="Everything you've logged is still saved on this device — signing in again will sync it"
+            className="flex shrink-0 items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-xs font-bold text-rose-700 shadow-sm ring-1 ring-rose-200 transition hover:bg-rose-50"
           >
-            <RefreshCw size={12} className={status === 'syncing' ? 'animate-spin' : ''} /> {status === 'syncing' ? 'Syncing…' : 'Sync Now'}
-          </button>
+            Sign in again
+          </Link>
+        ) : (
+          online &&
+          pendingCount > 0 && (
+            <button
+              onClick={syncNow}
+              disabled={status === 'syncing'}
+              className="flex shrink-0 items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-xs font-bold text-ink-700 shadow-sm ring-1 ring-ink-200 transition hover:bg-ink-50 disabled:opacity-50"
+            >
+              <RefreshCw size={12} className={status === 'syncing' ? 'animate-spin' : ''} /> {status === 'syncing' ? 'Syncing…' : 'Sync Now'}
+            </button>
+          )
         )}
       </div>
       {failedEntries.length > 0 && (

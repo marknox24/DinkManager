@@ -52,8 +52,15 @@ function EntrantList({ entrants, defaultOpen }) {
 // tree shape, Double Elimination has no losers-bracket data model yet.
 // Shares useMatchSchedule with MatchScheduleView so this costs no extra
 // fetch beyond whichever of the two tabs is mounted first.
-export default function BracketView({ event, categories: initialCategories }) {
-  const { categoryTrees, loading } = useMatchSchedule({ event, categories: initialCategories, offlineCapable: false });
+// `mode` mirrors MatchScheduleView's own prop: 'organizer' (BracketsPage,
+// an authenticated route) reads teams/matches live and direct, the same as
+// every other organizer view — anything else (the public event page) reads
+// through the CDN-cached, anon-safe path. This component has two real
+// callers with opposite trust levels; defaulting to 'public' means a draft
+// event an organizer is viewing never silently renders empty because the
+// anon cache correctly can't see it.
+export default function BracketView({ event, categories: initialCategories, mode = 'public' }) {
+  const { categoryTrees, loading } = useMatchSchedule({ event, categories: initialCategories, offlineCapable: mode === 'organizer' });
   const [categoryId, setCategoryId] = useState('');
   const [treeKey, setTreeKey] = useState('');
 

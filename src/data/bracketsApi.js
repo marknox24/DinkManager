@@ -584,6 +584,12 @@ function normalizePreviewSnapshot(data) {
 // next poll hitting Postgres directly — the exact pile-up that overloaded
 // the database at the Oct 10 event.
 const FALLBACK_COOLDOWN_MS = 45000;
+// A direct check that comes back empty too (not richer than the cache)
+// means the category genuinely has no brackets yet — a normal, often
+// long-lived state (before the draw), not a draft-event edge case. Without
+// backing off much further here, every signed-in viewer parked on such a
+// category would re-trigger a direct Postgres call every 45s indefinitely.
+const CONFIRMED_EMPTY_COOLDOWN_MS = 5 * 60 * 1000;
 const fallbackCooldownUntil = new Map();
 
 export async function getPreviewLiveSnapshot(eventId, categoryId) {
@@ -599,25 +605,41 @@ export async function getPreviewLiveSnapshot(eventId, categoryId) {
 
   // Zero brackets from the cache is ambiguous: a genuinely empty category,
   // or a draft/unpublished event the anonymous cache can't see (RLS hides
-  // it) but its signed-in owner/staff can. Only the second case is worth a
-  // direct check, and only for whoever is actually signed in.
+  // it) but its signed-in owner/staff can. `data === null` (the CDN itself
+  // failed/timed out) is a third, unambiguous case — worth a direct check
+  // for EVERY viewer, since preview_live_snapshot is granted to anon too,
+  // not just the "maybe it's a draft" case which only a signed-in viewer
+  // can resolve differently than the cache already did.
   const emptyFromCache = data && Array.isArray(data.brackets) && data.brackets.length === 0;
   if (!data || emptyFromCache) {
     const now = Date.now();
     if ((fallbackCooldownUntil.get(key) || 0) <= now) {
-      fallbackCooldownUntil.set(key, now + FALLBACK_COOLDOWN_MS);
       const { data: auth } = await supabase.auth.getSession();
-      if (auth?.session) {
+      if (!data || auth?.session) {
         const result = await supabase.rpc('preview_live_snapshot', { p_event_id: eventId, p_category_id: categoryId });
         if (result.error) {
+          fallbackCooldownUntil.set(key, now + FALLBACK_COOLDOWN_MS);
           if (result.error.code === 'PGRST202') return data ? normalizePreviewSnapshot(data) : null;
           if (!data) throw result.error;
           // Direct check failed but the (possibly empty) cached answer is
           // still usable — fall through and serve that instead of erroring.
-        } else if (!data || (result.data.brackets || []).length > data.brackets.length) {
+        } else {
+          const gotMore = !data || (result.data.brackets || []).length > data.brackets.length;
           data = result.data;
-          fallbackCooldownUntil.delete(key); // got a real answer — don't suppress the next poll
+          // Richer data than the cache (brackets just got drawn) — don't
+          // suppress the next poll, so it's reflected immediately. Still
+          // empty — back off hard; a bracket draw is a deliberate,
+          // infrequent organizer action, not something worth rechecking
+          // every 45s.
+          fallbackCooldownUntil.set(key, now + (gotMore ? FALLBACK_COOLDOWN_MS : CONFIRMED_EMPTY_COOLDOWN_MS));
         }
+      } else {
+        // Cache answered with a valid empty object and nobody's signed in —
+        // an anon direct check would see exactly the same RLS-filtered
+        // view, so there's nothing to gain by repeating it. Still worth a
+        // short cooldown so this path doesn't re-evaluate getSession() on
+        // every single poll while staying anonymous and empty.
+        fallbackCooldownUntil.set(key, now + FALLBACK_COOLDOWN_MS);
       }
     }
   } else {
@@ -625,9 +647,10 @@ export async function getPreviewLiveSnapshot(eventId, categoryId) {
   }
 
   if (!data) {
-    // CDN unreachable and either nobody's signed in to fall back for, or
-    // we're inside the cooldown — throw so the caller's existing
-    // retry/backoff handles it, instead of hammering Supabase on every poll.
+    // CDN unreachable and either the direct check (open to everyone here)
+    // also failed, or we're inside the cooldown — throw so the caller's
+    // existing retry/backoff handles it, instead of hammering Supabase on
+    // every poll.
     throw new Error('Preview snapshot temporarily unavailable');
   }
   return normalizePreviewSnapshot(data);

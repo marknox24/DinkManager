@@ -84,7 +84,7 @@ export default function LoginPage() {
       }
       const { data: aal } = await withTimeout(getAal(), "Taking longer than usual — please try again.");
       if (aal && aal.currentLevel !== aal.nextLevel) {
-        const { data: factorsData, error: factorsError } = await mfaListFactors();
+        const { data: factorsData, error: factorsError } = await withTimeout(mfaListFactors(), "Taking longer than usual — please try again.");
         if (factorsError) {
           pushToast(factorsError.message, 'error');
           return;
@@ -117,7 +117,7 @@ export default function LoginPage() {
         "Taking longer than usual — please try again."
       );
       if (verifyError) throw verifyError;
-      await refreshAal();
+      await withTimeout(refreshAal(), "Taking longer than usual — please try again.");
       await finishLogin(verified.user.id);
     } catch (err) {
       pushToast(err.message, 'error');

@@ -49,7 +49,13 @@ export default async function handler(req, res) {
   const include = String(req.query.include || '')
     .split(',')
     .filter(Boolean);
-  if (!include.every((k) => k in OPTIONAL)) return sendError(res, 400, 'unknown include');
+  // Object.hasOwn, not `k in OPTIONAL` — `in` also matches inherited
+  // Object.prototype properties (toString, constructor, hasOwnProperty,
+  // __proto__...), so ?include=toString used to pass this check and then
+  // call the inherited Object.prototype.toString as if it were a path
+  // builder, producing a bogus "[object Object]" REST path and a confusing
+  // 502 instead of the intended 400 "unknown include".
+  if (!include.every((k) => Object.hasOwn(OPTIONAL, k))) return sendError(res, 400, 'unknown include');
   const cfg = supabaseConfig();
   if (!cfg) return sendError(res, 500, 'Supabase is not configured');
 

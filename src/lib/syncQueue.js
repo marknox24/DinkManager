@@ -134,6 +134,20 @@ async function runAction(entry) {
   return match;
 }
 
+// A real rejection of the refresh itself (invalid/expired refresh token) —
+// as opposed to the refresh call simply never completing (bad connection,
+// the same condition that caused the session to look expired in the first
+// place). Only this case means "genuinely signed out, no amount of
+// retrying will fix it". Supabase's own auth-js tags a transient fetch
+// failure with this exact error name (see AuthRetryableFetchError in
+// @supabase/auth-js) rather than a real API rejection; our own timeout
+// below (REFRESH_TIMEOUT_MS) throws a plain Error, which also isn't one.
+function isGenuineAuthRejection(error) {
+  return !!error && error.name !== 'AuthRetryableFetchError' && error.name !== 'TimeoutError';
+}
+
+const REFRESH_TIMEOUT_MS = 8000;
+
 async function flushEntry(entry) {
   let finalError;
   try {
@@ -144,7 +158,14 @@ async function flushEntry(entry) {
       const now = Date.now();
       if (now - lastRefreshAttemptAt > SESSION_REFRESH_COOLDOWN_MS) {
         lastRefreshAttemptAt = now;
-        const { data, error: refreshError } = await supabase.auth.refreshSession().catch((err) => ({ data: null, error: err }));
+        // Capped — the exact flaky-connection scenario that made the
+        // session look expired could also hang this call indefinitely,
+        // and doDrain() awaits flushEntry sequentially, so an unbounded
+        // refresh here would stall the entire queue, not just this entry.
+        const { data, error: refreshError } = await Promise.race([
+          supabase.auth.refreshSession(),
+          new Promise((_, reject) => setTimeout(() => reject(Object.assign(new Error('refresh timed out'), { name: 'TimeoutError' })), REFRESH_TIMEOUT_MS)),
+        ]).catch((err) => ({ data: null, error: err }));
         if (!refreshError && data?.session) {
           // Refresh worked — retry this exact write once before giving up,
           // so the organizer doesn't see a failure for something that just
@@ -154,12 +175,17 @@ async function flushEntry(entry) {
           } catch (retryErr) {
             finalError = retryErr;
           }
-        } else {
+        } else if (isGenuineAuthRejection(refreshError)) {
           // Refresh token is gone too — this device is genuinely signed
           // out and no amount of retrying will fix it until the organizer
           // signs back in. The write stays safely queued either way.
           setSessionIssue(true);
         }
+        // Otherwise the refresh attempt itself just failed to complete
+        // (network error/timeout) — not evidence the session is actually
+        // invalid, so sessionIssue is left alone and this falls through to
+        // the normal pending/retry handling below, same as any other
+        // transient failure.
       }
     }
   }

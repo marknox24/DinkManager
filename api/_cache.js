@@ -32,3 +32,49 @@ export function sendCached(res, body, { maxAge, staleWhileRevalidate }) {
 }
 
 export const UPSTREAM_TIMEOUT_MS = 8000;
+
+// Validates a comma-separated list of category-id query params, shared by
+// every endpoint that takes `?categories=`.
+export function parseCategoryIds(raw, maxCategories = 50) {
+  const ids = String(raw || '')
+    .split(',')
+    .filter(Boolean);
+  if (ids.length === 0 || ids.length > maxCategories || !ids.every(isUuid)) return null;
+  return ids;
+}
+
+// Shared by every /api/*.js endpoint that reads a bracket-joined table
+// (teams, matches) filtered by category — api/event-teams.js and
+// api/schedule-matches.js differ only in the table name and the `select`
+// columns, so a fix to the pagination bound or the bracket-unwrap mapping
+// now only needs to happen once. Pages through PostgREST's 1000-row cap and
+// flattens the joined `bracket` relation onto each row the same way both
+// callers already expected.
+export async function fetchPaginatedByCategory(cfg, { table, select, categoryIds }) {
+  const PAGE = 1000;
+  const MAX_PAGES = 10;
+  const rows = [];
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const params = new URLSearchParams({
+      select,
+      'bracket.category_id': `in.(${categoryIds.join(',')})`,
+      order: 'created_at.asc,id.asc',
+      limit: String(PAGE),
+      offset: String(page * PAGE),
+    });
+    const upstream = await fetch(`${cfg.url}/rest/v1/${table}?${params}`, {
+      headers: cfg.headers,
+      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
+    });
+    if (!upstream.ok) throw new Error(`upstream ${upstream.status}`);
+    const data = await upstream.json();
+    rows.push(...data);
+    if (data.length < PAGE) break;
+  }
+  return rows.map(({ bracket, ...row }) => ({
+    ...row,
+    bracket_letter: bracket.letter,
+    bracket_kind: bracket.kind,
+    category_id: bracket.category_id,
+  }));
+}

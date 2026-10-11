@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getEventById, listCategories } from '../data/eventsApi';
+import { getEventById, listCategories, loadPublicEventBundle } from '../data/eventsApi';
 import { listScheduleMatchesForEvent, listScheduleMatchesPublic, listTeamsForEvent, listTeamsPublic } from '../data/bracketsApi';
 import { deriveLadder, readPlan } from '../data/playoffApi';
 import { readWithFallback } from '../lib/offlineRead';
@@ -63,9 +63,18 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
               .catch(() => {});
           }
         } else {
-          // Public viewers already hold the event and categories from the
-          // page that mounted this hook, so only the (CDN-cached) teams are
-          // worth re-reading — and only rarely.
+          // Public viewers: route through the same CDN-cached bundle the
+          // page itself used at mount, so a category the organizer adds
+          // mid-event eventually shows up here too — categoriesRef used to
+          // be frozen at whatever was passed in at mount and never updated,
+          // so a spectator who opened the page before a new category
+          // existed would never see it without a manual reload.
+          const bundle = await loadPublicEventBundle({ id: eventId }).catch(() => null);
+          if (bundle?.categories) {
+            setEvent(bundle.event);
+            setCategories(bundle.categories);
+            categoriesRef.current = bundle.categories;
+          }
           listTeamsPublic(categoriesRef.current.map((c) => c.id))
             .then(setTeams)
             .catch(() => {});
