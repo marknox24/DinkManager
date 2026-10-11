@@ -25,3 +25,13 @@ analyze teams;
 analyze matches;
 analyze registrations;
 analyze events;
+
+-- sync_operations is append-only (one row per offline-sync write, kept to
+-- detect a stale replay arriving after a device reconnects) and nothing
+-- ever deletes old rows. Every score/start/finish action looks it up via
+-- sync_operations_by_match, so a smaller table/index here is less for
+-- Postgres to hold in memory on every single scoring action, not just a
+-- one-time cleanup. 7 days is far longer than any realistic "device was
+-- offline" window (see can_edit_match / sync_log_score in schema.sql).
+-- Safe to run anytime; nothing reads a row this old.
+delete from sync_operations where applied_at < now() - interval '7 days';
