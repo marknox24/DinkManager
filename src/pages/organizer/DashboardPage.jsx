@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { CalendarDays, Files, HandHelping, Image as ImageIcon, MapPin, Plus, Settings2, Sparkles, Users } from 'lucide-react';
+import { CalendarDays, Clock, Files, HandHelping, Image as ImageIcon, MapPin, Plus, Settings2, Sparkles, Users } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import {
@@ -16,7 +16,7 @@ import {
 import { PAID_PLAN_ORDER, PLAN_LIMITS } from '../../data/plans';
 import { clearPendingPlan, pendingPlan } from '../../utils/pendingPlan';
 import { EVENT_PERMISSIONS } from '../../data/permissions';
-import { formatDateRange } from '../../utils/format';
+import { formatDateRange, formatRelativeTime } from '../../utils/format';
 import OrganizerLayout from '../../components/organizer/OrganizerLayout';
 import StatusBadge from '../../components/organizer/StatusBadge';
 import GettingStartedChecklist from '../../components/organizer/GettingStartedChecklist';
@@ -39,6 +39,14 @@ function seenKeyFor(event) {
   return `dm_plan_approved_seen_${event.id}_${event.plan_activated_at}`;
 }
 
+// "Starter • ₱699" — shared by the paid-event badge and the pending new-
+// event request card so a price never renders with one format in one spot
+// and a different one a few lines away.
+function planLabel(plan) {
+  const p = PLAN_LIMITS[plan];
+  return `${p?.label ?? plan} • ₱${p?.price?.toLocaleString('en-PH')}`;
+}
+
 export default function DashboardPage() {
   const { user, profile, accountType, isAdmin } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -55,15 +63,31 @@ export default function DashboardPage() {
   // Events with an unacknowledged plan approval — almost always 0 or 1, but
   // kept as a queue in case more than one approval landed between logins.
   const [approvedQueue, setApprovedQueue] = useState([]);
+  // This organizer's own pending subscription_requests (both a brand-new
+  // event request, event_id null, and an existing event's upgrade request,
+  // event_id set — see pendingEventRequests below for the subset shown as
+  // its own card). Re-fetched after a fresh submission so the "Waiting for
+  // Approval" card appears without a full reload.
+  const [pendingRequests, setPendingRequests] = useState([]);
   const welcomeDeferred = useRef(false);
 
-  const maxEvents = profile?.max_events ?? null;
-  const atEventLimit = maxEvents != null && (events?.length ?? 0) >= maxEvents;
   // One Free Trial event per account (enforced by the database — see
   // events_force_free_entitlements). The profile is loaded once at sign-in,
   // so an event this session just created counts too.
   const trialUsed = Boolean(profile?.free_trial_used_at) || Boolean(events?.some((e) => e.origin === 'trial'));
+  // Zero events ever → the one free-trial event, created directly. The
+  // moment an organizer has had ANY event (current or past — trialUsed
+  // already accounts for a deleted trial event, since deleting doesn't
+  // refund it) → every further "Create event" goes through the pricing
+  // pop-up and needs admin approval instead of a free direct-create, which
+  // the database would otherwise silently reject.
+  const hasAnyEvent = trialUsed || Boolean(events?.length);
   const pricingShownKey = `dm_pricing_prompt_${user.id}`;
+  // A request for a brand-new event (not an upgrade on one that already
+  // exists — those show their own "Payment Pending" badge on the event's
+  // own card below, via event.pending_plan_request) has no event_id yet,
+  // since the event itself isn't created until the Admiral approves it.
+  const pendingEventRequests = pendingRequests.filter((r) => !r.event_id);
 
   useEffect(() => {
     // An invited/temp-login account (added as event_staff by another
@@ -81,6 +105,7 @@ export default function DashboardPage() {
       .then(([myEvents, staffed, pendingRequests]) => {
         setEvents(myEvents);
         setStaffedEvents(staffed);
+        setPendingRequests(pendingRequests);
         const isStaffOnly = myEvents.length === 0 && staffed.length > 0;
 
         setApprovedQueue(myEvents.filter((e) => e.plan !== 'free' && e.plan_activated_at && localStorage.getItem(seenKeyFor(e)) !== '1'));
@@ -140,6 +165,16 @@ export default function DashboardPage() {
     }
   };
 
+  // Appends an optimistic local entry right after submitting a new plan
+  // request, so the "Waiting for Approval" card appears immediately instead
+  // of only after a reload — no re-fetch, since everything the card needs
+  // (plan, created_at) is already known at the submit call site, and a
+  // re-fetch's own failure would otherwise silently leave the card missing.
+  const handleRequestSubmitted = (plan) => {
+    markPricingShown();
+    setPendingRequests((prev) => [...prev, { id: crypto.randomUUID(), plan, event_id: null, email: user.email, created_at: new Date().toISOString() }]);
+  };
+
   const closePricing = () => {
     markPricingShown();
     setPricing(null);
@@ -167,9 +202,34 @@ export default function DashboardPage() {
       const event = await createEvent(user.id, { name: 'Untitled Tournament', status: 'upcoming', is_published: false });
       navigate(`/events/${event.id}/edit`);
     } catch (e) {
-      pushToast(e.message, 'error');
+      // The database is the real source of truth on trial eligibility —
+      // hasAnyEvent is client state and can still be stale (e.g. a second
+      // tab that already used the trial). On that specific rejection
+      // (events_force_free_entitlements in schema.sql, errcode
+      // check_violation/23514 — same code syncQueue.js already checks for
+      // its own plan-limit rejections), route to the pricing flow instead
+      // of dead-ending on the trigger's raw message.
+      if (e.code === '23514') {
+        setPricing({ plan: null });
+      } else {
+        pushToast(e.message, 'error');
+      }
     } finally {
       setCreating(false);
+    }
+  };
+
+  // Every "create a tournament" entry point routes through this, not
+  // handleCreate directly — GettingStartedChecklist and
+  // WelcomeOnboardingModal are both shown based on a zero-CURRENT-events
+  // signal, which isn't quite the same as hasAnyEvent (an organizer who
+  // deleted their only trial event has 0 current events but has already
+  // used their trial), so this re-checks hasAnyEvent itself.
+  const requestNewEvent = () => {
+    if (hasAnyEvent) {
+      setPricing({ plan: null });
+    } else {
+      handleCreate();
     }
   };
 
@@ -199,21 +259,14 @@ export default function DashboardPage() {
           <h1 className="font-display text-2xl font-bold text-ink-900">Your tournaments</h1>
           <p className="text-sm text-ink-500">Create and manage your pickleball events</p>
         </div>
-        {trialUsed ? (
+        {hasAnyEvent ? (
           <button
             onClick={() => setPricing({ plan: null })}
-            title="Your Free Trial event is used — each new event comes with its own plan"
+            title="Each additional event needs its own plan — your one Free Trial already created an event"
             className="press-scale flex items-center gap-1.5 rounded-full bg-brand-600 px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700"
           >
             <Sparkles size={16} /> Get a plan for a new event
           </button>
-        ) : atEventLimit ? (
-          <span
-            title={`Your trial allows up to ${maxEvents} event${maxEvents === 1 ? '' : 's'}`}
-            className="rounded-full border border-ink-200 bg-ink-50 px-4 py-2.5 text-sm font-bold text-ink-400"
-          >
-            Trial limit reached
-          </span>
         ) : (
           <button
             onClick={handleCreate}
@@ -226,7 +279,36 @@ export default function DashboardPage() {
       </div>
 
       {progress && (
-        <GettingStartedChecklist progress={progress} latestEventId={events?.[0]?.id} onCreateEvent={handleCreate} navigate={navigate} />
+        <GettingStartedChecklist progress={progress} latestEventId={events?.[0]?.id} onCreateEvent={requestNewEvent} navigate={navigate} />
+      )}
+
+      {pendingEventRequests.length > 0 && (
+        <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {pendingEventRequests.map((req, i) => (
+            // Not a button — nothing to open yet, since the event itself
+            // doesn't exist until the Admiral approves this request. Just a
+            // visible confirmation the request went through.
+            <div
+              key={req.id}
+              style={{ animationDelay: `${Math.min(i, 8) * 40}ms` }}
+              className="animate-rise-in flex flex-col overflow-hidden rounded-2xl border border-dashed border-amber-200 bg-amber-50/30 text-left shadow-sm"
+            >
+              <div className="flex h-32 w-full items-center justify-center bg-amber-50 text-amber-300">
+                <Clock size={26} />
+              </div>
+              <div className="flex flex-1 flex-col p-5">
+                <div className="mb-3 flex items-start justify-between gap-2">
+                  <h2 className="font-display text-base font-bold leading-snug text-ink-900">New event request</h2>
+                  <StatusBadge status="pending" />
+                </div>
+                <div className="text-xs font-semibold text-amber-600">
+                  {planLabel(req.plan)}
+                </div>
+                <div className="mt-4 border-t border-amber-100 pt-3 text-[11px] font-semibold text-ink-400">Requested {formatRelativeTime(req.created_at)}</div>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
 
       {events === null && <div className="py-16 text-center text-sm text-ink-400">Loading your events…</div>}
@@ -234,21 +316,19 @@ export default function DashboardPage() {
       {events && events.length === 0 && (
         <div className="rounded-3xl border border-dashed border-ink-200 bg-white py-16 text-center">
           <p className="text-sm text-ink-500">No tournaments yet.</p>
-          {trialUsed ? (
+          {hasAnyEvent ? (
             <button onClick={() => setPricing({ plan: null })} className="mt-3 text-sm font-semibold text-brand-600">
               Get a plan to create an event →
             </button>
           ) : (
-            !atEventLimit && (
-              <div className="mt-3 flex flex-col items-center gap-1.5">
-                <button onClick={handleCreate} className="text-sm font-semibold text-brand-600">
-                  Start your Free Trial event →
-                </button>
-                <button onClick={() => setPricing({ plan: null })} className="text-xs font-semibold text-ink-500 hover:text-ink-700">
-                  or choose a paid plan
-                </button>
-              </div>
-            )
+            <div className="mt-3 flex flex-col items-center gap-1.5">
+              <button onClick={handleCreate} className="text-sm font-semibold text-brand-600">
+                Start your Free Trial event →
+              </button>
+              <button onClick={() => setPricing({ plan: null })} className="text-xs font-semibold text-ink-500 hover:text-ink-700">
+                or choose a paid plan
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -296,9 +376,7 @@ export default function DashboardPage() {
                   ) : event.plan === 'free' ? (
                     <span className="text-ink-400">Free Trial</span>
                   ) : (
-                    <span className="text-brand-600">
-                      {PLAN_LIMITS[event.plan]?.label ?? event.plan} • ₱{PLAN_LIMITS[event.plan]?.price} · Paid
-                    </span>
+                    <span className="text-brand-600">{planLabel(event.plan)} · Paid</span>
                   )}
                 </div>
                 <div className="mt-4 flex items-center justify-between border-t border-ink-100 pt-3">
@@ -387,13 +465,13 @@ export default function DashboardPage() {
         <PricingPromptModal
           email={user.email}
           initialPlan={pricing.plan}
-          canStartTrial={!trialUsed && !atEventLimit}
+          canStartTrial={!hasAnyEvent}
           onStartTrial={async () => {
             markPricingShown();
             setPricing(null);
             await handleCreate();
           }}
-          onSubmitted={markPricingShown}
+          onSubmitted={handleRequestSubmitted}
           onClose={closePricing}
         />
       )}
@@ -403,7 +481,7 @@ export default function DashboardPage() {
           onClose={() => setShowWelcome(false)}
           onCreateEvent={() => {
             setShowWelcome(false);
-            handleCreate();
+            requestNewEvent();
           }}
         />
       )}

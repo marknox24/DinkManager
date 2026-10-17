@@ -56,7 +56,7 @@ export default function PricingPromptModal({ email, initialPlan, canStartTrial, 
     try {
       await submitSubscriptionRequest({ email, plan, screenshotPath });
       setStep('sent');
-      onSubmitted?.();
+      onSubmitted?.(plan);
     } catch (e) {
       pushToast(e.message, 'error');
     } finally {

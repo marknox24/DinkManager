@@ -4,6 +4,7 @@ const STATUS_STYLES = {
   finished: 'bg-ink-100 text-ink-500',
   cancelled: 'bg-rose-50 text-rose-600',
   rescheduled: 'bg-violet-50 text-violet-700',
+  pending: 'bg-amber-100 text-amber-800',
 };
 
 const STATUS_LABELS = {
@@ -12,6 +13,7 @@ const STATUS_LABELS = {
   finished: 'Finished',
   cancelled: 'Cancelled',
   rescheduled: 'Rescheduled',
+  pending: 'Waiting for Approval',
 };
 
 export default function StatusBadge({ status }) {
