@@ -35,9 +35,9 @@ import { formatDuration } from '../../../utils/format';
 import { usableCourts } from '../../../utils/courts';
 import { teamLabel } from '../../../utils/match';
 import { rankTeams } from '../../../utils/standings';
-import { matchLevelLabel, readPlan } from '../../../data/playoffApi';
-import { deriveLadder } from '../../../utils/playoffLadder';
-import { bracketTreeApplies, buildBracketTreesForCategory } from '../../../utils/bracketTree';
+import { matchLevelLabel } from '../../../data/playoffApi';
+import { categoryLadder } from '../../../utils/playoffLadder';
+import { bracketTreeApplies, buildBracketTreesForCategory, treeHasRealMatch } from '../../../utils/bracketTree';
 import BracketTreeView from '../../../components/brackets/BracketTreeView';
 
 // Live data (brackets/teams/matches/live courts) polls this often. The
@@ -383,12 +383,15 @@ export default function PreviewDisplayPage() {
   // (the preview_live_snapshot RPC and its listTeamsForCategory fallback)
   // return raw team rows with only bracket_id, so it's attached here from
   // the brackets this page already has, or a bye recipient never appears.
+  // A tree replaces the standings on a TV (see isSingleElim below), so a
+  // placeholder-only ladder is held back: pool standings stay on screen
+  // through pool play, and the tree takes over at the first real knockout match.
   const categoryTrees = useMemo(() => {
     if (!category || !bracketTreeApplies(category)) return [];
-    const withLadder = { ...category, ladder: category.playoff_enabled ? deriveLadder(readPlan(category)) : null };
+    const withLadder = { ...category, ladder: categoryLadder(category) };
     const letterByBracketId = new Map(brackets.map((b) => [b.id, b.letter]));
     const teamsWithLetter = teams.map((t) => ({ ...t, bracket_letter: t.bracket_letter ?? letterByBracketId.get(t.bracket_id) }));
-    return buildBracketTreesForCategory(withLadder, matches, teamsWithLetter).trees;
+    return buildBracketTreesForCategory(withLadder, matches, teamsWithLetter).trees.filter(treeHasRealMatch);
   }, [category, matches, teams, brackets]);
   const { page: treesPage, pageIndex: treePageIndex, totalPages: treeTotalPages } = usePagedItems(categoryTrees, 1, TREE_MS);
   // Single Elimination (or a playoff ladder) gets its own, much more

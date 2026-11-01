@@ -60,7 +60,11 @@ function EntrantList({ entrants, defaultOpen }) {
 // event an organizer is viewing never silently renders empty because the
 // anon cache correctly can't see it.
 export default function BracketView({ event, categories: initialCategories, mode = 'public' }) {
-  const { categoryTrees, loading } = useMatchSchedule({ event, categories: initialCategories, offlineCapable: mode === 'organizer' });
+  const { categoryTrees: allCategoryTrees, loading } = useMatchSchedule({ event, categories: initialCategories, offlineCapable: mode === 'organizer' });
+  // BracketsPage passes only its active category, but the hook's organizer
+  // refresh re-reads every category in the event — without this the view
+  // would drift to the event's first category a minute after opening.
+  const categoryTrees = mode === 'organizer' ? allCategoryTrees.filter((c) => initialCategories.some((cat) => cat.id === c.category.id)) : allCategoryTrees;
   const [categoryId, setCategoryId] = useState('');
   const [treeKey, setTreeKey] = useState('');
 

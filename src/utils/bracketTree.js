@@ -414,8 +414,8 @@ function buildEntrantList(categoryTeams, categoryMatches = []) {
 // The knockout ladder a pool-play category crosses over into — same shape
 // deriveLadder/generateStageMatches already use, just rendered as a tree
 // instead of the vertical timeline the Playoff Stages editor shows
-// organizers. `ladder` is deriveLadder(readPlan(category)) — computed by
-// the caller so this module takes plain data, not a live category row.
+// organizers. `ladder` is categoryLadder(category) — computed by the
+// caller so this module takes plain data, not a live category row.
 function buildPlayoffLadderTree({ ladder, poolPairs, poolCount, advancePerPool, matches }) {
   if (!ladder?.valid || ladder.levels.length === 0) return null;
   const poMatches = matches.filter((m) => m.bracket_letter === 'PO' && m.status !== 'canceled');
@@ -440,8 +440,9 @@ function buildPlayoffLadderTree({ ladder, poolPairs, poolCount, advancePerPool, 
         let placeholderB = null;
         if (!m) {
           if (isFirst) {
-            placeholderA = firstSlots[i * 2] ? slotLabel(firstSlots[i * 2].a) : null;
-            placeholderB = firstSlots[i * 2] ? slotLabel(firstSlots[i * 2].b) : null;
+            // Each slot is one whole fixture, so box i is simply slot i.
+            placeholderA = firstSlots[i] ? slotLabel(firstSlots[i].a) : null;
+            placeholderB = firstSlots[i] ? slotLabel(firstSlots[i].b) : null;
           } else {
             const prevLabel = PLAYOFF_STAGES[ladder.levels[levelIndex - 1].kind]?.short || 'Prev';
             placeholderA = `Winner of ${prevLabel}${i * 2 + 1}`;
@@ -454,16 +455,23 @@ function buildPlayoffLadderTree({ ladder, poolPairs, poolCount, advancePerPool, 
     });
 
   const thirdPlaceLevel = ladder.levels.find((l) => l.kind === 'third_place');
-  const thirdPlace = thirdPlaceLevel ? matchNode({ key: 'po-third', m: (byStage.get('third_place') || [])[0] }) : null;
+  const thirdPlace = thirdPlaceLevel
+    ? matchNode({ key: 'po-third', m: (byStage.get('third_place') || [])[0], placeholderA: 'Loser of SF1', placeholderB: 'Loser of SF2' })
+    : null;
 
   return { key: 'PO', title: 'Playoffs', rounds, thirdPlace };
 }
 
+// False while a tree is nothing but projected placeholders — a playoff
+// ladder whose first stage hasn't been generated yet.
+export function treeHasRealMatch(tree) {
+  return tree.rounds.some((round) => round.matches.some((m) => m.status !== 'projected'));
+}
+
 // categories: category rows, each optionally carrying `ladder` (the caller
-// computes deriveLadder(readPlan(category)) for playoff_enabled ones — same
-// convention utils/timetable.js already uses for the same reason: keep this
-// file free of Supabase imports beyond the pure helpers it borrows from
-// data/playoffApi.js).
+// computes categoryLadder(category) — same convention utils/timetable.js
+// already uses for the same reason: keep this file free of Supabase imports
+// beyond the pure helpers it borrows from utils/playoffLadder.js).
 // matches: every match in the event, same shape listScheduleMatchesForEvent
 // / listMatchesForCategory already produce (team_a/team_b embedded,
 // bracket_letter, category_id, playoff_stage).

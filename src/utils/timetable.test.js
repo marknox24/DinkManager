@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTimetable } from './timetable.js';
+import { buildTimetable, eventIsOver } from './timetable.js';
 
 const MIN = 60000;
 const NOW = new Date(2026, 9, 10, 9, 0, 0).getTime();
@@ -131,6 +131,69 @@ test('a match left in progress from an earlier day does not create a phantom del
   const stale = match({ status: 'in_progress', court: 1, accumulated_seconds: 60, running_since: null, started_at: new Date(NOW - 20 * 60 * MIN).toISOString() });
   const t = run([stale, match({}), match({})]);
   assert.equal(t.summary.behindMinutes, null);
+});
+
+const semisAndFinal = { valid: true, levels: [{ kind: 'semifinal', matchCount: 2 }, { kind: 'final', matchCount: 1 }] };
+const playoffCat = { id: 'c1', name: 'Men A', order_index: 0, playoff_enabled: true, ladder: semisAndFinal };
+
+test('a projected stage is never "up next" — only a match with real teams is', () => {
+  n = 0;
+  const t = buildTimetable({ event: { ...event, num_courts: 4 }, categories: [playoffCat], matches: [match({})], now: NOW });
+  assert.equal(t.rows.filter((r) => r.status === 'next').length, 1);
+  assert.ok(t.rows.filter((r) => r.projected).every((r) => r.status === 'scheduled' && !r.isNext));
+  assert.ok(t.courts.every((c) => !c.next?.projected));
+});
+
+test('with only projected stages left, nothing is up next and the delay reads as unknown', () => {
+  n = 0;
+  const done = match({ status: 'completed', started_at: new Date(NOW - 20 * MIN).toISOString(), finished_at: new Date(NOW - MIN).toISOString() });
+  const t = buildTimetable({ event, categories: [playoffCat], matches: [done], now: NOW });
+  assert.equal(t.rows.filter((r) => r.status === 'next').length, 0);
+  assert.equal(t.summary.behindMinutes, null);
+  assert.equal(t.summary.remainingCount, 3);
+});
+
+test('a real match behind a projected stage on the same court still gets "up next"', () => {
+  n = 0;
+  const categories = [playoffCat, cats[1]];
+  const matches = [match({ status: 'completed', finished_at: new Date(NOW - MIN).toISOString() }), match({ category_id: 'c2', bracket_letter: 'B' })];
+  const t = buildTimetable({ event: { ...event, num_courts: 1 }, categories, matches, now: NOW });
+  assert.equal(byId(t, matches[1].id).status, 'next');
+  assert.equal(t.courts[0].next.id, matches[1].id);
+});
+
+test('a projected stage waits for a live match of an earlier round to finish', () => {
+  n = 0;
+  const liveMatch = match({ status: 'in_progress', court: 1, started_at: new Date(NOW - 5 * MIN).toISOString(), running_since: new Date(NOW - 5 * MIN).toISOString() });
+  const t = buildTimetable({ event: { ...event, num_courts: 3 }, categories: [playoffCat], matches: [liveMatch], now: NOW });
+  const liveEnd = byId(t, liveMatch.id).endMs;
+  assert.ok(liveEnd > NOW);
+  const semi = t.rows.find((r) => r.projected && r.playoff_stage === 'semifinal');
+  assert.equal(semi.startMs, liveEnd); // not "Starting now" on the free court alongside it
+});
+
+test('stages nobody generated are not projected once the event is over', () => {
+  n = 0;
+  const pastEvent = { ...event, start_date: '2026-10-08', end_date: '2026-10-09' };
+  const done = match({ status: 'completed', finished_at: '2026-10-09T10:00:00Z' });
+  const t = buildTimetable({ event: pastEvent, categories: [playoffCat], matches: [done], now: NOW });
+  assert.equal(t.rows.filter((r) => r.projected).length, 0);
+  assert.equal(t.summary.remainingCount, 0);
+});
+
+test('stages are still projected on the event\'s last day', () => {
+  n = 0;
+  const t = buildTimetable({ event, categories: [playoffCat], matches: [match({})], now: NOW });
+  assert.equal(t.rows.filter((r) => r.projected).length, 3);
+});
+
+test('eventIsOver only flips after the last day, and never without dates', () => {
+  assert.equal(eventIsOver({ start_date: '2026-10-09', end_date: '2026-10-10' }, NOW), false);
+  assert.equal(eventIsOver({ start_date: '2026-10-08', end_date: '2026-10-09' }, NOW), true);
+  assert.equal(eventIsOver({ start_date: '2026-10-09', end_date: null }, NOW), true);
+  assert.equal(eventIsOver({ start_date: '2026-10-11', end_date: null }, NOW), false);
+  assert.equal(eventIsOver({}, NOW), false);
+  assert.equal(eventIsOver(null, NOW), false);
 });
 
 // A category assigned to a specific tournament day (categories.scheduled_date)

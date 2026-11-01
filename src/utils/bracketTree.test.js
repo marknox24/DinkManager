@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { bracketTreeApplies, buildBracketTreesForCategory, computeReadySingleEliminationMatches } from './bracketTree.js';
+import { bracketTreeApplies, buildBracketTreesForCategory, computeReadySingleEliminationMatches, treeHasRealMatch } from './bracketTree.js';
 
 const team = (id) => ({ id, player1_name: id, player2_name: null });
 const m = (over) => ({
@@ -161,6 +161,56 @@ test('a playoff ladder whose first stage is not generated yet shows pool-rank pl
   const firstMatch = trees[0].rounds[0].matches[0];
   assert.equal(firstMatch.status, 'projected');
   assert.ok(firstMatch.teamA.label.startsWith('Pool '));
+});
+
+test('every first-stage box gets its own pool-rank placeholders, not just the first', () => {
+  const category = {
+    id: 'c1',
+    format: 'Round Robin',
+    playoff_enabled: true,
+    playoff_pool_count: 2,
+    playoff_pool_pairs: [['A', 'B']],
+    playoff_advance_per_pool: 2,
+    ladder: { valid: true, levels: [{ kind: 'semifinal', label: 'Semifinals', matchCount: 2 }, { kind: 'final', label: 'Championship', matchCount: 1 }] },
+  };
+  const { trees } = buildBracketTreesForCategory(category, []);
+  const labels = trees[0].rounds[0].matches.map((match) => [match.teamA?.label, match.teamB?.label]);
+  assert.deepEqual(labels, [
+    ['Pool A · Rank 1', 'Pool B · Rank 2'],
+    ['Pool A · Rank 2', 'Pool B · Rank 1'],
+  ]);
+});
+
+test('a playoff third-place box names who it is waiting on', () => {
+  const category = {
+    id: 'c1',
+    format: 'Round Robin',
+    playoff_enabled: true,
+    playoff_pool_count: 2,
+    playoff_pool_pairs: [['A', 'B']],
+    playoff_advance_per_pool: 2,
+    playoff_third_place: true,
+    ladder: { valid: true, levels: [{ kind: 'semifinal', label: 'Semifinals', matchCount: 2 }, { kind: 'third_place', label: 'Fight for 3rd', matchCount: 1 }, { kind: 'final', label: 'Championship', matchCount: 1 }] },
+  };
+  const { thirdPlace } = buildBracketTreesForCategory(category, []).trees[0];
+  assert.equal(thirdPlace.status, 'projected');
+  assert.equal(thirdPlace.teamA.label, 'Loser of SF1');
+  assert.equal(thirdPlace.teamB.label, 'Loser of SF2');
+});
+
+test('treeHasRealMatch is false for a placeholder-only ladder and true from the first real match on', () => {
+  const category = {
+    id: 'c1',
+    format: 'Round Robin',
+    playoff_enabled: true,
+    playoff_pool_count: 2,
+    playoff_pool_pairs: [['A', 'B']],
+    playoff_advance_per_pool: 2,
+    ladder: { valid: true, levels: [{ kind: 'semifinal', label: 'Semifinals', matchCount: 2 }, { kind: 'final', label: 'Championship', matchCount: 1 }] },
+  };
+  assert.equal(treeHasRealMatch(buildBracketTreesForCategory(category, []).trees[0]), false);
+  const generated = [m({ id: 'm1', bracket_letter: 'PO', match_code: 'SF1', round_number: 5, playoff_stage: 'semifinal' })];
+  assert.equal(treeHasRealMatch(buildBracketTreesForCategory(category, generated).trees[0]), true);
 });
 
 // ---------------------------------------------------------------------------

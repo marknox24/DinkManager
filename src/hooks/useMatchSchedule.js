@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getEventById, listCategories, loadPublicEventBundle } from '../data/eventsApi';
 import { listScheduleMatchesForEvent, listScheduleMatchesPublic, listTeamsForEvent, listTeamsPublic } from '../data/bracketsApi';
-import { deriveLadder, readPlan } from '../data/playoffApi';
 import { readWithFallback } from '../lib/offlineRead';
 import { getMeta, setMeta } from '../lib/offlineDb';
-import { buildTimetable } from '../utils/timetable';
-import { bracketTreeApplies, buildBracketTreesForCategory } from '../utils/bracketTree';
+import { buildTimetable, eventIsOver } from '../utils/timetable';
+import { bracketTreeApplies, buildBracketTreesForCategory, treeHasRealMatch } from '../utils/bracketTree';
+import { categoryLadder } from '../utils/playoffLadder';
 import { useNow } from './useNow';
 
 // The organizer desk needs near-live scores; spectators on the public page
@@ -149,7 +149,7 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
     };
   }, [refresh, refreshMs, offlineCapable]);
 
-  const withLadders = useMemo(() => categories.map((c) => ({ ...c, ladder: c.playoff_enabled ? deriveLadder(readPlan(c)) : null })), [categories]);
+  const withLadders = useMemo(() => categories.map((c) => ({ ...c, ladder: categoryLadder(c) })), [categories]);
 
   const timetable = useMemo(() => {
     if (!matches) return null;
@@ -162,14 +162,20 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
   // utils/bracketTree.js for what "applicable"/"trees"/"entrants" mean.
   // Kept even when `trees` is empty but `entrants` isn't — a Single
   // Elimination category with teams registered but no bracket drawn yet
-  // still has an entrant list worth showing.
+  // still has an entrant list worth showing. A finished event's placeholder-
+  // only ladder is dropped: those knockouts were never played, and the plan
+  // behind the placeholders may not even match the pools that were drawn.
+  const over = eventIsOver(event, now);
   const categoryTrees = useMemo(() => {
     if (!matches) return [];
     return withLadders
       .filter((c) => bracketTreeApplies(c))
-      .map((c) => ({ category: c, ...buildBracketTreesForCategory(c, matches, teams) }))
+      .map((c) => {
+        const built = buildBracketTreesForCategory(c, matches, teams);
+        return { category: c, ...built, trees: over ? built.trees.filter(treeHasRealMatch) : built.trees };
+      })
       .filter((entry) => entry.trees.length > 0 || entry.entrants.length > 0);
-  }, [withLadders, matches, teams]);
+  }, [over, withLadders, matches, teams]);
 
   return { event, categories, timetable, categoryTrees, loading: matches == null && !error, error: matches == null ? error : null, fromCache, updatedAt, refresh };
 }

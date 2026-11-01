@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ChevronDown, ImagePlus, ShieldCheck, Trash2, Trophy } from 'lucide-react';
 import { CURRENCIES, MATCH_FORMATS, MATCH_TYPES } from '../../data/constants';
 import { getEventMediaUrl, uploadEventMedia } from '../../data/eventsApi';
-import { PLAYOFF_STAGES, deriveLadder } from '../../data/playoffApi';
+import { PLAYOFF_STAGES, deriveLadderFromPlan } from '../../data/playoffApi';
 import { useToast } from '../../context/ToastContext';
 import FormField, { inputClass, textareaClass } from '../ui/FormField';
 import Select from '../ui/Select';
@@ -35,12 +35,7 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete, de
 
   const ladderSummary = (() => {
     if (!local.playoff_enabled) return '';
-    const ladder = deriveLadder({
-      poolCount: local.playoff_pool_count,
-      poolPairs: local.playoff_pool_pairs || [],
-      advancePerPool: local.playoff_advance_per_pool,
-      thirdPlace: local.playoff_third_place,
-    });
+    const ladder = deriveLadderFromPlan(local);
     if (!ladder.valid) return 'Invalid setup';
     return ladder.levels.map((l) => PLAYOFF_STAGES[l.kind].short).join(' → ');
   })();

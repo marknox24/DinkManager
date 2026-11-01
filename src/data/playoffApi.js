@@ -10,8 +10,8 @@ import { rankTeams, isTiedAtCut } from '../utils/standings';
 // MatchScheduleView.jsx) keeps working unchanged.
 // (a plain `export { X } from 'Y'` re-export wouldn't bind these names
 // locally, and this file's own functions below call them directly)
-import { PLAYOFF_STAGES, matchLevelLabel, deriveLadder, unpairedPools, expandFirstStageSlots, expandSinglePoolSlots } from '../utils/playoffLadder';
-export { PLAYOFF_STAGES, matchLevelLabel, deriveLadder, unpairedPools, expandFirstStageSlots, expandSinglePoolSlots };
+import { PLAYOFF_STAGES, matchLevelLabel, deriveLadder, deriveLadderFromPlan, unpairedPools, expandFirstStageSlots, expandSinglePoolSlots } from '../utils/playoffLadder';
+export { PLAYOFF_STAGES, matchLevelLabel, deriveLadder, deriveLadderFromPlan, unpairedPools, expandFirstStageSlots, expandSinglePoolSlots };
 
 function ordinal(n) {
   if (n % 10 === 1 && n % 100 !== 11) return `${n}st`;
@@ -72,12 +72,7 @@ export async function getPlayoffStatus(categoryId) {
   const plan = readPlan(category);
   if (!plan.playoff_enabled) return [];
 
-  const ladder = deriveLadder({
-    poolCount: plan.playoff_pool_count,
-    poolPairs: plan.playoff_pool_pairs,
-    advancePerPool: plan.playoff_advance_per_pool,
-    thirdPlace: plan.playoff_third_place,
-  });
+  const ladder = deriveLadderFromPlan(plan);
   if (!ladder.valid) return [];
 
   const [{ data: poolBrackets, error: poolErr }, poBracket] = await Promise.all([
@@ -160,12 +155,7 @@ export async function generateStageMatches(categoryId, kind, { replace = false }
   const { data: category, error: catErr } = await supabase.from('categories').select('*').eq('id', categoryId).single();
   if (catErr) throw catErr;
   const plan = readPlan(category);
-  const ladder = deriveLadder({
-    poolCount: plan.playoff_pool_count,
-    poolPairs: plan.playoff_pool_pairs,
-    advancePerPool: plan.playoff_advance_per_pool,
-    thirdPlace: plan.playoff_third_place,
-  });
+  const ladder = deriveLadderFromPlan(plan);
   if (!plan.playoff_enabled || !ladder.valid) throw new Error('This category has no valid playoff plan.');
   const level = ladder.levels.find((l) => l.kind === kind);
   if (!level) throw new Error('Unknown playoff stage.');
