@@ -93,6 +93,31 @@ export function deriveLadder({ poolCount, poolPairs, advancePerPool, thirdPlace 
   return { valid: true, error: null, levels };
 }
 
+// deriveLadder for a saved plan. A `categories` row and readPlan()'s result
+// both carry the plan under snake_case column names, which deriveLadder
+// doesn't read — handed one directly it sees no pool count or pairs and
+// reports every plan invalid. This is the one place those names are mapped;
+// call deriveLadder itself only with an editor's own unsaved state.
+export function deriveLadderFromPlan(plan) {
+  return deriveLadder({
+    poolCount: plan.playoff_pool_count,
+    poolPairs: plan.playoff_pool_pairs,
+    advancePerPool: plan.playoff_advance_per_pool,
+    thirdPlace: plan.playoff_third_place,
+  });
+}
+
+// The `ladder` buildTimetable and buildBracketTreesForCategory expect on a
+// category: null unless it really runs playoffs. Playoffs only exist for
+// the Round Robin family (the rule CategoryEditor uses to offer them) — a
+// category switched to another format before the editor began clearing these
+// fields can still carry a stale playoff_enabled, and must not project a
+// knockout stage it will never play.
+export function categoryLadder(category) {
+  if (!category.playoff_enabled || !/round robin/i.test(category.format || '')) return null;
+  return deriveLadderFromPlan(category);
+}
+
 // Pool letters that don't appear in any crossover pair. deriveLadder only
 // checks that paired letters aren't duplicated — it has no notion of "every
 // pool that exists," so an odd pool count (or a plan that predates a
