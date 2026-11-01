@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { AlertTriangle, ArrowRightLeft, CheckCircle2, ChevronDown, Crown, Download, GitBranch, History, ListChecks, Radio, RefreshCw, Scale, Settings2, Shuffle, Timer, UserPlus, X } from 'lucide-react';
+import { AlertTriangle, ArrowRightLeft, CheckCircle2, ChevronDown, Crown, Download, GitBranch, History, ListChecks, Radio, RefreshCw, Scale, Settings2, Shuffle, Timer, Undo2, UserMinus, UserPlus, X } from 'lucide-react';
 import { listCategories, listRegistrations } from '../../../data/eventsApi';
 import {
   deleteBracketsForCategory,
@@ -14,8 +14,10 @@ import {
   listTeamsForBracket,
   recordBracketRandomization,
   regenerateMatchListForCategory,
+  reinstateTeam,
   setBracketCapacity,
   setGamesPerTeam,
+  withdrawTeam,
 } from '../../../data/bracketsApi';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
@@ -53,10 +55,11 @@ const DownloadBracketsListModal = lazy(() => import('../../../components/organiz
 import { useNow } from '../../../hooks/useNow';
 import { usableCourts } from '../../../utils/courts';
 import { formatDuration } from '../../../utils/format';
-import { liveElapsedSeconds, teamLabel } from '../../../utils/match';
+import { FORFEIT_POINTS } from '../../../utils/forfeit';
+import { liveElapsedSeconds, matchResultLabel, teamLabel } from '../../../utils/match';
 import { computeMissingPairs, effectiveGames, expectedRoundRobin, matchCounts, missingTemplatePairs, planCustomAdjust, planTemplateRounds, progressLabel } from '../../../utils/scheduling';
 import { getCustomFormat } from '../../../data/customFormats';
-import { rankTeams } from '../../../utils/standings';
+import { rankWithWithdrawn } from '../../../utils/standings';
 import { bracketTreeApplies } from '../../../utils/bracketTree';
 import BracketView from '../../../components/brackets/BracketView';
 
@@ -78,8 +81,8 @@ import BracketView from '../../../components/brackets/BracketView';
 // match the player/pair is in, Completed the completed ones, Remaining the
 // rest. Before a matchlist exists, only the round-robin expectation is
 // known, shown as "expected" with no completed/remaining.
-function BracketSection({ bracket, progress, expanded, onToggle, teams, matches, teamCounts, isDouble, games, template, canMove, onMove, dragging, onDragTeam, onDropTeam }) {
-  const rankedTeams = useMemo(() => rankTeams(teams || []), [teams]);
+function BracketSection({ bracket, progress, expanded, onToggle, teams, matches, teamCounts, isDouble, games, template, canMove, canWithdraw, onMove, onWithdraw, onReinstate, dragging, onDragTeam, onDropTeam }) {
+  const rankedTeams = useMemo(() => rankWithWithdrawn(teams || []), [teams]);
   const loaded = !!teams;
   const [dragOver, setDragOver] = useState(false);
   const isDropTarget = dragging && dragging.fromBracketId !== bracket.id;
@@ -176,7 +179,7 @@ function BracketSection({ bracket, progress, expanded, onToggle, teams, matches,
                       <th className="border-l border-ink-100 px-3 py-2.5 text-center" title="Completed / total scheduled matches">
                         Matches
                       </th>
-                      {canMove && <th className="px-3 py-2.5" />}
+                      {(canMove || canWithdraw) && <th className="px-3 py-2.5" />}
                     </tr>
                   </thead>
                   <tbody>
@@ -197,10 +200,13 @@ function BracketSection({ bracket, progress, expanded, onToggle, teams, matches,
                             className={`inline-flex h-6 min-w-6 items-center justify-center gap-0.5 rounded-full px-1.5 text-xs font-extrabold ${t.rank === 1 ? 'bg-amber-400 text-amber-950' : 'bg-ink-100 text-ink-600'}`}
                           >
                             {t.rank === 1 && <Crown size={11} />}
-                            {t.rank}
+                            {t.rank ?? '—'}
                           </span>
                         </td>
-                        <td className="px-3 py-2.5 font-semibold text-ink-800">{teamLabel(t)}</td>
+                        <td className="px-3 py-2.5 font-semibold text-ink-800">
+                          {teamLabel(t)}
+                          {t.withdrawn_at && <span className="ml-1.5 rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-600">Withdrawn</span>}
+                        </td>
                         <td className="px-3 py-2.5 text-ink-500">{t.club_name || '—'}</td>
                         <td className="px-3 py-2.5 text-center font-mono">{t.wins}</td>
                         <td className="px-3 py-2.5 text-center font-mono">{t.losses}</td>
@@ -225,14 +231,25 @@ function BracketSection({ bracket, progress, expanded, onToggle, teams, matches,
                             <div className="text-[10px] font-semibold text-ink-400">not generated</div>
                           </td>
                         )}
-                        {canMove && (
+                        {(canMove || canWithdraw) && (
                           <td className="px-3 py-2.5 text-right">
-                            <button
-                              onClick={() => onMove(t, bracket)}
-                              className="inline-flex items-center gap-1 rounded-full border border-ink-200 px-2.5 py-1 text-[11px] font-bold text-ink-600 transition hover:bg-ink-50 active:scale-[0.97]"
-                            >
-                              <ArrowRightLeft size={11} /> Move
-                            </button>
+                            <div className="flex items-center justify-end gap-1.5">
+                              {canMove && !t.withdrawn_at && (
+                                <button onClick={() => onMove(t, bracket)} className="inline-flex items-center gap-1 rounded-full border border-ink-200 px-2.5 py-1 text-[11px] font-bold text-ink-600 transition hover:bg-ink-50 active:scale-[0.97]">
+                                  <ArrowRightLeft size={11} /> Move
+                                </button>
+                              )}
+                              {canWithdraw &&
+                                (t.withdrawn_at ? (
+                                  <button onClick={() => onReinstate(t)} className="inline-flex items-center gap-1 rounded-full border border-ink-200 px-2.5 py-1 text-[11px] font-bold text-ink-600 transition hover:bg-ink-50 active:scale-[0.97]">
+                                    <Undo2 size={11} /> Reinstate
+                                  </button>
+                                ) : (
+                                  <button onClick={() => onWithdraw(t)} className="inline-flex items-center gap-1 rounded-full border border-ink-200 px-2.5 py-1 text-[11px] font-bold text-ink-600 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-600 active:scale-[0.97]">
+                                    <UserMinus size={11} /> Withdraw
+                                  </button>
+                                ))}
+                            </div>
                           </td>
                         )}
                       </tr>
@@ -253,7 +270,7 @@ function BracketSection({ bracket, progress, expanded, onToggle, teams, matches,
                       return (
                         <div key={m.id} className="rounded-lg bg-white px-3 py-2 text-xs text-ink-600 ring-1 ring-ink-100">
                           <span className="font-semibold text-ink-800">{teamA ? teamLabel(teamA) : '—'}</span> vs{' '}
-                          <span className="font-semibold text-ink-800">{teamB ? teamLabel(teamB) : '—'}</span> — {m.score_a}–{m.score_b}
+                          <span className="font-semibold text-ink-800">{teamB ? teamLabel(teamB) : '—'}</span> — {matchResultLabel(m)}
                           {m.court ? ` · Court ${m.court}` : ''}
                           {m.umpire_name ? ` · ${m.umpire_name}` : ''}
                         </div>
@@ -737,19 +754,24 @@ export default function BracketsPage() {
     let missingCount = 0;
     let staleCount = 0;
     brackets.forEach((b) => {
-      const teamIds = (bracketData[b.id]?.teams || []).map((t) => t.id);
+      const bracketTeams = bracketData[b.id]?.teams || [];
+      const teamIds = bracketTeams.map((t) => t.id);
       const inBracket = new Set(teamIds);
       const bracketMatches = poolMatches.filter((m) => m.bracket_id === b.id);
+      // Regenerate never adds a match for a withdrawn team, so one missing
+      // doesn't mean the list needs updating.
+      const withdrawn = new Set(bracketTeams.filter((t) => t.withdrawn_at).map((t) => t.id));
+      const playable = (x, y) => !withdrawn.has(x) && !withdrawn.has(y);
       const games = isDouble ? null : effectiveGames(teamIds.length, bracketGames(b));
       if (template) {
         // A match-template format: only template matches without a live match count.
-        missingCount += missingTemplatePairs(template, b.letter, teamIds, bracketMatches, games).length;
+        missingCount += missingTemplatePairs(template, b.letter, teamIds, bracketMatches, games).filter((m) => playable(m.a, m.b)).length;
       } else if (games != null) {
         // A custom games-per-team bracket: the same plan Regenerate runs.
         const { add, remove } = planCustomAdjust(teamIds, bracketMatches, games);
-        missingCount += add.length + remove.length;
+        missingCount += add.filter(([x, y]) => playable(x, y)).length + remove.length;
       } else {
-        missingCount += computeMissingPairs(teamIds, bracketMatches, isDouble).length;
+        missingCount += computeMissingPairs(teamIds, bracketMatches, isDouble).filter(([x, y]) => playable(x, y)).length;
       }
       // A scheduled, unplayed match whose team moved to another bracket —
       // regenerating removes it (played matches are kept as history).
@@ -922,11 +944,50 @@ export default function BracketsPage() {
   };
 
   const canMove = canRedraw && !isLocked;
+  // Matches can_edit_team in schema.sql.
+  const canWithdraw = (can('brackets') || can('matchlist')) && !isLocked;
   const matchlistInfo = { exists: Boolean(matchlistStatus), hasResults: Boolean(matchlistStatus?.hasResults) };
 
   // After any move: counts, standings, progress, matchlist status and the
   // history all reflect it immediately. The matchlist itself is never
   // regenerated here — that stays an explicit organizer action.
+  const handleWithdraw = async (team) => {
+    if (blockIfLocked() || blockIfOffline()) return;
+    const open = categoryMatches.filter((m) => (m.status === 'scheduled' || m.status === 'in_progress') && (m.team_a_id === team.id || m.team_b_id === team.id)).length;
+    const ok = await confirm({
+      title: `Withdraw ${teamLabel(team)}?`,
+      message: `${open > 0 ? `${open} unfinished ${open === 1 ? 'match becomes a' : 'matches become'}` : 'Any unfinished matches become'} ${FORFEIT_POINTS}–0 ${
+        open === 1 ? 'walkover' : 'walkovers'
+      } for the opponent. Matches already played stay as scored, and this player can't advance to playoffs.`,
+      confirmLabel: 'Withdraw player',
+    });
+    if (!ok) return;
+    try {
+      const closed = await withdrawTeam(team.id);
+      pushToast(`${teamLabel(team)} withdrawn — ${closed} ${closed === 1 ? 'match' : 'matches'} forfeited`, 'success');
+    } catch (e) {
+      pushToast(e.message, 'error');
+    }
+    await refreshAfterMove();
+  };
+
+  const handleReinstate = async (team) => {
+    if (blockIfLocked() || blockIfOffline()) return;
+    const ok = await confirm({
+      title: `Reinstate ${teamLabel(team)}?`,
+      message: 'Matches forfeited by their withdrawal go back to scheduled. Results entered by hand stay as they are.',
+      confirmLabel: 'Reinstate player',
+    });
+    if (!ok) return;
+    try {
+      await reinstateTeam(team.id);
+      pushToast(`${teamLabel(team)} reinstated`, 'success');
+    } catch (e) {
+      pushToast(e.message, 'error');
+    }
+    await refreshAfterMove();
+  };
+
   const refreshAfterMove = async () => {
     setMoving(null);
     setBalanceOpen(false);
@@ -1360,6 +1421,9 @@ export default function BracketsPage() {
                     games={bracketGames(b)}
                     template={activeTemplate}
                     canMove={canMove && Boolean(poolsWithTeams) && brackets.length > 1}
+                    canWithdraw={canWithdraw}
+                    onWithdraw={handleWithdraw}
+                    onReinstate={handleReinstate}
                     onMove={openMove}
                     dragging={dragging}
                     onDragTeam={setDragging}

@@ -100,6 +100,25 @@ export function matchCounts(matches) {
   return { byBracket, byTeam };
 }
 
+// Whether every pool has finished and playoffs can be drawn. Goes by the
+// matches that actually exist rather than a computed round-robin total,
+// which a custom games-per-team schedule never reaches and a double round
+// robin reaches halfway through. A forfeit counts as finished; a team still
+// in the pool with no matches at all means the matchlist is out of date.
+export function arePoolsReady(poolBracketIds, teams, matches) {
+  const { byBracket, byTeam } = matchCounts(matches);
+  for (const bracketId of poolBracketIds) {
+    const counts = byBracket.get(bracketId);
+    if (!counts || counts.remaining > 0) {
+      return { ok: false, reason: 'Every pool needs to finish its round robin first.' };
+    }
+    if (teams.some((t) => t.bracket_id === bracketId && !t.withdrawn_at && !byTeam.has(t.id))) {
+      return { ok: false, reason: 'A player has no matches yet — regenerate the matchlist first.' };
+    }
+  }
+  return { ok: true, reason: null };
+}
+
 // The one progress wording used everywhere (Brackets page, Matchlist
 // Preview): "3/5" = completed / total, with "3 completed • 2 remaining" (or
 // "• Complete") as the secondary/tooltip text. Takes a matchCounts entry.

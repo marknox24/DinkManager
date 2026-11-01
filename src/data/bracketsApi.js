@@ -679,9 +679,9 @@ export async function planMatchListForCategory(categoryId) {
   if (bracketErr) throw bracketErr;
   if (brackets.length === 0) throw new Error('No brackets to generate a match list for.');
 
-  const { data: teams, error: teamErr } = await supabase
+  const { data: allTeams, error: teamErr } = await supabase
     .from('teams')
-    .select('id, bracket_id, player1_name, player2_name, club_name, created_at')
+    .select('id, bracket_id, player1_name, player2_name, club_name, created_at, withdrawn_at')
     .in(
       'bracket_id',
       brackets.map((b) => b.id)
@@ -689,6 +689,9 @@ export async function planMatchListForCategory(categoryId) {
     .order('created_at')
     .order('id');
   if (teamErr) throw teamErr;
+  // A withdrawn team is never scheduled, but it's still returned below: the
+  // Matchlist Preview lists it alongside the matches it already played.
+  const teams = allTeams.filter((t) => !t.withdrawn_at);
 
   // A match-template format ("RR:Custom Match 1"): every bracket plays the
   // same fixed sequence, Team N = the team's position inside its bracket.
@@ -701,7 +704,7 @@ export async function planMatchListForCategory(categoryId) {
       gamesByBracket[b.id] = effectiveGames(teamsByBracket[b.id].length, b.games_per_team ?? category.games_per_team);
     });
     const { rows, skippedByBracket } = planTemplateMatches(template, brackets, teamsByBracket, gamesByBracket);
-    return { kind: 'template', template, isDouble: false, brackets, teams, teamsByBracket, skippedByBracket, gamesByBracket, rows, byes: [] };
+    return { kind: 'template', template, isDouble: false, brackets, teams: allTeams, teamsByBracket, skippedByBracket, gamesByBracket, rows, byes: [] };
   }
 
   if (/round robin/i.test(format)) {
@@ -717,14 +720,14 @@ export async function planMatchListForCategory(categoryId) {
       kind: 'round_robin',
       isDouble,
       brackets,
-      teams,
+      teams: allTeams,
       gamesByBracket,
       rows: planRoundRobin(brackets, teamsByBracket, isDouble, gamesByBracket),
       byes: [],
     };
   }
   const { rows, byes } = planSingleEliminationRound1(brackets, teams);
-  return { kind: 'single_elimination', isDouble: false, brackets, teams, gamesByBracket: {}, rows, byes };
+  return { kind: 'single_elimination', isDouble: false, brackets, teams: allTeams, gamesByBracket: {}, rows, byes };
 }
 
 // Full round-robin schedule for every pool bracket in the category — see
@@ -778,7 +781,7 @@ export async function regenerateMatchListForCategory(categoryId) {
   const bracketIds = brackets.map((b) => b.id);
 
   const [{ data: allTeams, error: teamErr }, { data: existingMatches, error: matchErr }] = await Promise.all([
-    supabase.from('teams').select('id, bracket_id').in('bracket_id', bracketIds).order('created_at').order('id'),
+    supabase.from('teams').select('id, bracket_id, withdrawn_at').in('bracket_id', bracketIds).order('created_at').order('id'),
     supabase
       .from('matches')
       .select('id, bracket_id, team_a_id, team_b_id, round_number, match_code, status, score_a, score_b, court, started_at')
@@ -786,6 +789,11 @@ export async function regenerateMatchListForCategory(categoryId) {
   ]);
   if (teamErr) throw teamErr;
   if (matchErr) throw matchErr;
+
+  // Withdrawn teams stay in teamIds so games-per-team targets and template
+  // positions still count them; only a new match against one is dropped.
+  const withdrawnIds = new Set(allTeams.filter((t) => t.withdrawn_at).map((t) => t.id));
+  const playable = (a, b) => !withdrawnIds.has(a) && !withdrawnIds.has(b);
 
   const rows = [];
   const toRemove = [];
@@ -804,7 +812,7 @@ export async function regenerateMatchListForCategory(categoryId) {
       // unless that code is already taken by another match.
       const taken = new Set(bracketMatches.map((m) => m.match_code));
       let highest = bracketMatches.reduce((max, m) => Math.max(max, parseInt((m.match_code || '').match(/\d+$/)?.[0] || '0', 10)), 0);
-      missingTemplatePairs(template, bracket.letter, teamIds, bracketMatches, games).forEach((m) => {
+      missingTemplatePairs(template, bracket.letter, teamIds, bracketMatches, games).filter((m) => playable(m.a, m.b)).forEach((m) => {
         let code = `${bracket.letter}${m.matchNo}`;
         if (taken.has(code)) code = `${bracket.letter}${(highest += 1)}`;
         taken.add(code);
@@ -814,9 +822,9 @@ export async function regenerateMatchListForCategory(categoryId) {
     } else if (games != null) {
       const { add, remove } = planCustomAdjust(teamIds, bracketMatches, games);
       toRemove.push(...remove);
-      newPairs = add;
+      newPairs = add.filter(([a, b]) => playable(a, b));
     } else {
-      newPairs = computeMissingPairs(teamIds, bracketMatches, isDouble);
+      newPairs = computeMissingPairs(teamIds, bracketMatches, isDouble).filter(([a, b]) => playable(a, b));
     }
     if (newPairs.length === 0) continue;
 
@@ -900,34 +908,42 @@ async function advanceSingleEliminationBracket(bracketId) {
     const { data: category, error: catErr } = await supabase.from('categories').select('format').eq('id', bracket.category_id).single();
     if (catErr || category?.format !== 'Single Elimination') return;
 
-    const [{ data: bracketMatches, error: matchErr }, { data: bracketTeams, error: teamErr }] = await Promise.all([
-      supabase.from('matches').select('id, team_a_id, team_b_id, round_number, match_code, status, winner_team_id, playoff_stage').eq('bracket_id', bracketId).neq('status', 'canceled'),
-      supabase.from('teams').select('id, created_at').eq('bracket_id', bracketId),
-    ]);
-    if (matchErr || teamErr || !bracketMatches) return;
+    // A row inserted already closed (a walkover) can make the next round
+    // ready straight away, so keep going until a pass closes nothing. The
+    // bound is just a backstop: a bracket has far fewer rounds than this.
+    for (let pass = 0; pass < 32; pass++) {
+      const [{ data: bracketMatches, error: matchErr }, { data: bracketTeams, error: teamErr }] = await Promise.all([
+        supabase.from('matches').select('id, team_a_id, team_b_id, round_number, match_code, status, winner_team_id, playoff_stage, result_type').eq('bracket_id', bracketId),
+        supabase.from('teams').select('id, created_at, withdrawn_at').eq('bracket_id', bracketId),
+      ]);
+      if (matchErr || teamErr || !bracketMatches) return;
 
-    const ready = computeReadySingleEliminationMatches(bracketMatches, bracketTeams || []);
-    if (ready.length === 0) return;
+      const ready = computeReadySingleEliminationMatches(bracketMatches, bracketTeams || []);
+      if (ready.length === 0) return;
 
-    // match_code uses computeReadySingleEliminationMatches's own
-    // position-based codeNumber, NOT a flat "next available number"
-    // counter — a flat counter numbers matches in whatever order they
-    // happen to become ready (a bye's resulting match can resolve before
-    // an adjacent real match that's still being played), which can land a
-    // LOWER number on a visually-later bracket box than its neighbor and
-    // point the bracket tree's connector lines at the wrong match. See
-    // that function's codeNumber comment for the full reasoning.
-    const rows = ready.map((r) => ({
-      bracket_id: bracketId,
-      team_a_id: r.team_a_id,
-      team_b_id: r.team_b_id,
-      status: 'scheduled',
-      round_number: r.round_number,
-      match_code: `${bracket.letter}${r.codeNumber}`,
-      ...(r.playoff_stage ? { playoff_stage: r.playoff_stage } : {}),
-    }));
-    const { error: insertErr } = await supabase.from('matches').insert(rows);
-    if (insertErr) console.error('advanceSingleEliminationBracket insert failed', insertErr);
+      // match_code uses computeReadySingleEliminationMatches's own
+      // position-based codeNumber, NOT a flat "next available number"
+      // counter — a flat counter numbers matches in whatever order they
+      // happen to become ready (a bye's resulting match can resolve before
+      // an adjacent real match that's still being played), which can land a
+      // LOWER number on a visually-later bracket box than its neighbor and
+      // point the bracket tree's connector lines at the wrong match. See
+      // that function's codeNumber comment for the full reasoning.
+      const finishedAt = new Date().toISOString();
+      const rows = ready.map(({ codeNumber, ...r }) => ({
+        bracket_id: bracketId,
+        status: 'scheduled',
+        ...r,
+        match_code: `${bracket.letter}${codeNumber}`,
+        ...(r.status === 'completed' ? { finished_at: finishedAt } : {}),
+      }));
+      const { error: insertErr } = await supabase.from('matches').insert(rows);
+      if (insertErr) {
+        console.error('advanceSingleEliminationBracket insert failed', insertErr);
+        return;
+      }
+      if (!rows.some((r) => r.status === 'completed')) return;
+    }
   } catch (e) {
     console.error('advanceSingleEliminationBracket failed', e);
   }
@@ -981,7 +997,7 @@ export async function startScheduledMatch(matchId, { court, umpire_name }, opts)
 // completed match, so unlike start/pause/resume/cancel this can't rely on a
 // simple status guard; see sync_log_score in schema.sql for the newer-wins
 // conflict handling that covers that case instead.
-export async function recordScheduledMatchResult(matchId, { score_a, score_b, winner_team_id, umpire_name }, opts) {
+export async function recordScheduledMatchResult(matchId, { score_a, score_b, winner_team_id, umpire_name, result_type }, opts) {
   const { operationId, clientTs, deviceId } = newOperation(opts);
   const { data, error } = await supabase.rpc('sync_log_score', {
     p_operation_id: operationId,
@@ -992,9 +1008,26 @@ export async function recordScheduledMatchResult(matchId, { score_a, score_b, wi
     p_score_b: score_b,
     p_winner_team_id: winner_team_id,
     p_umpire_name: umpire_name ?? null,
+    p_result_type: result_type ?? 'played',
   });
   if (error) throw error;
   const match = unwrapSyncResult(data);
   await advanceSingleEliminationBracket(match?.bracket_id);
   return match;
+}
+
+// Takes a player out of the tournament — see withdraw_team in schema.sql.
+// Goes straight to the server rather than through the offline queue: it
+// closes many matches at once, and which ones depends on the server's state.
+export async function withdrawTeam(teamId) {
+  const { data, error } = await supabase.rpc('withdraw_team', { p_team_id: teamId });
+  if (error) throw error;
+  await Promise.all([...new Set(data.bracket_ids)].map((bracketId) => advanceSingleEliminationBracket(bracketId)));
+  return data.closed;
+}
+
+export async function reinstateTeam(teamId) {
+  const { data, error } = await supabase.rpc('reinstate_team', { p_team_id: teamId });
+  if (error) throw error;
+  return data.reopened;
 }

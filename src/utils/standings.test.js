@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { rankTeams, isTiedAtCut } from './standings.js';
+import { rankTeams, rankWithWithdrawn, isTiedAtCut } from './standings.js';
 
 const team = (name, wins, losses, points_for, points_against) => ({ name, wins, losses, points_for, points_against });
 
@@ -43,4 +43,21 @@ test('isTiedAtCut is true for a genuine tie on every field', () => {
     { wins: 2, losses: 1, diff: 10, points_for: 30, rank: 2 },
   ];
   assert.equal(isTiedAtCut(ranked, 1), true);
+});
+
+test('rankWithWithdrawn: withdrawn teams go last with no rank, whatever their record', () => {
+  const ranked = rankWithWithdrawn([team('A', 1, 2, 20, 30), { ...team('Left', 3, 0, 33, 10), withdrawn_at: '2026-11-01T00:00:00Z' }, team('B', 2, 1, 30, 20)]);
+  assert.deepEqual(
+    ranked.map((t) => [t.name, t.rank]),
+    [
+      ['B', 1],
+      ['A', 2],
+      ['Left', null],
+    ]
+  );
+});
+
+test('rankWithWithdrawn: with nobody withdrawn it matches rankTeams exactly', () => {
+  const teams = [team('A', 1, 2, 20, 30), team('B', 2, 1, 30, 20), team('C', 2, 1, 35, 20)];
+  assert.deepEqual(rankWithWithdrawn(teams), rankTeams(teams));
 });

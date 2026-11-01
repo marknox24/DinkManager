@@ -12,6 +12,21 @@ export function teamLabel(team) {
   return toTitleCase(label);
 }
 
+// How a finished match's result reads, wherever one is displayed: a forfeit
+// is tagged so it can't pass for a score that was actually played, and a
+// double forfeit has no meaningful score to show.
+export function resultTag(resultType) {
+  if (resultType === 'forfeit') return 'W/O';
+  if (resultType === 'double_forfeit') return 'Double forfeit';
+  return null;
+}
+
+export function matchResultLabel({ result_type, score_a, score_b }) {
+  if (result_type === 'double_forfeit') return resultTag(result_type);
+  const tag = resultTag(result_type);
+  return `${score_a}–${score_b}${tag ? ` ${tag}` : ''}`;
+}
+
 export function liveElapsedSeconds(match, nowMs) {
   const base = match.accumulated_seconds || 0;
   if (!match.running_since) return base;

@@ -33,8 +33,8 @@ import { usePagedItems } from '../../../hooks/usePagedItems';
 import { useMediaQuery } from '../../../hooks/useMediaQuery';
 import { formatDuration } from '../../../utils/format';
 import { usableCourts } from '../../../utils/courts';
-import { teamLabel } from '../../../utils/match';
-import { rankTeams } from '../../../utils/standings';
+import { matchResultLabel, teamLabel } from '../../../utils/match';
+import { rankWithWithdrawn } from '../../../utils/standings';
 import { matchLevelLabel } from '../../../data/playoffApi';
 import { categoryLadder } from '../../../utils/playoffLadder';
 import { bracketTreeApplies, buildBracketTreesForCategory, treeHasRealMatch } from '../../../utils/bracketTree';
@@ -365,7 +365,7 @@ export default function PreviewDisplayPage() {
     // single-elimination match — only pool brackets get a standings card.
     return brackets
       .filter((b) => b.kind !== 'playoff')
-      .map((b) => ({ bracket: b, ranked: rankTeams(teams.filter((t) => t.bracket_id === b.id)) }))
+      .map((b) => ({ bracket: b, ranked: rankWithWithdrawn(teams.filter((t) => t.bracket_id === b.id)) }))
       .sort((a, b) => a.bracket.letter.localeCompare(b.bracket.letter));
   }, [brackets, teams]);
 
@@ -689,11 +689,12 @@ export default function PreviewDisplayPage() {
                                 }`}
                               >
                                 {t.rank === 1 && <Crown size={11} />}
-                                {t.rank}
+                                {t.rank ?? '—'}
                               </span>
                             </td>
                             <td className="px-2 py-2.5 font-semibold text-ink-800">
                               <div className="break-words leading-snug">{teamLabel(t)}</div>
+                              {t.withdrawn_at && <div className="text-[10px] font-bold text-rose-600">Withdrawn</div>}
                               {t.club_name && <div className="truncate text-[10px] font-normal text-ink-400">{t.club_name}</div>}
                             </td>
                             <td className="px-1 py-2.5 text-center font-mono text-[13px] font-semibold tabular-nums text-ink-800 sm:hidden">
@@ -797,9 +798,7 @@ export default function PreviewDisplayPage() {
                     </span>
                     <Trophy size={18} className="hidden text-amber-400 sm:block" />
                     <div className="text-[13px] font-extrabold leading-snug text-ink-900 sm:text-sm">{teamLabel(winner)}</div>
-                    <div className="font-mono text-sm font-bold tabular-nums text-brand-600">
-                      {m.score_a}–{m.score_b}
-                    </div>
+                    <div className="font-mono text-sm font-bold tabular-nums text-brand-600">{matchResultLabel(m)}</div>
                     <div className="text-[10px] leading-snug text-ink-400 sm:text-[11px]">def. {teamLabel(loser)}</div>
                   </div>
                 );
