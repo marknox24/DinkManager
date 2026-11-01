@@ -563,3 +563,123 @@ test('codeNumber reflects bracket POSITION, not discovery order — a bye-vs-bye
   const realMatchReady = computeReadySingleEliminationMatches(afterByePairInserted, teams);
   assert.deepEqual(realMatchReady, [{ round_number: 2, team_a_id: 'x1', team_b_id: 'x3', codeNumber: 2 }]);
 });
+
+// ---------------------------------------------------------------------------
+// FORFEITS — computeReadySingleEliminationMatches
+// ---------------------------------------------------------------------------
+const played = (id, code, round, a, b, winner, over = {}) =>
+  m({ id, match_code: code, round_number: round, team_a_id: a, team_b_id: b, status: 'completed', winner_team_id: winner, result_type: 'played', ...over });
+const doubleForfeit = (id, code, round, a, b, over = {}) =>
+  m({ id, match_code: code, round_number: round, team_a_id: a, team_b_id: b, status: 'completed', winner_team_id: null, score_a: 0, score_b: 0, result_type: 'double_forfeit', ...over });
+
+test('double forfeit: the waiting opponent gets a closed walkover row, not a pending one', () => {
+  const ready = computeReadySingleEliminationMatches([played('m1', 'A1', 1, 'a', 'b', 'a'), doubleForfeit('m2', 'A2', 1, 'c', 'd')], []);
+  assert.deepEqual(ready.find((r) => !r.playoff_stage), {
+    round_number: 2,
+    team_a_id: 'a',
+    team_b_id: 'c',
+    codeNumber: 3,
+    status: 'completed',
+    result_type: 'forfeit',
+    score_a: 11,
+    score_b: 0,
+    winner_team_id: 'a',
+  });
+});
+
+test('double forfeit: still waits while the other side of the pair is undecided', () => {
+  const ready = computeReadySingleEliminationMatches([m({ id: 'm1', match_code: 'A1', round_number: 1, team_a_id: 'a', team_b_id: 'b' }), doubleForfeit('m2', 'A2', 1, 'c', 'd')], []);
+  assert.deepEqual(ready, []);
+});
+
+test('double forfeit on both sides of a pair propagates another double forfeit', () => {
+  const ready = computeReadySingleEliminationMatches([doubleForfeit('m1', 'A1', 1, 'a', 'b'), doubleForfeit('m2', 'A2', 1, 'c', 'd')], []);
+  assert.equal(ready[0].result_type, 'double_forfeit');
+  assert.equal(ready[0].winner_team_id, null);
+  assert.equal(ready[0].status, 'completed');
+});
+
+test('double forfeit in a semifinal: Final is a walkover and 3rd place goes to the other semifinal loser', () => {
+  const ready = computeReadySingleEliminationMatches([played('s1', 'A1', 1, 'a', 'b', 'a'), doubleForfeit('s2', 'A2', 1, 'c', 'd')], []);
+  const final = ready.find((r) => !r.playoff_stage);
+  const third = ready.find((r) => r.playoff_stage === 'third_place');
+  assert.equal(final.winner_team_id, 'a');
+  assert.equal(final.result_type, 'forfeit');
+  assert.equal(third.team_a_id, 'b');
+  assert.equal(third.team_b_id, 'd');
+  assert.equal(third.winner_team_id, 'b');
+  assert.equal(third.result_type, 'forfeit');
+  assert.equal(third.playoff_stage, 'third_place');
+});
+
+test('both semifinals double-forfeited: no champion and no 3rd place', () => {
+  const ready = computeReadySingleEliminationMatches([doubleForfeit('s1', 'A1', 1, 'a', 'b'), doubleForfeit('s2', 'A2', 1, 'c', 'd')], []);
+  assert.equal(ready.length, 2);
+  ready.forEach((r) => {
+    assert.equal(r.result_type, 'double_forfeit');
+    assert.equal(r.winner_team_id, null);
+  });
+});
+
+test('a closed walkover row feeds the next round, so a chain resolves one pass at a time', () => {
+  const round1 = [
+    played('m1', 'A1', 1, 'a', 'b', 'a'),
+    doubleForfeit('m2', 'A2', 1, 'c', 'd'),
+    played('m3', 'A3', 1, 'e', 'f', 'e'),
+    played('m4', 'A4', 1, 'g', 'h', 'g'),
+  ];
+  const first = computeReadySingleEliminationMatches(round1, []);
+  assert.equal(first.length, 2);
+  assert.equal(first[0].winner_team_id, 'a');
+  assert.equal(first[1].status, undefined);
+
+  const toRow = (r, i) => m({ id: `r2-${i}`, match_code: `A${r.codeNumber}`, ...r, status: r.status ?? 'completed', winner_team_id: r.winner_team_id ?? 'e', result_type: r.result_type ?? 'played' });
+  const next = computeReadySingleEliminationMatches([...round1, ...first.map(toRow)], []);
+  const final = next.find((r) => !r.playoff_stage);
+  assert.equal(final.team_a_id, 'a');
+  assert.equal(final.team_b_id, 'e');
+  assert.equal(final.status, undefined);
+});
+
+test('an existing double-forfeit row is not recreated', () => {
+  const matches = [doubleForfeit('m1', 'A1', 1, 'a', 'b'), played('m2', 'A2', 1, 'c', 'd', 'c'), m({ id: 'f', match_code: 'A3', round_number: 2, team_a_id: 'a', team_b_id: 'c', status: 'completed', winner_team_id: 'c', result_type: 'forfeit' })];
+  const ready = computeReadySingleEliminationMatches(matches, []);
+  assert.equal(ready.filter((r) => !r.playoff_stage).length, 0);
+});
+
+test('a withdrawn finalist loses the next fixture by walkover', () => {
+  const teams = ['a', 'b', 'c', 'd'].map((id, i) => teamRow(id, { seed: i, ...(id === 'c' ? { withdrawn_at: '2026-11-01T00:00:00Z' } : {}) }));
+  const ready = computeReadySingleEliminationMatches([played('s1', 'A1', 1, 'a', 'b', 'a'), played('s2', 'A2', 1, 'c', 'd', 'c')], teams);
+  const final = ready.find((r) => !r.playoff_stage);
+  assert.equal(final.winner_team_id, 'a');
+  assert.equal(final.result_type, 'forfeit');
+  const third = ready.find((r) => r.playoff_stage === 'third_place');
+  assert.equal(third.status, undefined);
+});
+
+test('a withdrawn bye recipient loses their first match by walkover', () => {
+  const teams = [
+    teamRow('a', { seed: 1 }),
+    teamRow('b', { seed: 2 }),
+    teamRow('bye', { seed: 3, withdrawn_at: '2026-11-01T00:00:00Z' }),
+  ];
+  const ready = computeReadySingleEliminationMatches([played('m1', 'A1', 1, 'a', 'b', 'a')], teams);
+  assert.equal(ready[0].winner_team_id, 'a');
+  assert.equal(ready[0].result_type, 'forfeit');
+});
+
+test('entrant list marks both double-forfeited teams as eliminated', () => {
+  const category = { id: 'c1', format: 'Single Elimination' };
+  const teams = ['a', 'b'].map((id, i) => teamRow(id, { seed: i }));
+  const { entrants } = buildBracketTreesForCategory(category, [doubleForfeit('m1', 'A1', 1, 'a', 'b')], teams);
+  assert.deepEqual(
+    entrants[0].teams.map((t) => t.status),
+    ['eliminated', 'eliminated']
+  );
+});
+
+test('match nodes carry the result type for the bracket view', () => {
+  const category = { id: 'c1', format: 'Single Elimination' };
+  const { trees } = buildBracketTreesForCategory(category, [doubleForfeit('m1', 'A1', 1, 'a', 'b')], ['a', 'b'].map((id, i) => teamRow(id, { seed: i })));
+  assert.equal(trees[0].rounds[0].matches[0].resultType, 'double_forfeit');
+});

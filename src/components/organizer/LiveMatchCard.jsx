@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pause, Play, Radio, Square, X } from 'lucide-react';
+import { Flag, Pause, Play, Radio, Square, X } from 'lucide-react';
 import { useToast } from '../../context/ToastContext';
 import { liveElapsedSeconds, teamLabel } from '../../utils/match';
 import { formatElapsed } from '../../utils/format';
@@ -11,7 +11,7 @@ const scoreInputClass =
 // Shared live-match card — used on both the Brackets page and the Match List
 // page so pause/resume/cancel/finish behavior only lives in one place. Kept
 // compact so 3-4 fit per row without pushing the schedule far down the page.
-export default function LiveMatchCard({ match, now, categoryName, onTogglePause, onCancel, onFinish }) {
+export default function LiveMatchCard({ match, now, categoryName, onTogglePause, onCancel, onFinish, onForfeit }) {
   const { pushToast } = useToast();
   const [isFinishing, setIsFinishing] = useState(false);
   const [scoreA, setScoreA] = useState('0');
@@ -129,6 +129,15 @@ export default function LiveMatchCard({ match, now, categoryName, onTogglePause,
             >
               <X size={12} />
             </button>
+            {onForfeit && (
+              <button
+                onClick={() => onForfeit(match)}
+                title="Record forfeit"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink-100 text-ink-600 transition hover:bg-ink-200"
+              >
+                <Flag size={12} />
+              </button>
+            )}
             <button
               onClick={openFinish}
               className="flex flex-1 items-center justify-center gap-1 rounded-lg bg-brand-600 px-2 py-1.5 text-[11px] font-bold text-white shadow-sm transition hover:bg-brand-700"

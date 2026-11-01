@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ChevronDown, FileText, Lock, ListOrdered, Pencil, Printer, Radio, Sparkles, Timer, Trash2, Trophy } from 'lucide-react';
+import { ChevronDown, FileText, Flag, Lock, ListOrdered, Pencil, Printer, Radio, Sparkles, Timer, Trash2, Trophy } from 'lucide-react';
 import { listCategories, listUmpires } from '../../../data/eventsApi';
 import {
   generateRoundRobinMatchList,
@@ -23,6 +23,7 @@ import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLa
 import ConnectionStatusPill from '../../../components/organizer/ConnectionStatusPill';
 import OfflineQueueBanner from '../../../components/organizer/OfflineQueueBanner';
 import LiveMatchCard from '../../../components/organizer/LiveMatchCard';
+import ForfeitModal from '../../../components/organizer/ForfeitModal';
 import LogScoreModal from '../../../components/organizer/LogScoreModal';
 import StartMatchModal from '../../../components/organizer/StartMatchModal';
 import PlayoffCrossoverConfirmModal from '../../../components/organizer/PlayoffCrossoverConfirmModal';
@@ -50,7 +51,8 @@ const BlankScoreSheetsModal = lazy(() => import('../../../components/organizer/B
 import { useNow } from '../../../hooks/useNow';
 import { usableCourts } from '../../../utils/courts';
 import { formatDuration } from '../../../utils/format';
-import { liveElapsedSeconds, teamLabel } from '../../../utils/match';
+import { forfeitResult, hasDependentMatch } from '../../../utils/forfeit';
+import { liveElapsedSeconds, matchResultLabel, resultTag, teamLabel } from '../../../utils/match';
 
 // Match-template formats ("RR:Custom Match 1") are generated through the same
 // pool-schedule path as Round Robin, just from a fixed template.
@@ -87,6 +89,7 @@ export default function MatchListPage() {
   const [generatingStage, setGeneratingStage] = useState(null);
   const [confirmingLevel, setConfirmingLevel] = useState(null);
   const [loggingMatch, setLoggingMatch] = useState(null);
+  const [forfeitingMatch, setForfeitingMatch] = useState(null);
   const [startingMatch, setStartingMatch] = useState(null);
   const [sheetsPreviewOpen, setSheetsPreviewOpen] = useState(false);
   const [printingSheets, setPrintingSheets] = useState(false);
@@ -380,6 +383,8 @@ export default function MatchListPage() {
       optimisticMatch: {
         ...match,
         status: 'completed',
+        result_type: 'played',
+        auto_forfeit_team_id: null,
         score_a: sA,
         score_b: sB,
         winner_team_id,
@@ -391,6 +396,30 @@ export default function MatchListPage() {
     pushToast('Match recorded', 'success');
     setLoggingMatch(null);
     await Promise.all([reloadCategoryData(), loadBracketProgress(), loadPlayoffStatus()]);
+  };
+
+  // Goes through the same queued write as Log score, so it works offline.
+  // Same reloads as handleFinishLive, since this can close a live match too.
+  const handleForfeit = async (match, winnerTeamId) => {
+    if (blockIfLocked()) return;
+    const result = forfeitResult(match.team_a_id, winnerTeamId);
+    await enqueueWrite({
+      matchId: match.id,
+      operationType: 'log_score',
+      payload: result,
+      optimisticMatch: {
+        ...match,
+        ...result,
+        status: 'completed',
+        auto_forfeit_team_id: null,
+        running_since: null,
+        finished_at: new Date().toISOString(),
+        category_id: activeCategory?.id,
+      },
+    });
+    pushToast('Forfeit recorded', 'success');
+    setForfeitingMatch(null);
+    await Promise.all([reloadCategoryData(), loadLiveMatches(), loadBracketProgress(), loadPlayoffStatus()]);
   };
 
   const handleRemove = async (match) => {
@@ -469,6 +498,9 @@ export default function MatchListPage() {
     await Promise.all([reloadCategoryData(), loadLiveMatches(), loadBracketProgress(), loadPlayoffStatus()]);
   };
 
+  const forfeitIsLocked = (m) =>
+    Boolean(resultTag(m.result_type)) && (Boolean(m.playoff_stage) || isSingleElimFormat(activeCategory?.format)) && hasDependentMatch(m, matches);
+
   const formatSupported = activeCategory && (isRoundRobinFormat(activeCategory.format) || isSingleElimFormat(activeCategory.format));
 
   return (
@@ -517,6 +549,7 @@ export default function MatchListPage() {
                 onTogglePause={handleTogglePause}
                 onCancel={handleCancelLive}
                 onFinish={handleFinishLive}
+                onForfeit={setForfeitingMatch}
               />
             ))}
           </div>
@@ -715,8 +748,9 @@ export default function MatchListPage() {
                                     {m.status === 'completed' ? (
                                       <div className="flex items-center justify-center gap-1.5">
                                         <span className="font-mono text-sm font-bold text-ink-900">
-                                          {m.score_a}–{m.score_b}
+                                          {matchResultLabel(m)}
                                         </span>
+                                        {!forfeitIsLocked(m) && (
                                         <button
                                           onClick={() => setLoggingMatch(m)}
                                           title="Edit score"
@@ -724,6 +758,7 @@ export default function MatchListPage() {
                                         >
                                           <Pencil size={11} />
                                         </button>
+                                        )}
                                       </div>
                                     ) : m.status === 'in_progress' ? (
                                       <span className="inline-flex items-center gap-1 rounded-full bg-brand-50 px-3 py-1 text-[11px] font-bold text-brand-600">
@@ -760,6 +795,13 @@ export default function MatchListPage() {
                                         >
                                           Log score
                                         </button>
+                                        <button
+                                          onClick={() => setForfeitingMatch(m)}
+                                          title="Record forfeit"
+                                          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-ink-100 text-ink-500 transition hover:bg-ink-200"
+                                        >
+                                          <Flag size={13} />
+                                        </button>
                                         {/* Removing a playoff fixture would silently break the next
                                             stage's generation (it only checks readiness, it can't
                                             repair a missing match), so that action isn't offered here. */}
@@ -790,6 +832,9 @@ export default function MatchListPage() {
         </div>
       )}
 
+      {forfeitingMatch && (
+        <ForfeitModal match={forfeitingMatch} categoryName={activeCategory?.name ?? forfeitingMatch.category_name} onSave={handleForfeit} onClose={() => setForfeitingMatch(null)} />
+      )}
       {loggingMatch && (
         <LogScoreModal match={loggingMatch} categoryName={activeCategory?.name} umpires={umpires} onSave={handleLogScore} onClose={() => setLoggingMatch(null)} />
       )}

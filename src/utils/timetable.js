@@ -305,6 +305,7 @@ export function buildTimetable({ event, categories, matches, now = Date.now() })
       scoreA: i.match?.score_a ?? null,
       scoreB: i.match?.score_b ?? null,
       winnerTeamId: i.match?.winner_team_id ?? null,
+      resultType: i.match?.result_type ?? 'played',
       paused: false,
       runningLong: false,
       isNext: false,

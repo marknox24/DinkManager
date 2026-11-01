@@ -1,3 +1,5 @@
+import { resultTag } from '../../utils/match';
+
 // Visual bracket tree — round columns connected by elbow lines, matching
 // the classic tournament-bracket diagram (Challonge/DEUCE-style) rather
 // than the flat lists the rest of the app uses for round robin. Pure
@@ -156,16 +158,18 @@ function MatchBox({ match, fullNames, density }) {
   const hasResult = match.winnerSide != null;
   const isLive = match.status === 'in_progress';
   const wrap = density.wrap && fullNames;
+  const tag = resultTag(match.resultType);
   return (
     <div
       className={`${density.fixedWidth ? (fullNames ? 'w-64' : 'w-48') : 'w-full'} overflow-hidden rounded-xl border bg-white shadow-sm ${
         isLive ? 'border-rose-200 ring-1 ring-rose-100' : 'border-ink-100'
       } ${match.status === 'projected' ? 'border-dashed' : ''}`}
     >
-      {(isLive || (match.matchCode && density.showHeader)) && (
+      {(isLive || tag || (match.matchCode && density.showHeader)) && (
         <div className={`flex items-center justify-between border-b border-ink-50 ${density.headerPad} text-[10px] font-bold uppercase tracking-wide`}>
           <span className="text-ink-400">{density.showHeader ? match.matchCode || '' : ''}</span>
           {isLive && <span className="rounded-full bg-rose-100 px-1.5 py-px text-rose-700">Live</span>}
+          {tag && <span className="text-ink-500">{tag}</span>}
         </div>
       )}
       <div className="divide-y divide-ink-50">

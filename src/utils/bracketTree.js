@@ -1,3 +1,4 @@
+import { isDoubleForfeit, resolveFixture } from './forfeit.js';
 import { compareMatchCode, teamLabel } from './match.js';
 import { expandFirstStageSlots, expandSinglePoolSlots, PLAYOFF_STAGES } from './playoffLadder.js';
 
@@ -46,6 +47,7 @@ function matchNode({ key, matchCode, m, placeholderA, placeholderB }) {
       scoreB: m.score_b ?? null,
       winnerSide: m.winner_team_id ? (m.winner_team_id === m.team_a_id ? 'a' : 'b') : null,
       status: m.status,
+      resultType: m.result_type ?? 'played',
     };
   }
   return {
@@ -292,6 +294,14 @@ function buildSingleEliminationTree(bracketLetter, bracketMatches, bracketTeams 
 // loser-vs-loser pairing tagged `playoff_stage: 'third_place'`, at
 // `round_number: finalRound + 1` (a number no real round ever uses, so it
 // gets its own Match List section instead of colliding with the Final's).
+//
+// Forfeits: a double-forfeited match is decided with nobody to send on, so
+// its slot is `dead` — distinct from a pending slot, which also has no
+// `value`. `dead` holds a team from that match to stand in on the next row
+// (matches need two teams) and `deadLoser` the other, for the 3rd-place
+// row. A pair with a dead side, or a withdrawn team, comes back carrying
+// resolveFixture's completed-forfeit columns, so the caller can insert it
+// closed and the winner moves straight on.
 export function computeReadySingleEliminationMatches(bracketMatches, bracketTeams = []) {
   const byRound = new Map();
   for (const m of bracketMatches) {
@@ -311,13 +321,21 @@ export function computeReadySingleEliminationMatches(bracketMatches, bracketTeam
   }
   const byeTeams = sortedByCreation(bracketTeams).filter((t) => !pairedTeamIds.has(t.id));
 
+  const withdrawnIds = new Set(bracketTeams.filter((t) => t.withdrawn_at).map((t) => t.id));
   const loserOf = (m) => (m.winner_team_id === m.team_a_id ? m.team_b_id : m.team_a_id);
+  const slotFromMatch = (m) => {
+    if (m.status !== 'completed') return { value: null, loser: null };
+    if (isDoubleForfeit(m)) return { value: null, loser: null, dead: m.team_a_id, deadLoser: m.team_b_id };
+    return { value: m.winner_team_id, loser: loserOf(m) };
+  };
+  // Only the forfeit columns: a normal pairing's entry stays as it was, and
+  // the caller supplies 'scheduled'.
+  const fixtureFields = (args) => {
+    const { status, team_a_id: _a, team_b_id: _b, ...forfeit } = resolveFixture({ ...args, withdrawnIds });
+    return status === 'completed' ? { status, ...forfeit } : {};
+  };
 
-  let slots = interleaveRound1Slots(round1, byeTeams).map((s) =>
-    s.kind === 'bye'
-      ? { value: s.team.id, loser: null }
-      : { value: s.match.status === 'completed' ? s.match.winner_team_id : null, loser: s.match.status === 'completed' ? loserOf(s.match) : null }
-  );
+  let slots = interleaveRound1Slots(round1, byeTeams).map((s) => (s.kind === 'bye' ? { value: s.team.id, loser: null } : slotFromMatch(s.match)));
 
   const ready = [];
   let round = 1;
@@ -331,38 +349,54 @@ export function computeReadySingleEliminationMatches(bracketMatches, bracketTeam
     for (let i = 0; i < pairCount; i++) {
       const a = slots[i * 2];
       const b = slots[i * 2 + 1];
-      if (a.value == null || b.value == null) {
+      const teamA = a.value ?? a.dead;
+      const teamB = b.value ?? b.dead;
+      if (teamA == null || teamB == null) {
         nextSlots.push({ value: null, loser: null });
         continue;
       }
-      const existing = existingNextRound.find(
-        (m) => (m.team_a_id === a.value && m.team_b_id === b.value) || (m.team_a_id === b.value && m.team_b_id === a.value)
-      );
+      const existing = existingNextRound.find((m) => (m.team_a_id === teamA && m.team_b_id === teamB) || (m.team_a_id === teamB && m.team_b_id === teamA));
       if (existing) {
-        nextSlots.push({
-          value: existing.status === 'completed' ? existing.winner_team_id : null,
-          loser: existing.status === 'completed' ? loserOf(existing) : null,
-        });
+        nextSlots.push(slotFromMatch(existing));
       } else {
-        ready.push({ round_number: nextRound, team_a_id: a.value, team_b_id: b.value, codeNumber: codeOffset + i + 1 });
+        ready.push({
+          round_number: nextRound,
+          team_a_id: teamA,
+          team_b_id: teamB,
+          codeNumber: codeOffset + i + 1,
+          ...fixtureFields({ teamA, teamB, deadA: a.dead != null, deadB: b.dead != null }),
+        });
         nextSlots.push({ value: null, loser: null });
       }
 
-      if (isSemifinalStep && a.loser != null && b.loser != null) {
+      const loserA = a.loser ?? a.deadLoser;
+      const loserB = b.loser ?? b.deadLoser;
+      if (isSemifinalStep && loserA != null && loserB != null) {
         const thirdPlaceRound = byRound.get(nextRound + 1) || [];
         const thirdPlaceExists = thirdPlaceRound.some(
-          (m) => m.playoff_stage === 'third_place' && ((m.team_a_id === a.loser && m.team_b_id === b.loser) || (m.team_a_id === b.loser && m.team_b_id === a.loser))
+          (m) => m.playoff_stage === 'third_place' && ((m.team_a_id === loserA && m.team_b_id === loserB) || (m.team_a_id === loserB && m.team_b_id === loserA))
         );
         if (!thirdPlaceExists) {
-          ready.push({ round_number: nextRound + 1, team_a_id: a.loser, team_b_id: b.loser, playoff_stage: 'third_place', codeNumber: codeOffset + pairCount + 1 });
+          ready.push({
+            round_number: nextRound + 1,
+            team_a_id: loserA,
+            team_b_id: loserB,
+            playoff_stage: 'third_place',
+            codeNumber: codeOffset + pairCount + 1,
+            ...fixtureFields({ teamA: loserA, teamB: loserB, deadA: a.deadLoser != null, deadB: b.deadLoser != null }),
+          });
         }
       }
     }
     // A carried-through slot's `loser` must NOT survive the carry — nobody
     // played this round, so whatever they won last round is not "this
     // round's semifinal" and must never resurface as a 3rd-place
-    // contender. Only `value` (who they are) carries forward.
-    if (slots.length % 2 === 1) nextSlots.push({ value: slots[slots.length - 1].value, loser: null });
+    // contender. Only `value` (who they are) carries forward, or `dead` if
+    // nobody is left to carry.
+    if (slots.length % 2 === 1) {
+      const carried = slots[slots.length - 1];
+      nextSlots.push({ value: carried.value, loser: null, ...(carried.dead != null ? { dead: carried.dead } : {}) });
+    }
     slots = nextSlots;
     round = nextRound;
     codeOffset += pairCount;
@@ -374,7 +408,9 @@ export function computeReadySingleEliminationMatches(bracketMatches, bracketTeam
 // bye or an unplayed match never counts, only an actual result with someone
 // else's name on `winner_team_id`.
 function teamIsEliminated(teamId, bracketMatches) {
-  return bracketMatches.some((m) => m.status === 'completed' && m.winner_team_id && m.winner_team_id !== teamId && (m.team_a_id === teamId || m.team_b_id === teamId));
+  return bracketMatches.some(
+    (m) => m.status === 'completed' && (isDoubleForfeit(m) || (m.winner_team_id && m.winner_team_id !== teamId)) && (m.team_a_id === teamId || m.team_b_id === teamId)
+  );
 }
 
 // Every registered team in a Single Elimination category, grouped by

@@ -4,12 +4,13 @@ import Modal from '../ui/Modal';
 import FormField, { inputClass } from '../ui/FormField';
 import Select from '../ui/Select';
 import { useToast } from '../../context/ToastContext';
-import { teamLabel } from '../../utils/match';
+import { resultTag, teamLabel } from '../../utils/match';
 import { matchLevelLabel } from '../../data/playoffApi';
 
 export default function LogScoreModal({ match, categoryName, umpires, onSave, onClose }) {
   const { pushToast } = useToast();
   const isEditing = match.status === 'completed';
+  const isForfeit = isEditing && Boolean(resultTag(match.result_type));
   const [scoreA, setScoreA] = useState(isEditing ? String(match.score_a) : '0');
   const [scoreB, setScoreB] = useState(isEditing ? String(match.score_b) : '0');
   const [umpireName, setUmpireName] = useState(match.umpire_name || '');
@@ -44,7 +45,7 @@ export default function LogScoreModal({ match, categoryName, umpires, onSave, on
     <Modal
       open
       onClose={onClose}
-      title={`${isEditing ? 'Edit score' : 'Log score'}${match.match_code ? ` — ${match.match_code}` : ''}`}
+      title={`${isForfeit ? 'Replace forfeit with played score' : isEditing ? 'Edit score' : 'Log score'}${match.match_code ? ` — ${match.match_code}` : ''}`}
       icon={Trophy}
       maxWidth="max-w-sm"
     >

@@ -18,6 +18,15 @@ export function rankTeams(teams) {
   return enriched.map((t, i) => ({ ...t, rank: i + 1 }));
 }
 
+// Standings as displayed: active teams ranked by rankTeams, then withdrawn
+// teams last with no rank, since they can't advance — so nobody reads a
+// withdrawn team's place as one a playoff seed would come from.
+export function rankWithWithdrawn(teams) {
+  const active = rankTeams(teams.filter((t) => !t.withdrawn_at));
+  const withdrawn = rankTeams(teams.filter((t) => t.withdrawn_at)).map((t) => ({ ...t, rank: null }));
+  return [...active, ...withdrawn];
+}
+
 // True when the team at `rank` and the team right after it are tied on every
 // field rankTeams sorts by — used to refuse advancing a playoff cutoff that
 // hasn't actually been decided, rather than picking one by insertion order.

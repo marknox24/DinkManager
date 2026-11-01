@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planSingleEliminationRound1 } from './scheduling.js';
+import { arePoolsReady, planSingleEliminationRound1 } from './scheduling.js';
 
 const bracket = (letter, id = letter) => ({ id, letter });
 const teamList = (bracketId, count) => Array.from({ length: count }, (_, i) => ({ id: `${bracketId}-t${i + 1}`, bracket_id: bracketId, created_at: `2026-01-01T00:00:${String(i).padStart(2, '0')}Z` }));
@@ -66,4 +66,66 @@ test('match codes stay a flat per-bracket counter, A1, A2, ... — no gaps from 
     rows.map((r) => r.match_code),
     ['A1', 'A2', 'A3', 'A4']
   );
+});
+
+const poolTeam = (id, over = {}) => ({ id, bracket_id: 'A', ...over });
+const poolMatch = (a, b, status = 'completed', over = {}) => ({ bracket_id: 'A', team_a_id: a, team_b_id: b, status, ...over });
+
+test('arePoolsReady: a custom games-per-team pool unlocks with fewer matches than a full round robin', () => {
+  const teams = ['t1', 't2', 't3', 't4'].map((id) => poolTeam(id));
+  // 2 games each: 4 matches, not the 6 a full round robin would need.
+  const matches = [poolMatch('t1', 't2'), poolMatch('t3', 't4'), poolMatch('t1', 't3'), poolMatch('t2', 't4')];
+  assert.equal(arePoolsReady(['A'], teams, matches).ok, true);
+});
+
+test('arePoolsReady: a removed match does not block the pool', () => {
+  const teams = ['t1', 't2', 't3'].map((id) => poolTeam(id));
+  assert.equal(arePoolsReady(['A'], teams, [poolMatch('t1', 't2'), poolMatch('t2', 't3')]).ok, true);
+});
+
+test('arePoolsReady: a double round robin does not unlock at the halfway point', () => {
+  const teams = ['t1', 't2', 't3'].map((id) => poolTeam(id));
+  const firstCycle = [poolMatch('t1', 't2'), poolMatch('t1', 't3'), poolMatch('t2', 't3')];
+  const secondCycle = [poolMatch('t2', 't1', 'scheduled'), poolMatch('t3', 't1', 'scheduled'), poolMatch('t3', 't2', 'scheduled')];
+  assert.equal(arePoolsReady(['A'], teams, [...firstCycle, ...secondCycle]).ok, false);
+});
+
+test('arePoolsReady: a canceled match does not hold the pool open', () => {
+  const teams = ['t1', 't2', 't3'].map((id) => poolTeam(id));
+  const matches = [poolMatch('t1', 't2'), poolMatch('t2', 't3'), poolMatch('t1', 't3', 'canceled')];
+  assert.equal(arePoolsReady(['A'], teams, matches).ok, true);
+});
+
+test('arePoolsReady: forfeits and double forfeits count as finished', () => {
+  const teams = ['t1', 't2', 't3'].map((id) => poolTeam(id));
+  const matches = [
+    poolMatch('t1', 't2', 'completed', { result_type: 'forfeit', winner_team_id: 't1' }),
+    poolMatch('t2', 't3', 'completed', { result_type: 'double_forfeit', winner_team_id: null }),
+    poolMatch('t1', 't3'),
+  ];
+  assert.equal(arePoolsReady(['A'], teams, matches).ok, true);
+});
+
+test('arePoolsReady: an unfinished match or an empty pool blocks', () => {
+  const teams = ['t1', 't2'].map((id) => poolTeam(id));
+  assert.equal(arePoolsReady(['A'], teams, [poolMatch('t1', 't2', 'scheduled')]).ok, false);
+  assert.equal(arePoolsReady(['A'], teams, [poolMatch('t1', 't2', 'in_progress')]).ok, false);
+  assert.equal(arePoolsReady(['A'], teams, []).ok, false);
+});
+
+test('arePoolsReady: every pool has to be finished, not just the first', () => {
+  const teams = [poolTeam('t1'), poolTeam('t2'), poolTeam('t3', { bracket_id: 'B' }), poolTeam('t4', { bracket_id: 'B' })];
+  const matches = [poolMatch('t1', 't2'), { ...poolMatch('t3', 't4', 'scheduled'), bracket_id: 'B' }];
+  assert.equal(arePoolsReady(['A', 'B'], teams, matches).ok, false);
+});
+
+test('arePoolsReady: a team with no matches blocks, unless they withdrew', () => {
+  const matches = [poolMatch('t1', 't2')];
+  const late = [poolTeam('t1'), poolTeam('t2'), poolTeam('late')];
+  const result = arePoolsReady(['A'], late, matches);
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /regenerate/i);
+
+  const withdrawn = [poolTeam('t1'), poolTeam('t2'), poolTeam('late', { withdrawn_at: '2026-11-01T00:00:00Z' })];
+  assert.equal(arePoolsReady(['A'], withdrawn, matches).ok, true);
 });

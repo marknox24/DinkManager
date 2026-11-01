@@ -4,7 +4,7 @@ import { AlertTriangle, ArrowLeft, ListChecks, Sparkles } from 'lucide-react';
 import Modal from '../ui/Modal';
 import { listMatchesForCategory, planMatchListForCategory } from '../../data/bracketsApi';
 import { MATCH_STATUS, expectedRoundRobin, matchCounts, progressLabel } from '../../utils/scheduling';
-import { teamLabel } from '../../utils/match';
+import { resultTag, teamLabel } from '../../utils/match';
 
 // One view of a category's matchlist, in two modes picked automatically:
 //   - Plan (no matches generated yet): exactly what "Generate" will create —
@@ -274,6 +274,7 @@ function MatchRow({ match, teamById }) {
   const canceled = match.status === 'canceled';
   const aWon = done && match.winner_team_id === match.team_a_id;
   const bWon = done && match.winner_team_id === match.team_b_id;
+  const tag = resultTag(match.result_type);
   const side = (team, won, score, align) => (
     <span className={`flex min-w-0 flex-1 items-center gap-1.5 ${align === 'right' ? 'justify-end text-right' : ''}`}>
       {align === 'left' && done && <span className="w-5 shrink-0 font-mono font-bold tabular-nums text-ink-900">{score ?? '–'}</span>}
@@ -296,6 +297,7 @@ function MatchRow({ match, teamById }) {
       {side(teamA, aWon, match.score_a, 'right')}
       <span className="shrink-0 text-ink-400">vs</span>
       {side(teamB, bWon, match.score_b, 'left')}
+      {tag && <span className="shrink-0 rounded-full bg-ink-100 px-2 py-0.5 text-[10px] font-bold text-ink-500">{tag}</span>}
       {match.status === 'in_progress' && (
         <span className="shrink-0 rounded-full bg-rose-100 px-2 py-0.5 text-[10px] font-bold text-rose-600 no-underline">
           Live{match.court ? ` · Court ${match.court}` : ''}

@@ -5,7 +5,7 @@ import Select from '../ui/Select';
 import { inputClass } from '../ui/FormField';
 import { matchLevelLabel } from '../../data/playoffApi';
 import { useMatchSchedule } from '../../hooks/useMatchSchedule';
-import { teamLabel } from '../../utils/match';
+import { matchResultLabel, teamLabel } from '../../utils/match';
 import { useNow } from '../../hooks/useNow';
 
 const STATUS_STYLES = {
@@ -154,7 +154,7 @@ function ScheduleRow({ row, now, mode, eventId }) {
         </div>
         {completed && row.scoreA != null && (
           <div className="text-xs font-semibold text-ink-600">
-            Score {row.scoreA} – {row.scoreB}
+            {row.resultType === 'played' ? `Score ${row.scoreA} – ${row.scoreB}` : matchResultLabel({ result_type: row.resultType, score_a: row.scoreA, score_b: row.scoreB })}
           </div>
         )}
       </div>
