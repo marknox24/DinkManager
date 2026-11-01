@@ -491,7 +491,10 @@ function buildPlayoffLadderTree({ ladder, poolPairs, poolCount, advancePerPool, 
             placeholderB = `Winner of ${prevLabel}${i * 2 + 2}`;
           }
         }
-        return matchNode({ key: `po-${level.kind}-${i}`, m, placeholderA, placeholderB });
+        // A box without a row yet still needs its code: the next round's
+        // "Winner of SF1" has to point at something called SF1.
+        const matchCode = m ? undefined : `${PLAYOFF_STAGES[level.kind]?.short}${i + 1}`;
+        return matchNode({ key: `po-${level.kind}-${i}`, matchCode, m, placeholderA, placeholderB });
       });
       return { id: `po-${level.kind}`, label: PLAYOFF_STAGES[level.kind]?.label || level.kind, matches };
     });

@@ -1,4 +1,5 @@
 import { resultTag } from '../../utils/match';
+import PlayoffLadderView from './PlayoffLadderView';
 
 // Visual bracket tree — round columns connected by elbow lines, matching
 // the classic tournament-bracket diagram (Challonge/DEUCE-style) rather
@@ -22,28 +23,13 @@ import { resultTag } from '../../utils/match';
 // round-r matches it connects and hands off to round r+1's match, which
 // sits centered in that same span.
 //
-// Sizing: a Single Elimination tree (tree.key !== 'PO') fits itself to
-// whatever width it's given — round columns are flex children (capped by a
-// max width, not a fixed one) instead of a fixed px column that forces
-// overflow-x-auto, and box padding/text/row-height step down across three
-// density tiers keyed off how many Round 1 boxes there are, so a 20-player
-// bracket doesn't blow out a TV card the way a flat constant would. A
-// playoff-ladder tree (key 'PO', at most a handful of rounds) keeps the
-// original fixed-width, horizontally-scrollable layout untouched.
-
-const LEGACY_DENSITY = {
-  fixedWidth: true,
-  matchH: 84,
-  connectorW: 20,
-  pad: 'px-2.5 py-1.5',
-  headerPad: 'px-2.5 py-1',
-  nameSize: 'text-xs',
-  scoreSize: 'text-xs',
-  headerMb: 'mb-2',
-  headerText: 'text-[11px]',
-  wrap: true,
-  showHeader: true,
-};
+// Sizing: a Single Elimination tree fits itself to whatever width it's given —
+// round columns are flex children (capped by a max width, not a fixed one)
+// instead of a fixed px column that forces overflow-x-auto, and box padding/
+// text/row-height step down across three density tiers keyed off how many
+// Round 1 boxes there are, so a 20-player bracket doesn't blow out a TV card
+// the way a flat constant would. A playoff ladder (key 'PO') has its own
+// layout, see PlayoffLadderView.jsx.
 
 // Single Elimination tiers, chosen by Round 1's box count (byes collapse to
 // one box each, so this is entrants-rounded-up-to-a-power-of-two / 2, not
@@ -53,7 +39,6 @@ const LEGACY_DENSITY = {
 // the most: it's the difference between a 10-match Round 1 fitting a TV's
 // available height or not.
 const COMFORTABLE = {
-  fixedWidth: false,
   matchH: 108,
   connectorW: 22,
   pad: 'px-3 py-2',
@@ -66,7 +51,6 @@ const COMFORTABLE = {
   showHeader: true,
 };
 const COMPACT = {
-  fixedWidth: false,
   matchH: 62,
   connectorW: 18,
   pad: 'px-2.5 py-1.5',
@@ -79,7 +63,6 @@ const COMPACT = {
   showHeader: false,
 };
 const DENSE = {
-  fixedWidth: false,
   matchH: 50,
   connectorW: 14,
   pad: 'px-2 py-0.5',
@@ -93,7 +76,6 @@ const DENSE = {
 };
 
 function densityFor(tree) {
-  if (tree.key === 'PO') return LEGACY_DENSITY;
   const round1Count = tree.rounds[0]?.matches.length || 1;
   if (round1Count <= 6) return COMFORTABLE;
   if (round1Count <= 12) return COMPACT;
@@ -147,7 +129,7 @@ function TeamRow({ team, score, isWinner, isLoser, isLive, fullNames, wrap, dens
 function BareByeBox({ match, fullNames, density }) {
   const name = fullNames ? match.teamA.label : briefName(match.teamA.label);
   return (
-    <div className={`${density.fixedWidth ? (fullNames ? 'w-64' : 'w-48') : 'w-full'} overflow-hidden rounded-xl border border-dashed border-ink-100 bg-ink-50/40 ${density.pad}`}>
+    <div className={`w-full overflow-hidden rounded-xl border border-dashed border-ink-100 bg-ink-50/40 ${density.pad}`}>
       <span className={`block min-w-0 ${density.nameSize} ${density.wrap && fullNames ? 'break-words' : 'truncate'} font-semibold text-ink-700`}>{name}</span>
     </div>
   );
@@ -161,7 +143,7 @@ function MatchBox({ match, fullNames, density }) {
   const tag = resultTag(match.resultType);
   return (
     <div
-      className={`${density.fixedWidth ? (fullNames ? 'w-64' : 'w-48') : 'w-full'} overflow-hidden rounded-xl border bg-white shadow-sm ${
+      className={`w-full overflow-hidden rounded-xl border bg-white shadow-sm ${
         isLive ? 'border-rose-200 ring-1 ring-rose-100' : 'border-ink-100'
       } ${match.status === 'projected' ? 'border-dashed' : ''}`}
     >
@@ -227,17 +209,14 @@ function Connector({ nextRound, round1Count, density }) {
   );
 }
 
-function RoundColumn({ round, round1Count, density, fullNames, flexible }) {
+function RoundColumn({ round, round1Count, density, fullNames }) {
   const height = slotHeight(round, round1Count, density.matchH);
   return (
-    <div
-      className={flexible ? 'flex min-w-0 flex-1 flex-col' : 'flex shrink-0 flex-col'}
-      style={flexible ? { maxWidth: fullNames ? 280 : 224 } : { width: fullNames ? 256 : 192 }}
-    >
+    <div className="flex min-w-0 flex-1 flex-col" style={{ maxWidth: fullNames ? 280 : 224 }}>
       <div className={`${density.headerMb} text-center font-bold uppercase tracking-wide text-ink-500 ${density.headerText}`}>{round.label}</div>
       <div className="flex flex-1 flex-col">
         {round.matches.map((m) => (
-          <div key={m.key} className={`flex items-center justify-center ${flexible ? 'px-1' : ''}`} style={{ height }}>
+          <div key={m.key} className="flex items-center justify-center px-1" style={{ height }}>
             <MatchBox match={m} fullNames={fullNames} density={density} />
           </div>
         ))}
@@ -249,19 +228,20 @@ function RoundColumn({ round, round1Count, density, fullNames, flexible }) {
 // tree: one entry of buildBracketTreesForCategory(...).trees — { key,
 // title, rounds, thirdPlace? }.
 export default function BracketTreeView({ tree, fullNames = false }) {
+  if (tree.key === 'PO') return <PlayoffLadderView tree={tree} />;
+
   const density = densityFor(tree);
-  const flexible = !density.fixedWidth;
   const round1Count = tree.rounds[0]?.matches.length || 1;
 
   const columns = [];
   tree.rounds.forEach((round, i) => {
-    columns.push(<RoundColumn key={round.id} round={round} round1Count={round1Count} density={density} fullNames={fullNames} flexible={flexible} />);
+    columns.push(<RoundColumn key={round.id} round={round} round1Count={round1Count} density={density} fullNames={fullNames} />);
     if (i < tree.rounds.length - 1) columns.push(<Connector key={`${round.id}-c`} nextRound={tree.rounds[i + 1]} round1Count={round1Count} density={density} />);
   });
 
   return (
-    <div className={flexible ? 'w-full pb-1' : 'overflow-x-auto pb-2'}>
-      <div className={`flex items-start gap-0 px-1 pt-1 ${flexible ? 'w-full' : ''}`}>
+    <div className="w-full pb-1">
+      <div className="flex w-full items-start gap-0 px-1 pt-1">
         {columns}
         {tree.thirdPlace && (
           <div className="ml-6 flex shrink-0 flex-col self-center">
