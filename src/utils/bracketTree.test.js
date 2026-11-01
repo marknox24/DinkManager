@@ -182,6 +182,21 @@ test('every first-stage box gets its own pool-rank placeholders, not just the fi
   ]);
 });
 
+test('first-stage boxes with no match yet carry the codes the next round refers to', () => {
+  const category = {
+    id: 'c1',
+    format: 'Round Robin',
+    playoff_enabled: true,
+    playoff_pool_count: 2,
+    playoff_pool_pairs: [['A', 'B']],
+    playoff_advance_per_pool: 2,
+    ladder: { valid: true, levels: [{ kind: 'semifinal', label: 'Semifinals', matchCount: 2 }, { kind: 'final', label: 'Championship', matchCount: 1 }] },
+  };
+  const { rounds } = buildBracketTreesForCategory(category, []).trees[0];
+  assert.deepEqual(rounds[0].matches.map((match) => match.matchCode), ['SF1', 'SF2']);
+  assert.equal(rounds[1].matches[0].teamA.label, 'Winner of SF1');
+});
+
 test('a playoff third-place box names who it is waiting on', () => {
   const category = {
     id: 'c1',
