@@ -186,7 +186,7 @@ function BracketSection({ bracket, progress, expanded, onToggle, teams, matches,
                     {rankedTeams.map((t) => (
                       <tr
                         key={t.id}
-                        draggable={canMove}
+                        draggable={canMove && !t.withdrawn_at}
                         onDragStart={(e) => {
                           e.dataTransfer.effectAllowed = 'move';
                           e.dataTransfer.setData('text/plain', t.id);

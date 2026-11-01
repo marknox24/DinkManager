@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { bracketTreeApplies, buildBracketTreesForCategory, computeReadySingleEliminationMatches, treeHasRealMatch } from './bracketTree.js';
+import { planSingleEliminationRound1 } from './scheduling.js';
 
 const team = (id) => ({ id, player1_name: id, player2_name: null });
 const m = (over) => ({
@@ -682,4 +683,53 @@ test('match nodes carry the result type for the bracket view', () => {
   const category = { id: 'c1', format: 'Single Elimination' };
   const { trees } = buildBracketTreesForCategory(category, [doubleForfeit('m1', 'A1', 1, 'a', 'b')], ['a', 'b'].map((id, i) => teamRow(id, { seed: i })));
   assert.equal(trees[0].rounds[0].matches[0].resultType, 'double_forfeit');
+});
+
+// ---------------------------------------------------------------------------
+// WITHDRAWN BEFORE THE DRAW — never in the bracket, so never a bye
+// ---------------------------------------------------------------------------
+
+const DRAWN_AT = '2026-05-01T09:00:00.000Z';
+const entrant = (i, withdrawnAt = null) => ({ id: `t${i}`, bracket_id: 'b', bracket_letter: 'A', player1_name: `Player ${i}`, created_at: `2026-04-01T00:00:0${i}Z`, withdrawn_at: withdrawnAt });
+// The real draw for whoever is still active, with every Round 1 match won by team A.
+const drawnRound1 = (teams) =>
+  planSingleEliminationRound1([{ id: 'b', letter: 'A' }], teams.filter((t) => !t.withdrawn_at)).rows.map((r, i) => ({
+    ...r,
+    id: `m${i}`,
+    category_id: 'c1',
+    bracket_letter: 'A',
+    round_number: 1,
+    match_code: `A${i + 1}`,
+    status: 'completed',
+    winner_team_id: r.team_a_id,
+    created_at: DRAWN_AT,
+  }));
+const pairs = (ready) => ready.map((r) => [r.team_a_id, r.team_b_id, r.status ?? 'scheduled']);
+
+test('a player who withdrew before the draw does not take a bye slot', () => {
+  const teams = [1, 2, 3, 4, 5, 6, 7].map((i) => entrant(i)).concat(entrant(8, '2026-04-20T00:00:00.000Z'));
+  const ready = computeReadySingleEliminationMatches(drawnRound1(teams), teams);
+  assert.deepEqual(pairs(ready), [
+    ['t1', 't7', 'scheduled'],
+    ['t3', 't5', 'scheduled'],
+  ]);
+});
+
+test('the bracket tree leaves a pre-draw withdrawal out of its bye boxes', () => {
+  const teams = [1, 2, 3, 4, 5, 6, 7].map((i) => entrant(i)).concat(entrant(8, '2026-04-20T00:00:00.000Z'));
+  const category = { id: 'c1', format: 'Single Elimination' };
+  const { trees } = buildBracketTreesForCategory(category, drawnRound1(teams), teams);
+  assert.equal(trees[0].rounds[0].matches.length, 4); // 3 real matches and t7's bye, not a fifth slot
+  assert.ok(!trees[0].rounds[0].matches.some((match) => match.teamA?.teamId === 't8'));
+});
+
+test('a bye recipient who withdraws after the draw still loses their slot by walkover', () => {
+  const teams = [1, 2, 3, 4, 5, 6, 7].map((i) => entrant(i));
+  const round1 = drawnRound1(teams);
+  const afterDraw = teams.map((t) => (t.id === 't7' ? { ...t, withdrawn_at: '2026-05-01T10:00:00.000Z' } : t));
+  const ready = computeReadySingleEliminationMatches(round1, afterDraw);
+  const fixture = ready.find((r) => r.team_b_id === 't7');
+  assert.equal(fixture.status, 'completed');
+  assert.equal(fixture.winner_team_id, 't1');
+  assert.equal(fixture.auto_forfeit_team_id, 't7');
 });

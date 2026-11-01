@@ -695,15 +695,19 @@ export async function planMatchListForCategory(categoryId) {
 
   // A match-template format ("RR:Custom Match 1"): every bracket plays the
   // same fixed sequence, Team N = the team's position inside its bracket.
+  // Positions count withdrawn teams, the same as regenerateMatchListForCategory,
+  // or the two would disagree on who Team N is; only their matches are dropped.
   const template = getCustomFormat(format);
   if (template) {
     const teamsByBracket = {};
     const gamesByBracket = {};
     brackets.forEach((b) => {
-      teamsByBracket[b.id] = teams.filter((t) => t.bracket_id === b.id).map((t) => t.id);
+      teamsByBracket[b.id] = allTeams.filter((t) => t.bracket_id === b.id).map((t) => t.id);
       gamesByBracket[b.id] = effectiveGames(teamsByBracket[b.id].length, b.games_per_team ?? category.games_per_team);
     });
-    const { rows, skippedByBracket } = planTemplateMatches(template, brackets, teamsByBracket, gamesByBracket);
+    const { rows: plannedRows, skippedByBracket } = planTemplateMatches(template, brackets, teamsByBracket, gamesByBracket);
+    const activeIds = new Set(teams.map((t) => t.id));
+    const rows = plannedRows.filter((r) => activeIds.has(r.team_a_id) && activeIds.has(r.team_b_id));
     return { kind: 'template', template, isDouble: false, brackets, teams: allTeams, teamsByBracket, skippedByBracket, gamesByBracket, rows, byes: [] };
   }
 
@@ -913,7 +917,7 @@ async function advanceSingleEliminationBracket(bracketId) {
     // bound is just a backstop: a bracket has far fewer rounds than this.
     for (let pass = 0; pass < 32; pass++) {
       const [{ data: bracketMatches, error: matchErr }, { data: bracketTeams, error: teamErr }] = await Promise.all([
-        supabase.from('matches').select('id, team_a_id, team_b_id, round_number, match_code, status, winner_team_id, playoff_stage, result_type').eq('bracket_id', bracketId),
+        supabase.from('matches').select('id, team_a_id, team_b_id, round_number, match_code, status, winner_team_id, playoff_stage, result_type, created_at').eq('bracket_id', bracketId).neq('status', 'canceled'),
         supabase.from('teams').select('id, created_at, withdrawn_at').eq('bracket_id', bracketId),
       ]);
       if (matchErr || teamErr || !bracketMatches) return;

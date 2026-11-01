@@ -86,6 +86,22 @@ function sortedByCreation(list) {
   return [...list].sort((a, b) => (a.created_at || '').localeCompare(b.created_at || '') || String(a.id).localeCompare(String(b.id)));
 }
 
+// The teams Round 1 left unpaired, in bye order. Someone who withdrew before
+// the draw is left out: the draw never included them, so counting them would
+// add a slot the bracket wasn't built with and re-pair everyone after it. A
+// team that withdrew after the draw stays, since it really was given a bye —
+// resolveFixture closes its next match.
+function findByeTeams(round1, bracketTeams) {
+  const pairedTeamIds = new Set();
+  for (const m of round1) {
+    if (m.team_a_id) pairedTeamIds.add(m.team_a_id);
+    if (m.team_b_id) pairedTeamIds.add(m.team_b_id);
+  }
+  const drawnAt = Math.min(...round1.map((m) => new Date(m.created_at).getTime()));
+  const missedDraw = (t) => Boolean(t.withdrawn_at) && new Date(t.withdrawn_at).getTime() < drawnAt;
+  return sortedByCreation(bracketTeams).filter((t) => !pairedTeamIds.has(t.id) && !missedDraw(t));
+}
+
 // Round 1's slots in bracket order: a real match and a bye alternate (one
 // real, one bye, one real, one bye, ...) for as long as both remain, so a
 // bye recipient faces a REAL contender's winner next round whenever one is
@@ -138,12 +154,7 @@ function buildSingleEliminationTree(bracketLetter, bracketMatches, bracketTeams 
   const round1 = normalMatches.filter((m) => (m.round_number || 1) === 1).sort((a, b) => compareMatchCode(a.match_code, b.match_code));
   if (round1.length === 0) return null;
 
-  const pairedTeamIds = new Set();
-  for (const m of round1) {
-    if (m.team_a_id) pairedTeamIds.add(m.team_a_id);
-    if (m.team_b_id) pairedTeamIds.add(m.team_b_id);
-  }
-  const byeTeams = sortedByCreation(bracketTeams).filter((t) => !pairedTeamIds.has(t.id));
+  const byeTeams = findByeTeams(round1, bracketTeams);
   const round1Slots = interleaveRound1Slots(round1, byeTeams);
   const round1Count = round1Slots.length;
 
@@ -314,12 +325,7 @@ export function computeReadySingleEliminationMatches(bracketMatches, bracketTeam
   const round1 = byRound.get(1) || [];
   if (round1.length === 0) return [];
 
-  const pairedTeamIds = new Set();
-  for (const m of round1) {
-    if (m.team_a_id) pairedTeamIds.add(m.team_a_id);
-    if (m.team_b_id) pairedTeamIds.add(m.team_b_id);
-  }
-  const byeTeams = sortedByCreation(bracketTeams).filter((t) => !pairedTeamIds.has(t.id));
+  const byeTeams = findByeTeams(round1, bracketTeams);
 
   const withdrawnIds = new Set(bracketTeams.filter((t) => t.withdrawn_at).map((t) => t.id));
   const loserOf = (m) => (m.winner_team_id === m.team_a_id ? m.team_b_id : m.team_a_id);
