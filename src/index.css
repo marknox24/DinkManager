@@ -51,6 +51,14 @@ html.lenis.lenis-smooth {
   scroll-behavior: auto !important;
 }
 
+/* The public event page's in-page links (players strip, Register now). Lenis
+   isn't on that page, so there's nothing to fight with. */
+@media (prefers-reduced-motion: no-preference) {
+  html:has(#divisions) {
+    scroll-behavior: smooth;
+  }
+}
+
 * {
   box-sizing: border-box;
 }

@@ -227,6 +227,37 @@ export async function getPublicEventRoster(eventId, categoryId) {
   return data;
 }
 
+const rosterChangedKey = (eventId) => `dink-roster-changed:${eventId}`;
+
+// Called after a player registers. The cached roster can be minutes old on a
+// quiet day, and the next thing that player does is look for their own name,
+// so this device reads the roster directly for the rest of the session.
+export function noteRosterChanged(eventId) {
+  try {
+    sessionStorage.setItem(rosterChangedKey(eventId), '1');
+  } catch {
+    // Without storage they may see the cached copy for a moment, which is harmless.
+  }
+}
+
+function rosterChangedHere(eventId) {
+  try {
+    return sessionStorage.getItem(rosterChangedKey(eventId)) === '1';
+  } catch {
+    return false;
+  }
+}
+
+// The roster for the public event page: from the CDN (api/event-roster.js) so
+// every visitor shares one query, or directly if that isn't available.
+export async function loadPublicRoster(eventId) {
+  if (!rosterChangedHere(eventId)) {
+    const cached = await fetchCachedJson(`/api/event-roster?event=${eventId}`, Array.isArray);
+    if (cached) return cached;
+  }
+  return getPublicEventRoster(eventId);
+}
+
 // Toggles an event public/private. Switching to private for the first time
 // mints a share token (kept stable across later toggles so a link the
 // organizer already sent out keeps working).
