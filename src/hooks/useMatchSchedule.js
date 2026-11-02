@@ -17,6 +17,12 @@ const PUBLIC_REFRESH_MS = 30000;
 // change rarely — re-read them on a slower cadence than the matches.
 const ORGANIZER_STATIC_REFRESH_MS = 60000;
 const PUBLIC_STATIC_REFRESH_MS = 600000;
+// A public poll whose cached read fails keeps what's on screen and waits for
+// the next one, so a struggling database isn't hit by every phone at once.
+// This caps how long that goes on: past it, a phone is allowed one direct read,
+// so a cached endpoint that stays down can't freeze the page. A first load
+// (nothing on screen yet) is always past it.
+const MAX_PUBLIC_DATA_AGE_MS = 120000;
 
 const cacheKey = (eventId) => `schedule:${eventId}`;
 
@@ -26,7 +32,10 @@ const cacheKey = (eventId) => `schedule:${eventId}`;
 // render tick, so "in 12 min" labels stay current between polls.
 // `offlineCapable` (organizer page) mirrors the result into IndexedDB and
 // falls back to it when offline; the public page has no offline mode.
-export function useMatchSchedule({ event: initialEvent, categories: initialCategories, offlineCapable = false }) {
+// `view` ('schedule' or 'bracket') is which of the two results the caller
+// shows. Only that one gets computed, and teams are only loaded for brackets:
+// every spectator's phone is running this all day.
+export function useMatchSchedule({ view, event: initialEvent, categories: initialCategories, offlineCapable = false }) {
   const eventId = initialEvent.id;
   const [event, setEvent] = useState(initialEvent);
   const [categories, setCategories] = useState(initialCategories);
@@ -38,7 +47,9 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
   const inFlightRef = useRef(false);
   const lastStaticRef = useRef(0);
   const categoriesRef = useRef(initialCategories);
+  const lastPublicMatchesAtRef = useRef(0);
   const now = useNow(15000);
+  const wantsBrackets = view === 'bracket';
   const refreshMs = offlineCapable ? ORGANIZER_REFRESH_MS : PUBLIC_REFRESH_MS;
   const staticRefreshMs = offlineCapable ? ORGANIZER_STATIC_REFRESH_MS : PUBLIC_STATIC_REFRESH_MS;
 
@@ -58,9 +69,11 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
           if (cats) {
             setCategories(cats);
             categoriesRef.current = cats;
-            listTeamsForEvent(cats.map((c) => c.id))
-              .then(setTeams)
-              .catch(() => {});
+            if (wantsBrackets) {
+              listTeamsForEvent(cats.map((c) => c.id))
+                .then(setTeams)
+                .catch(() => {});
+            }
           }
         } else {
           // Public viewers: route through the same CDN-cached bundle the
@@ -75,9 +88,11 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
             setCategories(bundle.categories);
             categoriesRef.current = bundle.categories;
           }
-          listTeamsPublic(categoriesRef.current.map((c) => c.id))
-            .then(setTeams)
-            .catch(() => {});
+          if (wantsBrackets) {
+            listTeamsPublic(categoriesRef.current.map((c) => c.id), { directFallback: false })
+              .then((rows) => rows && setTeams(rows))
+              .catch(() => {});
+          }
         }
       }
       const ids = categoriesRef.current.map((c) => c.id);
@@ -98,10 +113,14 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
           setError(result.error?.message || 'Could not load the schedule.');
         }
       } else {
-        setMatches(await listScheduleMatchesPublic(ids));
-        setFromCache(false);
-        setError(null);
-        setUpdatedAt(Date.now());
+        const rows = await listScheduleMatchesPublic(ids, { directFallback: Date.now() - lastPublicMatchesAtRef.current >= MAX_PUBLIC_DATA_AGE_MS });
+        if (rows) {
+          lastPublicMatchesAtRef.current = Date.now();
+          setMatches(rows);
+          setFromCache(false);
+          setError(null);
+          setUpdatedAt(Date.now());
+        }
       }
     } catch (e) {
       // Keep whatever we already have on screen; only surface the error when
@@ -110,7 +129,7 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
     } finally {
       inFlightRef.current = false;
     }
-  }, [eventId, offlineCapable, staticRefreshMs]);
+  }, [eventId, offlineCapable, staticRefreshMs, wantsBrackets]);
 
   useEffect(() => {
     let intervalId = null;
@@ -137,9 +156,11 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
     // ...but teams didn't — unlike event/categories there's no fresh initial
     // value for them to skip re-fetching, so they need their own one-time
     // mount fetch instead of waiting for the next static-refresh tick.
-    (offlineCapable ? listTeamsForEvent : listTeamsPublic)(categoriesRef.current.map((c) => c.id))
-      .then(setTeams)
-      .catch(() => {});
+    if (wantsBrackets) {
+      (offlineCapable ? listTeamsForEvent : listTeamsPublic)(categoriesRef.current.map((c) => c.id))
+        .then(setTeams)
+        .catch(() => {});
+    }
     refresh();
     if (document.visibilityState !== 'hidden') start();
     document.addEventListener('visibilitychange', onVisibility);
@@ -147,14 +168,14 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
       stop();
       document.removeEventListener('visibilitychange', onVisibility);
     };
-  }, [refresh, refreshMs, offlineCapable]);
+  }, [refresh, refreshMs, offlineCapable, wantsBrackets]);
 
   const withLadders = useMemo(() => categories.map((c) => ({ ...c, ladder: categoryLadder(c) })), [categories]);
 
   const timetable = useMemo(() => {
-    if (!matches) return null;
+    if (!matches || wantsBrackets) return null;
     return buildTimetable({ event, categories: withLadders, matches, now });
-  }, [event, withLadders, matches, now]);
+  }, [event, withLadders, matches, now, wantsBrackets]);
 
   // One entry per category that has a drawable bracket shape (Single
   // Elimination, or playoff-enabled) — reuses the same matches/categories
@@ -167,7 +188,7 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
   // behind the placeholders may not even match the pools that were drawn.
   const over = eventIsOver(event, now);
   const categoryTrees = useMemo(() => {
-    if (!matches) return [];
+    if (!matches || !wantsBrackets) return [];
     return withLadders
       .filter((c) => bracketTreeApplies(c))
       .map((c) => {
@@ -175,7 +196,7 @@ export function useMatchSchedule({ event: initialEvent, categories: initialCateg
         return { category: c, ...built, trees: over ? built.trees.filter(treeHasRealMatch) : built.trees };
       })
       .filter((entry) => entry.trees.length > 0 || entry.entrants.length > 0);
-  }, [over, withLadders, matches, teams]);
+  }, [over, withLadders, matches, teams, wantsBrackets]);
 
-  return { event, categories, timetable, categoryTrees, loading: matches == null && !error, error: matches == null ? error : null, fromCache, updatedAt, refresh };
+  return { event, categories, timetable, categoryTrees, now, loading: matches == null && !error, error: matches == null ? error : null, fromCache, updatedAt, refresh };
 }

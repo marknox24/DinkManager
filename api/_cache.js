@@ -33,6 +33,16 @@ export function sendCached(res, body, { maxAge, staleWhileRevalidate }) {
 
 export const UPSTREAM_TIMEOUT_MS = 8000;
 
+// How long the CDN may keep answering from a stale copy while one background
+// request refreshes it. This is what protects the database from a crowd: a
+// viewer only forces a real read when nobody has asked for this exact response
+// within the window, so the window has to outlast a quiet spell, not a poll.
+// Otherwise a crowd arriving together (a QR code at the opening ceremony) all
+// miss at once, and each holds a database connection until they queue past
+// UPSTREAM_TIMEOUT_MS. The cost is small: the first viewer after a quiet spell
+// sees the old copy until their next poll.
+export const LONG_STALE_WINDOW_SECONDS = 3600;
+
 // Validates a comma-separated list of category-id query params, shared by
 // every endpoint that takes `?categories=`.
 export function parseCategoryIds(raw, maxCategories = 50) {

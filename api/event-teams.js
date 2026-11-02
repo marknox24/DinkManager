@@ -3,7 +3,7 @@
 // in sync). Teams only change when brackets are drawn/redrawn, so 60s is
 // plenty; every spectator shares one cached copy instead of each running a
 // joined teams query.
-import { fetchPaginatedByCategory, parseCategoryIds, sendCached, sendError, supabaseConfig } from './_cache.js';
+import { fetchPaginatedByCategory, LONG_STALE_WINDOW_SECONDS, parseCategoryIds, sendCached, sendError, supabaseConfig } from './_cache.js';
 
 const SELECT = '*,bracket:bracket_id!inner(letter,kind,category_id)';
 
@@ -15,7 +15,7 @@ export default async function handler(req, res) {
 
   try {
     const mapped = await fetchPaginatedByCategory(cfg, { table: 'teams', select: SELECT, categoryIds: ids });
-    sendCached(res, mapped, { maxAge: 60, staleWhileRevalidate: 120 });
+    sendCached(res, mapped, { maxAge: 60, staleWhileRevalidate: LONG_STALE_WINDOW_SECONDS });
   } catch {
     sendError(res, 502, 'teams unavailable');
   }

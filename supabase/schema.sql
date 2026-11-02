@@ -684,7 +684,7 @@ alter table matches add column if not exists finished_at timestamptz;
 alter table matches add column if not exists playoff_stage text;
 alter table matches drop constraint if exists matches_playoff_stage_check;
 alter table matches add constraint matches_playoff_stage_check
-  check (playoff_stage is null or playoff_stage in ('quarterfinal', 'semifinal', 'third_place', 'final'));
+  check (playoff_stage is null or playoff_stage in ('round_of_32', 'round_of_16', 'quarterfinal', 'semifinal', 'third_place', 'final'));
 alter table matches alter column score_a drop not null;
 alter table matches alter column score_b drop not null;
 

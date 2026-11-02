@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { categoryLadder, deriveLadder, deriveLadderFromPlan } from './playoffLadder.js';
+import { categoryLadder, deriveLadder, deriveLadderFromPlan, expandFirstStageSlots, priorStageOf, stageMatchCode } from './playoffLadder.js';
+import { compareMatchCode } from './match.js';
 import { buildBracketTreesForCategory } from './bracketTree.js';
 import { buildTimetable } from './timetable.js';
 
@@ -110,4 +111,96 @@ test('a stale playoff flag on a Single Elimination row projects nothing', () => 
   const round1 = [playoffMatch({ match_code: 'M1', bracket_letter: 'A', round_number: 1 })];
   const t = buildTimetable({ event, categories: [{ ...category, ladder: categoryLadder(category) }], matches: round1, now });
   assert.equal(t.rows.filter((r) => r.projected).length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// ROUND OF 16 / ROUND OF 32
+// ---------------------------------------------------------------------------
+
+const eightPools = [['A', 'E'], ['B', 'F'], ['C', 'G'], ['D', 'H']];
+const sixteenPools = [['A', 'I'], ['B', 'J'], ['C', 'K'], ['D', 'L'], ['E', 'M'], ['F', 'N'], ['G', 'O'], ['H', 'P']];
+
+test('8 pools advancing their top 2 starts at a Round of 16', () => {
+  const ladder = deriveLadderFromPlan(row({ playoff_pool_count: 8, playoff_pool_pairs: eightPools }));
+  assert.deepEqual(ladder.levels.map((l) => [l.kind, l.matchCount]), [
+    ['round_of_16', 8],
+    ['quarterfinal', 4],
+    ['semifinal', 2],
+    ['third_place', 1],
+    ['final', 1],
+  ]);
+});
+
+test('every route to 32 teams starts at a Round of 32', () => {
+  const sixteenTopTwo = deriveLadderFromPlan(row({ playoff_pool_count: 16, playoff_pool_pairs: sixteenPools }));
+  const eightTopFour = deriveLadderFromPlan(row({ playoff_pool_count: 8, playoff_pool_pairs: eightPools, playoff_advance_per_pool: 4 }));
+  assert.deepEqual(kinds(sixteenTopTwo).slice(0, 3), ['round_of_32', 'round_of_16', 'quarterfinal']);
+  assert.equal(sixteenTopTwo.levels[0].matchCount, 16);
+  assert.deepEqual(kinds(eightTopFour), kinds(sixteenTopTwo));
+});
+
+test('16 pools advancing their winner also starts at a Round of 16', () => {
+  assert.equal(deriveLadderFromPlan(row({ playoff_pool_count: 16, playoff_pool_pairs: sixteenPools, playoff_advance_per_pool: 1 })).levels[0].kind, 'round_of_16');
+});
+
+test('team counts a knockout cannot use are refused with the numbers that would work', () => {
+  const tooMany = deriveLadderFromPlan(row({ playoff_pool_count: 16, playoff_pool_pairs: sixteenPools, playoff_advance_per_pool: 4 }));
+  assert.equal(tooMany.valid, false);
+  assert.match(tooMany.error, /64 teams advancing.*2, 4, 8, 16 or 32/);
+  const sixPools = deriveLadderFromPlan(row({ playoff_pool_count: 6, playoff_pool_pairs: [['A', 'D'], ['B', 'E'], ['C', 'F']] }));
+  assert.equal(sixPools.valid, false);
+  assert.match(sixPools.error, /12 teams advancing/);
+});
+
+test('each stage is fed by the one before it in that ladder', () => {
+  const ladderKinds = new Set(['round_of_32', 'round_of_16', 'quarterfinal', 'semifinal', 'third_place', 'final']);
+  assert.equal(priorStageOf('round_of_32', ladderKinds), null);
+  assert.equal(priorStageOf('round_of_16', ladderKinds), 'round_of_32');
+  assert.equal(priorStageOf('quarterfinal', ladderKinds), 'round_of_16');
+  assert.equal(priorStageOf('semifinal', ladderKinds), 'quarterfinal');
+  assert.equal(priorStageOf('final', ladderKinds), 'semifinal');
+  assert.equal(priorStageOf('third_place', ladderKinds), 'semifinal');
+});
+
+test('stages a smaller ladder skips are skipped when finding what feeds a stage', () => {
+  const r16Start = new Set(['round_of_16', 'quarterfinal', 'semifinal', 'final']);
+  assert.equal(priorStageOf('round_of_16', r16Start), null);
+  const qfStart = new Set(['quarterfinal', 'semifinal', 'final']);
+  assert.equal(priorStageOf('quarterfinal', qfStart), null);
+  assert.equal(priorStageOf('semifinal', new Set(['semifinal', 'final'])), null);
+  assert.equal(priorStageOf('final', new Set(['final'])), null);
+});
+
+test('match codes keep the round number apart from the match number', () => {
+  assert.equal(stageMatchCode('round_of_16', 3), 'R16-3');
+  assert.equal(stageMatchCode('round_of_32', 16), 'R32-16');
+  assert.equal(stageMatchCode('quarterfinal', 2), 'QF2');
+  assert.equal(stageMatchCode('third_place', 1), '3RD');
+  assert.equal(stageMatchCode('final', 1), 'F');
+});
+
+test('Round of 32 codes sort numerically, so winners pair with their neighbour', () => {
+  const codes = Array.from({ length: 16 }, (_, i) => stageMatchCode('round_of_32', i + 1));
+  const shuffled = [...codes].sort(); // text order, which is what the database would return
+  assert.notDeepEqual(shuffled, codes);
+  assert.deepEqual([...shuffled].sort(compareMatchCode), codes);
+});
+
+test('a pool pair lands in opposite halves of a Round of 16, so they cannot rematch before the Final', () => {
+  const slots = expandFirstStageSlots(eightPools, 2);
+  assert.equal(slots.length, 8);
+  const half = (letter) => slots.map((s, i) => ([s.a.letter, s.b.letter].includes(letter) ? (i < 4 ? 'top' : 'bottom') : null)).filter(Boolean);
+  assert.deepEqual(half('A'), ['top', 'bottom']);
+  assert.deepEqual(half('E'), ['top', 'bottom']);
+});
+
+test('a Round of 16 row builds a full tree of placeholders with matching codes', () => {
+  const category = row({ playoff_pool_count: 8, playoff_pool_pairs: eightPools });
+  const { trees } = buildBracketTreesForCategory({ ...category, ladder: categoryLadder(category) }, []);
+  const [r16, quarters] = trees[0].rounds;
+  assert.equal(r16.label, 'Round of 16');
+  assert.equal(r16.matches.length, 8);
+  assert.equal(r16.matches[2].matchCode, 'R16-3');
+  assert.equal(r16.matches[1].teamA.label, 'Pool B · Rank 1');
+  assert.equal(quarters.matches[1].teamA.label, 'Winner of R16-3');
 });

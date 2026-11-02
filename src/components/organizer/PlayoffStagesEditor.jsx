@@ -150,6 +150,11 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
                 </Select>
               </FormField>
             </div>
+            {ladder.valid && (
+              <p className="mt-2 text-xs text-ink-500">
+                {ladder.levels[0].matchCount * 2} teams advance, starting at the {ladder.levels[0].label}.
+              </p>
+            )}
 
             <div className="mt-3 flex items-center justify-between gap-4 rounded-xl border border-ink-100 bg-white p-3.5">
               <div>

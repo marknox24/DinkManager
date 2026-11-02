@@ -69,7 +69,9 @@ export default async function handler(req, res) {
     include.forEach((k, i) => {
       body[k] = extras[i];
     });
-    sendCached(res, body, { maxAge: 30, staleWhileRevalidate: 60 });
+    // A shorter stale window than the other endpoints: this one carries
+    // publish state and registration status, which shouldn't linger.
+    sendCached(res, body, { maxAge: 30, staleWhileRevalidate: 300 });
   } catch {
     sendError(res, 502, 'event unavailable');
   }

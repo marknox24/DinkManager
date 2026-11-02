@@ -1,8 +1,9 @@
 // CDN-cached copy of the preview_live_snapshot RPC that the Preview Screen
-// polls. Cached for 10s (then served stale for up to 20s more while it
-// refreshes), so any number of TVs/phones costs the database ~6 queries a
-// minute. The client falls back to calling Supabase directly if this fails.
-import { isUuid, sendCached, sendError, supabaseConfig, UPSTREAM_TIMEOUT_MS } from './_cache.js';
+// polls. Cached for 10s (then served stale while it refreshes, see
+// LONG_STALE_WINDOW_SECONDS), so any number of TVs/phones costs the database
+// ~6 queries a minute. The client falls back to calling Supabase directly if
+// this fails.
+import { isUuid, LONG_STALE_WINDOW_SECONDS, sendCached, sendError, supabaseConfig, UPSTREAM_TIMEOUT_MS } from './_cache.js';
 
 export default async function handler(req, res) {
   const { event, category } = req.query;
@@ -18,7 +19,7 @@ export default async function handler(req, res) {
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
     if (!upstream.ok) return sendError(res, upstream.status === 404 ? 404 : 502, 'snapshot unavailable');
-    sendCached(res, await upstream.json(), { maxAge: 10, staleWhileRevalidate: 20 });
+    sendCached(res, await upstream.json(), { maxAge: 10, staleWhileRevalidate: LONG_STALE_WINDOW_SECONDS });
   } catch {
     sendError(res, 502, 'snapshot unavailable');
   }

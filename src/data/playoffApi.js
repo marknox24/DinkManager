@@ -1,5 +1,6 @@
 import { supabase } from '../lib/supabaseClient';
 import { isDoubleForfeit, matchIsDecided, resolveFixture } from '../utils/forfeit';
+import { compareMatchCode } from '../utils/match';
 import { arePoolsReady } from '../utils/scheduling';
 import { rankTeams, isTiedAtCut } from '../utils/standings';
 // The pure ladder-derivation logic lives in utils/playoffLadder.js (no
@@ -12,7 +13,7 @@ import { rankTeams, isTiedAtCut } from '../utils/standings';
 // MatchScheduleView.jsx) keeps working unchanged.
 // (a plain `export { X } from 'Y'` re-export wouldn't bind these names
 // locally, and this file's own functions below call them directly)
-import { PLAYOFF_STAGES, matchLevelLabel, deriveLadder, deriveLadderFromPlan, unpairedPools, expandFirstStageSlots, expandSinglePoolSlots } from '../utils/playoffLadder';
+import { PLAYOFF_STAGES, matchLevelLabel, deriveLadder, deriveLadderFromPlan, priorStageOf, stageMatchCode, unpairedPools, expandFirstStageSlots, expandSinglePoolSlots } from '../utils/playoffLadder';
 export { PLAYOFF_STAGES, matchLevelLabel, deriveLadder, deriveLadderFromPlan, unpairedPools, expandFirstStageSlots, expandSinglePoolSlots };
 
 function ordinal(n) {
@@ -50,20 +51,6 @@ export async function getPlayoffBracket(categoryId) {
   const { data, error } = await supabase.from('brackets').select('*').eq('category_id', categoryId).eq('kind', 'playoff').maybeSingle();
   if (error) throw error;
   return data;
-}
-
-// Which stage feeds `kind`, given the specific ladder in play — NOT a fixed
-// QF->SF->Final chain, since a small enough pool-pair count skips levels
-// (e.g. one pool pair advancing 1 each goes straight to a 2-team Final, fed
-// directly by pools, with no semifinal in the ladder at all).
-function priorStageOf(kind, ladderKinds) {
-  if (kind === 'quarterfinal') return null;
-  if (kind === 'semifinal') return ladderKinds.has('quarterfinal') ? 'quarterfinal' : null;
-  // Both the 3rd-place match and the final are fed by the semifinal round
-  // when one exists in this ladder; otherwise they're the first stage,
-  // fed directly by pools.
-  if (kind === 'third_place' || kind === 'final') return ladderKinds.has('semifinal') ? 'semifinal' : null;
-  return null;
 }
 
 // Per-stage readiness for a category's derived ladder. Returns one row per
@@ -295,9 +282,11 @@ export async function generateStageMatches(categoryId, kind, { replace = false }
       .from('matches')
       .select('*')
       .eq('bracket_id', poBracket.id)
-      .eq('playoff_stage', prior)
-      .order('match_code');
+      .eq('playoff_stage', prior);
     if (priorErr) throw priorErr;
+    // In code order, numerically: the database sorts R32-10 before R32-2,
+    // which would pair the wrong winners below.
+    priorMatches.sort((a, b) => compareMatchCode(a.match_code, b.match_code));
     if (priorMatches.length !== priorLevel?.matchCount || !priorMatches.every(matchIsDecided)) {
       throw new Error(`${PLAYOFF_STAGES[prior].label} isn't finished yet.`);
     }
@@ -333,7 +322,7 @@ export async function generateStageMatches(categoryId, kind, { replace = false }
       ...(fixture.status === 'completed' ? { finished_at: finishedAt } : {}),
       round_number: roundNumber,
       playoff_stage: kind,
-      match_code: kind === 'third_place' ? '3RD' : kind === 'final' ? 'F' : `${PLAYOFF_STAGES[kind].short}${i + 1}`,
+      match_code: stageMatchCode(kind, i + 1),
     };
   });
   const { data, error } = await supabase.from('matches').insert(rows).select();

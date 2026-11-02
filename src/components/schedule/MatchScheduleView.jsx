@@ -6,7 +6,6 @@ import { inputClass } from '../ui/FormField';
 import { matchLevelLabel } from '../../data/playoffApi';
 import { useMatchSchedule } from '../../hooks/useMatchSchedule';
 import { matchResultLabel, teamLabel } from '../../utils/match';
-import { useNow } from '../../hooks/useNow';
 
 const STATUS_STYLES = {
   live: { label: 'Live', className: 'bg-rose-100 text-rose-700' },
@@ -39,7 +38,8 @@ function relative(row, now) {
 function levelLabel(row) {
   if (row.projected) {
     const base = matchLevelLabel(row);
-    return row.stageMatchCount > 1 ? `${base.replace(/s$/, '')} ${row.stageIndex}` : base;
+    if (row.stageMatchCount <= 1) return base;
+    return base.endsWith('s') ? `${base.slice(0, -1)} ${row.stageIndex}` : `${base} · Match ${row.stageIndex}`;
   }
   return matchLevelLabel(row);
 }
@@ -166,12 +166,12 @@ function ScheduleRow({ row, now, mode, eventId }) {
 // organizer workspace page. It owns no data of its own: matches are read
 // live (useMatchSchedule) and projected by utils/timetable.js.
 export default function MatchScheduleView({ event: initialEvent, categories: initialCategories, mode = 'public' }) {
-  const { event, categories, timetable, loading, error, fromCache } = useMatchSchedule({
+  const { event, categories, timetable, now, loading, error, fromCache } = useMatchSchedule({
+    view: 'schedule',
     event: initialEvent,
     categories: initialCategories,
     offlineCapable: mode === 'organizer',
   });
-  const now = useNow(15000);
   const [search, setSearch] = useState('');
   const [categoryId, setCategoryId] = useState('');
   const [showCompleted, setShowCompleted] = useState(false);
