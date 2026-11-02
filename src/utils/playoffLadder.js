@@ -5,15 +5,40 @@
 // `node --test` runner (import.meta.env doesn't exist there).
 
 // Knockout levels in play order — every stage after the first is fully
-// determined by pool count + advance-per-pool, so there is no separate
-// "round_of_16" here (out of scope for v1, see the plan's documented
-// tradeoffs on non-power-of-2 pool counts).
+// determined by pool count + advance-per-pool. The check constraint on
+// matches.playoff_stage (schema.sql) lists these same keys.
 export const PLAYOFF_STAGES = {
+  round_of_32: { label: 'Round of 32', short: 'R32' },
+  round_of_16: { label: 'Round of 16', short: 'R16' },
   quarterfinal: { label: 'Quarterfinals', short: 'QF' },
   semifinal: { label: 'Semifinals', short: 'SF' },
   third_place: { label: 'Fight for 3rd', short: '3RD' },
   final: { label: 'Championship', short: 'F' },
 };
+
+// The knockout stage with this many matches, largest first. 16 matches (32
+// teams advancing) is the top: a bigger bracket couldn't fit a Preview Screen,
+// which has no way to scroll.
+const STAGE_BY_MATCH_COUNT = { 16: 'round_of_32', 8: 'round_of_16', 4: 'quarterfinal', 2: 'semifinal' };
+
+// A stage's match_code for its match at 1-based `position`. A short code that
+// ends in a number takes a separator: R16-3, never "R163".
+export function stageMatchCode(kind, position) {
+  if (kind === 'third_place') return '3RD';
+  if (kind === 'final') return 'F';
+  const { short } = PLAYOFF_STAGES[kind];
+  return `${short}${/\d$/.test(short) ? '-' : ''}${position}`;
+}
+
+// Which stage feeds `kind`, given the specific ladder in play — not a fixed
+// chain, since a small enough plan skips levels (one pool pair advancing 1
+// each goes straight to a 2-team Final, fed directly by pools). The 3rd-place
+// match is fed by the same stage as the Final. Null means pools feed it.
+export function priorStageOf(kind, ladderKinds) {
+  const order = Object.keys(PLAYOFF_STAGES).filter((k) => k !== 'third_place');
+  const position = order.indexOf(kind === 'third_place' ? 'final' : kind);
+  return order.slice(0, position).reverse().find((k) => ladderKinds.has(k)) ?? null;
+}
 
 // The human-readable "level" a match belongs to — a playoff stage name, or
 // the pool round-robin round number when it isn't a playoff match. Shared by
@@ -24,12 +49,10 @@ export function matchLevelLabel(match) {
 }
 
 // How many knockout levels a { poolPairs, advancePerPool, thirdPlace } plan
-// produces, and how many matches each level has. Quarterfinals is the
-// largest first-round stage this ladder supports (4 first-round matches, 8
-// teams) — a "Round of 16" stage is out of scope for v1 (see the plan's
-// documented tradeoffs on non-power-of-2 / larger pool counts), so anything
-// bigger comes back invalid with a concrete message rather than silently
-// producing an unsupported stage.
+// produces, and how many matches each level has. Round of 32 is the largest
+// first-round stage this ladder supports (see STAGE_BY_MATCH_COUNT), and a
+// team count that can't halve down to a Final comes back invalid too, each
+// with a concrete message rather than silently producing an unsupported stage.
 export function deriveLadder({ poolCount, poolPairs, advancePerPool, thirdPlace }) {
   // A single, self-contained pool seeds its own top-N into the bracket —
   // no crossover partner needed. Capped at top-4/semifinal (not extended to
@@ -64,27 +87,25 @@ export function deriveLadder({ poolCount, poolPairs, advancePerPool, thirdPlace 
 
   const firstRoundMatches = pairs.length * advancePerPool;
   const isPowerOfTwo = firstRoundMatches > 0 && (firstRoundMatches & (firstRoundMatches - 1)) === 0;
-  if (!isPowerOfTwo || firstRoundMatches > 4) {
+  if (!isPowerOfTwo || firstRoundMatches > 16) {
     const teamCount = firstRoundMatches * 2;
     return {
       valid: false,
-      error: `${pairs.length} pool pair${pairs.length === 1 ? '' : 's'} × top ${advancePerPool} = ${teamCount} team${teamCount === 1 ? '' : 's'} advancing, which doesn't fit a knockout bracket up to Quarterfinals. Use 1, 2 or 4 pool pairs (with 1 or 2 advancing per pool).`,
+      error: `${pairs.length} pool pair${pairs.length === 1 ? '' : 's'} × top ${advancePerPool} = ${teamCount} team${teamCount === 1 ? '' : 's'} advancing. A knockout bracket needs exactly 2, 4, 8, 16 or 32 teams.`,
       levels: [],
     };
   }
 
   const levels = [];
-  let matchCount = firstRoundMatches;
-  const stageOrder = matchCount >= 4 ? ['quarterfinal', 'semifinal'] : ['semifinal'];
   // A single pool-pair (2 teams advancing) skips straight to the final —
-  // there's no quarterfinal or semifinal to play.
-  if (matchCount === 1) {
+  // the loop adds no earlier stage for it.
+  for (let matchCount = firstRoundMatches; matchCount > 1; matchCount /= 2) {
+    const kind = STAGE_BY_MATCH_COUNT[matchCount];
+    levels.push({ kind, label: PLAYOFF_STAGES[kind].label, matchCount });
+  }
+  if (firstRoundMatches === 1) {
     levels.push({ kind: 'final', label: PLAYOFF_STAGES.final.label, matchCount: 1 });
     return { valid: true, error: null, levels };
-  }
-  for (const kind of stageOrder) {
-    levels.push({ kind, label: PLAYOFF_STAGES[kind].label, matchCount });
-    matchCount = matchCount / 2;
   }
   if (thirdPlace) {
     levels.push({ kind: 'third_place', label: PLAYOFF_STAGES.third_place.label, matchCount: 1 });

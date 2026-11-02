@@ -1,3 +1,4 @@
+import { memo } from 'react';
 import { Trophy } from 'lucide-react';
 import { resultTag } from '../../utils/match';
 import { PLAYOFF_STAGES } from '../../utils/playoffLadder';
@@ -14,35 +15,73 @@ import { PLAYOFF_STAGES } from '../../utils/playoffLadder';
 // taller instead of pushing one box into the next, and because connectors
 // occupy grid cells of their own they stay on the card centers whatever the
 // names wrap to.
-const CONNECTOR_WIDTH = '2.5rem';
+//
+// A Round of 16 or 32 has too many rows for those cards on a screen that can't
+// scroll, so the grid steps down a density by how many matches its first round
+// has, and needs more width before it appears at all (LAYOUTS). The stage list
+// always uses COMFORTABLE: a phone scrolls, so it never has to shrink anything.
 const COLUMN_MAX_REM = 30;
-
-const NAME_TEXT = 'text-sm @5xl:text-base @[100rem]:text-lg';
-const SCORE_TEXT = 'text-base @5xl:text-lg @[100rem]:text-xl';
 const LABEL_TEXT = 'text-[11px] @5xl:text-xs @[100rem]:text-sm';
 
-function TeamName({ team }) {
+const COMFORTABLE = {
+  rowGap: 'gap-y-4',
+  connector: '2.5rem',
+  rowPad: 'px-4 py-2.5 @[100rem]:px-5 @[100rem]:py-3',
+  nameText: 'text-sm @5xl:text-base @[100rem]:text-lg',
+  scoreText: 'text-base @5xl:text-lg @[100rem]:text-xl',
+  onePlayerPerLine: true,
+};
+const COMPACT = {
+  rowGap: 'gap-y-2',
+  connector: '2rem',
+  rowPad: 'px-3 py-1.5',
+  nameText: 'text-sm',
+  scoreText: 'text-sm',
+  codeGutter: true,
+};
+const DENSE = {
+  rowGap: 'gap-y-1',
+  connector: '1.5rem',
+  rowPad: 'px-2 py-0.5',
+  nameText: 'truncate text-sm',
+  scoreText: 'text-sm',
+  codeGutter: true,
+};
+
+const densityFor = (firstRoundCount) => (firstRoundCount >= 16 ? DENSE : firstRoundCount >= 8 ? COMPACT : COMFORTABLE);
+
+// Full class strings, so Tailwind can find them. Keyed by column count: each
+// extra round needs more width before a bracket beats the stage list.
+const LAYOUTS = {
+  3: { list: '@3xl:hidden', grid: '@3xl:grid' },
+  4: { list: '@5xl:hidden', grid: '@5xl:grid' },
+  5: { list: '@[100rem]:hidden', grid: '@[100rem]:grid' },
+};
+const layoutFor = (roundCount) => LAYOUTS[Math.max(3, roundCount)];
+
+function TeamName({ team, density }) {
   if (!team) return <span className="text-ink-300">To be decided</span>;
   if (team.isPlaceholder) return <span className="font-medium italic text-ink-400">{team.label}</span>;
+  if (!density.onePlayerPerLine) return <span title={team.label}>{team.label}</span>;
   // One player per line, so every doubles row is the same height and a
   // partner's name never breaks halfway through.
   const players = team.label.split(' & ');
   return players.map((name, i) => (
-    <span key={name} className="block">
+    <span key={i} className="block">
       {name}
       {i < players.length - 1 ? ' &' : ''}
     </span>
   ));
 }
 
-function TeamRow({ team, score, isWinner, isLoser }) {
+function TeamRow({ team, score, isWinner, isLoser, density }) {
   const tone = isWinner ? 'font-bold text-brand-700' : isLoser ? 'font-medium text-ink-400' : 'font-semibold text-ink-800';
   return (
-    <div className={`flex items-center justify-between gap-3 px-4 py-2.5 @[100rem]:px-5 @[100rem]:py-3 ${isWinner ? 'bg-brand-50' : ''}`}>
-      <div className={`min-w-0 break-words leading-snug ${NAME_TEXT} ${tone}`}>
-        <TeamName team={team} />
+    <div className={`flex items-center justify-between gap-3 ${density.rowPad} ${isWinner ? 'bg-brand-50' : ''}`}>
+      <div className={`min-w-0 break-words leading-snug ${density.nameText} ${tone}`}>
+        <TeamName team={team} density={density} />
       </div>
-      {score != null && <span className={`shrink-0 font-bold tabular-nums ${SCORE_TEXT} ${isWinner ? 'text-brand-700' : 'text-ink-400'}`}>{score}</span>}
+      {score != null && <span className={`shrink-0 font-bold tabular-nums ${density.scoreText} ${isWinner ? 'text-brand-700' : 'text-ink-400'}`}>{score}</span>}
     </div>
   );
 }
@@ -50,10 +89,28 @@ function TeamRow({ team, score, isWinner, isLoser }) {
 // `code` is only worth showing when a stage has more than one match: "Winner
 // of SF1" needs a box called SF1, but the Championship is already named above
 // its one card.
-function MatchCard({ match, code }) {
+function MatchCard({ match, code, density = COMFORTABLE }) {
   const isLive = match.status === 'in_progress';
   const tag = resultTag(match.resultType);
   const border = isLive ? 'border-rose-200 ring-1 ring-rose-100' : match.status === 'projected' ? 'border-dashed border-ink-200' : 'border-ink-100';
+  const rows = (
+    <div className="min-w-0 flex-1 divide-y divide-ink-100">
+      <TeamRow team={match.teamA} score={match.scoreA} isWinner={match.winnerSide === 'a'} isLoser={match.winnerSide === 'b'} density={density} />
+      <TeamRow team={match.teamB} score={match.scoreB} isWinner={match.winnerSide === 'b'} isLoser={match.winnerSide === 'a'} density={density} />
+    </div>
+  );
+  if (density.codeGutter) {
+    return (
+      <div className={`flex w-full overflow-hidden rounded-lg border bg-white ${match.status === 'projected' ? '' : 'shadow-sm'} ${border}`}>
+        <div className="flex w-12 shrink-0 flex-col items-center justify-center border-r border-ink-100 text-[10px] font-bold uppercase leading-tight text-ink-400">
+          <span>{code}</span>
+          {isLive && <span className="text-rose-600">Live</span>}
+          {tag && <span title={tag}>{match.resultType === 'double_forfeit' ? 'DF' : tag}</span>}
+        </div>
+        {rows}
+      </div>
+    );
+  }
   return (
     <div className={`w-full overflow-hidden rounded-2xl border bg-white ${match.status === 'projected' ? '' : 'shadow-sm'} ${border}`}>
       {(code || isLive || tag) && (
@@ -63,10 +120,7 @@ function MatchCard({ match, code }) {
           {tag && <span className="text-ink-500">{tag}</span>}
         </div>
       )}
-      <div className="divide-y divide-ink-100">
-        <TeamRow team={match.teamA} score={match.scoreA} isWinner={match.winnerSide === 'a'} isLoser={match.winnerSide === 'b'} />
-        <TeamRow team={match.teamB} score={match.scoreB} isWinner={match.winnerSide === 'b'} isLoser={match.winnerSide === 'a'} />
-      </div>
+      {rows}
     </div>
   );
 }
@@ -82,9 +136,9 @@ function StageHeading({ stage }) {
 
 const codeFor = (stage, match) => (stage.matches.length > 1 ? match.matchCode : null);
 
-function StageList({ stages }) {
+function StageList({ stages, layout }) {
   return (
-    <div className="flex flex-col gap-6 @3xl:hidden">
+    <div className={`flex flex-col gap-6 ${layout.list}`}>
       {stages.map((stage) => (
         <section key={stage.id}>
           <StageHeading stage={stage} />
@@ -110,13 +164,15 @@ function Connector({ style }) {
   );
 }
 
-function BracketGrid({ rounds, thirdPlaceStage }) {
+function BracketGrid({ rounds, thirdPlaceStage, layout }) {
   const firstRoundCount = rounds[0].matches.length;
   const lastRound = rounds.length - 1;
+  const density = densityFor(firstRoundCount);
   // Below the Championship, in its column. From quarterfinals up there's room
-  // inside the bracket's own rows; a shorter bracket adds one more row for it.
+  // inside the bracket's own rows: the bottom quarter of them, so its heading
+  // can't stretch every other row. A shorter bracket adds one more row for it.
   const thirdFitsInRows = firstRoundCount >= 4;
-  const thirdRow = thirdFitsInRows ? firstRoundCount + 1 : firstRoundCount + 2;
+  const thirdRow = thirdFitsInRows ? `${2 + firstRoundCount - firstRoundCount / 4} / span ${firstRoundCount / 4}` : firstRoundCount + 2;
   const columnStart = (roundIndex) => roundIndex * 2 + 1;
   const rowSpan = (round) => firstRoundCount / round.matches.length;
   const rowStart = (round, matchIndex) => 2 + matchIndex * rowSpan(round);
@@ -132,10 +188,10 @@ function BracketGrid({ rounds, thirdPlaceStage }) {
 
   return (
     <div
-      className="mx-auto hidden w-full gap-y-4 @3xl:grid"
+      className={`mx-auto hidden w-full ${density.rowGap} ${layout.grid}`}
       style={{
-        maxWidth: `calc(${rounds.length * COLUMN_MAX_REM}rem + ${lastRound} * ${CONNECTOR_WIDTH})`,
-        gridTemplateColumns: rounds.map(() => 'minmax(0, 1fr)').join(` ${CONNECTOR_WIDTH} `),
+        maxWidth: `calc(${rounds.length * COLUMN_MAX_REM}rem + ${lastRound} * ${density.connector})`,
+        gridTemplateColumns: rounds.map(() => 'minmax(0, 1fr)').join(` ${density.connector} `),
         gridTemplateRows: `auto repeat(${firstRoundCount}, 1fr)${thirdPlaceStage && !thirdFitsInRows ? ' auto' : ''}`,
       }}
     >
@@ -147,7 +203,7 @@ function BracketGrid({ rounds, thirdPlaceStage }) {
       {rounds.map((round, roundIndex) =>
         round.matches.map((m, matchIndex) => (
           <div key={m.key} className="flex items-center" style={placement(round, roundIndex, matchIndex)}>
-            <MatchCard match={m} code={codeFor(round, m)} />
+            <MatchCard match={m} code={codeFor(round, m)} density={density} />
           </div>
         ))
       )}
@@ -157,10 +213,10 @@ function BracketGrid({ rounds, thirdPlaceStage }) {
         ))
       )}
       {thirdPlaceStage && (
-        <div className={`flex flex-col justify-center ${thirdFitsInRows ? '' : 'pt-3'}`} style={{ gridColumn: columnStart(lastRound), gridRow: thirdRow }}>
+        <div className={`flex flex-col justify-end ${thirdFitsInRows ? '' : 'pt-3'}`} style={{ gridColumn: columnStart(lastRound), gridRow: thirdRow }}>
           <StageHeading stage={thirdPlaceStage} />
-          <div className="mt-2.5">
-            <MatchCard match={thirdPlaceStage.matches[0]} code={null} />
+          <div className="mt-2">
+            <MatchCard match={thirdPlaceStage.matches[0]} code={null} density={density} />
           </div>
         </div>
       )}
@@ -168,15 +224,20 @@ function BracketGrid({ rounds, thirdPlaceStage }) {
   );
 }
 
-// tree: the playoff entry of buildBracketTreesForCategory(...).trees.
-export default function PlayoffLadderView({ tree }) {
+// tree: the playoff entry of buildBracketTreesForCategory(...).trees. Memoized
+// because its parent re-renders on every clock tick and a tree only changes
+// when new match data arrives.
+function PlayoffLadderView({ tree }) {
   const thirdPlaceStage = tree.thirdPlace ? { id: 'po-third', label: PLAYOFF_STAGES.third_place.label, matches: [tree.thirdPlace] } : null;
   const finalRound = tree.rounds[tree.rounds.length - 1];
   const stagesInPlayOrder = [...tree.rounds.slice(0, -1), ...(thirdPlaceStage ? [thirdPlaceStage] : []), finalRound];
+  const layout = layoutFor(tree.rounds.length);
   return (
     <div className="@container w-full">
-      <StageList stages={stagesInPlayOrder} />
-      <BracketGrid rounds={tree.rounds} thirdPlaceStage={thirdPlaceStage} />
+      <StageList stages={stagesInPlayOrder} layout={layout} />
+      <BracketGrid rounds={tree.rounds} thirdPlaceStage={thirdPlaceStage} layout={layout} />
     </div>
   );
 }
+
+export default memo(PlayoffLadderView);

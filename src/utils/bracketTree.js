@@ -1,6 +1,6 @@
 import { isDoubleForfeit, resolveFixture } from './forfeit.js';
 import { compareMatchCode, teamLabel } from './match.js';
-import { expandFirstStageSlots, expandSinglePoolSlots, PLAYOFF_STAGES } from './playoffLadder.js';
+import { expandFirstStageSlots, expandSinglePoolSlots, PLAYOFF_STAGES, stageMatchCode } from './playoffLadder.js';
 
 // Turns a category's matches into the shape a visual bracket tree can
 // render directly — one or more trees (a pure Single Elimination category
@@ -486,14 +486,14 @@ function buildPlayoffLadderTree({ ladder, poolPairs, poolCount, advancePerPool, 
             placeholderA = firstSlots[i] ? slotLabel(firstSlots[i].a) : null;
             placeholderB = firstSlots[i] ? slotLabel(firstSlots[i].b) : null;
           } else {
-            const prevLabel = PLAYOFF_STAGES[ladder.levels[levelIndex - 1].kind]?.short || 'Prev';
-            placeholderA = `Winner of ${prevLabel}${i * 2 + 1}`;
-            placeholderB = `Winner of ${prevLabel}${i * 2 + 2}`;
+            const prevKind = ladder.levels[levelIndex - 1].kind;
+            placeholderA = `Winner of ${stageMatchCode(prevKind, i * 2 + 1)}`;
+            placeholderB = `Winner of ${stageMatchCode(prevKind, i * 2 + 2)}`;
           }
         }
         // A box without a row yet still needs its code: the next round's
         // "Winner of SF1" has to point at something called SF1.
-        const matchCode = m ? undefined : `${PLAYOFF_STAGES[level.kind]?.short}${i + 1}`;
+        const matchCode = m ? undefined : stageMatchCode(level.kind, i + 1);
         return matchNode({ key: `po-${level.kind}-${i}`, matchCode, m, placeholderA, placeholderB });
       });
       return { id: `po-${level.kind}`, label: PLAYOFF_STAGES[level.kind]?.label || level.kind, matches };

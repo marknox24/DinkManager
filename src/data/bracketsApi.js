@@ -490,11 +490,14 @@ export async function listMatchesForCategory(categoryId) {
 // Public-page variant: same rows, but served through the CDN-cached
 // /api/schedule-matches endpoint. The organizer's own schedule keeps calling
 // listScheduleMatchesForEvent directly (it needs live, authenticated reads).
-export async function listScheduleMatchesPublic(categoryIds) {
+// `directFallback: false` returns null instead of querying the database when
+// the cached read fails: a poll with data already on screen should wait for
+// the next one, not add to the load that probably caused the failure.
+export async function listScheduleMatchesPublic(categoryIds, { directFallback = true } = {}) {
   if (categoryIds.length === 0) return [];
   const sorted = [...categoryIds].sort(); // stable URL = shared cache entry
   const cached = await fetchCachedJson(`/api/schedule-matches?categories=${sorted.join(',')}`, Array.isArray);
-  return cached ?? listScheduleMatchesForEvent(categoryIds);
+  return cached ?? (directFallback ? listScheduleMatchesForEvent(categoryIds) : null);
 }
 
 export async function listScheduleMatchesForEvent(categoryIds) {
@@ -527,12 +530,13 @@ export async function listScheduleMatchesForEvent(categoryIds) {
 // public_or_owner, schema.sql) and the same 1000-row paging as that
 // function, for the same reason.
 // Public-page variant of listTeamsForEvent via the CDN-cached
-// /api/event-teams endpoint, falling back to the direct query.
-export async function listTeamsPublic(categoryIds) {
+// /api/event-teams endpoint, falling back to the direct query (see
+// listScheduleMatchesPublic for `directFallback`).
+export async function listTeamsPublic(categoryIds, { directFallback = true } = {}) {
   if (categoryIds.length === 0) return [];
   const sorted = [...categoryIds].sort(); // stable URL = shared cache entry
   const cached = await fetchCachedJson(`/api/event-teams?categories=${sorted.join(',')}`, Array.isArray);
-  return cached ?? listTeamsForEvent(categoryIds);
+  return cached ?? (directFallback ? listTeamsForEvent(categoryIds) : null);
 }
 
 export async function listTeamsForEvent(categoryIds) {
