@@ -49,6 +49,8 @@ import {
 const RoundRobinSheetsModal = lazy(() => import('../../../components/organizer/RoundRobinSheetsModal'));
 const BlankScoreSheetsModal = lazy(() => import('../../../components/organizer/BlankScoreSheetsModal'));
 import { useNow } from '../../../hooks/useNow';
+import { useOrganizerLiveSync } from '../../../hooks/useOrganizerLiveSync';
+import { isPermanentRejection } from '../../../lib/syncQueue';
 import { usableCourts } from '../../../utils/courts';
 import { formatDuration } from '../../../utils/format';
 import { forfeitResult, hasDependentMatch } from '../../../utils/forfeit';
@@ -69,7 +71,7 @@ export default function MatchListPage() {
   const { pushToast } = useToast();
   const confirm = useConfirm();
   const { can, event } = useEventAccess();
-  const { enqueueWrite, reconnectToken } = useOfflineSync();
+  const { enqueueWrite, reconnectToken, forcedOffline, pendingCount } = useOfflineSync();
   const blockIfOffline = useOnlineOnlyGuard();
   const now = useNow(1000);
 
@@ -147,9 +149,9 @@ export default function MatchListPage() {
 
   const activeCategory = categories[activeCatIdx];
 
-  const reloadCategoryData = useCallback(async () => {
+  const reloadCategoryData = useCallback(async ({ silent = false } = {}) => {
     if (!activeCategory) return;
-    setLoadingMatches(true);
+    if (!silent) setLoadingMatches(true);
     try {
       const [{ data: bkts, source, error }, { data: mts }] = await Promise.all([
         readWithFallback({
@@ -236,6 +238,13 @@ export default function MatchListPage() {
   useEffect(() => {
     loadPlayoffStatus();
   }, [loadPlayoffStatus]);
+
+  // Silent: a background update shouldn't flash the list while someone reads it.
+  useOrganizerLiveSync({
+    categoryIds: categories.map((c) => c.id),
+    paused: forcedOffline || pendingCount > 0,
+    onChange: () => Promise.all([reloadCategoryData({ silent: true }), loadLiveMatches(), loadBracketProgress(), loadPlayoffStatus()]),
+  });
 
   // A match can only go live if a court is free — capped by the event's
   // configured court count (Settings page) and its plan, minus courts
@@ -337,6 +346,8 @@ export default function MatchListPage() {
       await Promise.all([reloadCategoryData(), loadPlayoffStatus(), loadBracketProgress()]);
     } catch (e) {
       pushToast(e.message, 'error');
+      // Usually another organizer generating it first: show what they made.
+      await Promise.all([reloadCategoryData({ silent: true }), loadPlayoffStatus()]);
     } finally {
       setGeneratingStage(null);
     }
@@ -359,7 +370,24 @@ export default function MatchListPage() {
   // identically whether the write actually reached the server or is
   // sitting in the queue for later — the ConnectionStatusPill/
   // OfflineQueueBanner communicate which of those happened, not a toast.
-  const handleConfirmStart = async (match, { court, umpire_name }) => {
+  // The server refused a write the organizer just made, usually because
+  // another organizer got to that match or court first. Says why instead of
+  // the action's success message, then shows what's really there.
+  const withRejectionNotice = (handler) => async (...args) => {
+    try {
+      return await handler(...args);
+    } catch (e) {
+      if (!isPermanentRejection(e)) throw e;
+      pushToast(e.message, 'error');
+      setStartingMatch(null);
+      setLoggingMatch(null);
+      setForfeitingMatch(null);
+      await Promise.all([reloadCategoryData({ silent: true }), loadLiveMatches(), loadBracketProgress(), loadPlayoffStatus()]);
+      return undefined;
+    }
+  };
+
+  const handleConfirmStart = withRejectionNotice(async (match, { court, umpire_name }) => {
     if (blockIfLocked()) return;
     const now = new Date().toISOString();
     await enqueueWrite({
@@ -371,9 +399,9 @@ export default function MatchListPage() {
     pushToast('Match started', 'success');
     setStartingMatch(null);
     await Promise.all([reloadCategoryData(), loadLiveMatches()]);
-  };
+  });
 
-  const handleLogScore = async (match, sA, sB, umpireName) => {
+  const handleLogScore = withRejectionNotice(async (match, sA, sB, umpireName) => {
     if (blockIfLocked()) return;
     const winner_team_id = sA > sB ? match.team_a_id : match.team_b_id;
     await enqueueWrite({
@@ -396,11 +424,11 @@ export default function MatchListPage() {
     pushToast('Match recorded', 'success');
     setLoggingMatch(null);
     await Promise.all([reloadCategoryData(), loadBracketProgress(), loadPlayoffStatus()]);
-  };
+  });
 
   // Goes through the same queued write as Log score, so it works offline.
   // Same reloads as handleFinishLive, since this can close a live match too.
-  const handleForfeit = async (match, winnerTeamId) => {
+  const handleForfeit = withRejectionNotice(async (match, winnerTeamId) => {
     if (blockIfLocked()) return;
     const result = forfeitResult(match.team_a_id, winnerTeamId);
     await enqueueWrite({
@@ -420,9 +448,9 @@ export default function MatchListPage() {
     pushToast('Forfeit recorded', 'success');
     setForfeitingMatch(null);
     await Promise.all([reloadCategoryData(), loadLiveMatches(), loadBracketProgress(), loadPlayoffStatus()]);
-  };
+  });
 
-  const handleRemove = async (match) => {
+  const handleRemove = withRejectionNotice(async (match) => {
     if (blockIfLocked()) return;
     const ok = await confirm({
       title: `Remove match ${match.match_code || ''}?`,
@@ -432,9 +460,9 @@ export default function MatchListPage() {
     if (!ok) return;
     await enqueueWrite({ matchId: match.id, operationType: 'remove', payload: {}, optimisticDelete: true });
     await reloadCategoryData();
-  };
+  });
 
-  const handleTogglePause = async (match) => {
+  const handleTogglePause = withRejectionNotice(async (match) => {
     if (blockIfLocked()) return;
     if (match.running_since) {
       const accumulated_seconds = liveElapsedSeconds(match, Date.now());
@@ -454,9 +482,9 @@ export default function MatchListPage() {
       });
     }
     await loadLiveMatches();
-  };
+  });
 
-  const handleCancelLive = async (match) => {
+  const handleCancelLive = withRejectionNotice(async (match) => {
     if (blockIfLocked()) return;
     const ok = await confirm({
       title: 'Cancel this match?',
@@ -472,9 +500,9 @@ export default function MatchListPage() {
     });
     pushToast('Match canceled', 'success');
     await Promise.all([reloadCategoryData(), loadLiveMatches()]);
-  };
+  });
 
-  const handleFinishLive = async (match, sA, sB) => {
+  const handleFinishLive = withRejectionNotice(async (match, sA, sB) => {
     if (blockIfLocked()) return;
     const elapsedSeconds = liveElapsedSeconds(match, Date.now());
     const winner_team_id = sA > sB ? match.team_a_id : match.team_b_id;
@@ -496,7 +524,7 @@ export default function MatchListPage() {
     });
     pushToast('Match recorded', 'success');
     await Promise.all([reloadCategoryData(), loadLiveMatches(), loadBracketProgress(), loadPlayoffStatus()]);
-  };
+  });
 
   const forfeitIsLocked = (m) =>
     Boolean(resultTag(m.result_type)) && (Boolean(m.playoff_stage) || isSingleElimFormat(activeCategory?.format)) && hasDependentMatch(m, matches);

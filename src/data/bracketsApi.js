@@ -54,7 +54,7 @@ function unwrapSyncResult(data) {
     throw err;
   }
   if (data?.status === 'rejected_invalid_state') {
-    const err = new Error('This match already changed state on the server — reload to see its current status.');
+    const err = new Error(data.reason || 'This match already changed state on the server — reload to see its current status.');
     err.code = 'sync_rejected_invalid_state';
     throw err;
   }
@@ -945,7 +945,9 @@ async function advanceSingleEliminationBracket(bracketId) {
         match_code: `${bracket.letter}${codeNumber}`,
         ...(r.status === 'completed' ? { finished_at: finishedAt } : {}),
       }));
-      const { error: insertErr } = await supabase.from('matches').insert(rows);
+      // Two organizers finishing a round together both get here; the unique
+      // index on (bracket_id, match_code) keeps the first copy of each match.
+      const { error: insertErr } = await supabase.from('matches').upsert(rows, { onConflict: 'bracket_id,match_code', ignoreDuplicates: true });
       if (insertErr) {
         console.error('advanceSingleEliminationBracket insert failed', insertErr);
         return;
@@ -1022,6 +1024,27 @@ export async function recordScheduledMatchResult(matchId, { score_a, score_b, wi
   const match = unwrapSyncResult(data);
   await advanceSingleEliminationBracket(match?.bracket_id);
   return match;
+}
+
+// Just enough of every match in the event to notice that another organizer
+// changed something — see useOrganizerLiveSync. A full reload is many queries,
+// so this one cheap read decides whether that's needed at all.
+export async function listMatchChangeRows(categoryIds) {
+  if (categoryIds.length === 0) return [];
+  const PAGE = 1000;
+  const rows = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from('matches')
+      .select('id, status, score_a, score_b, court, winner_team_id, result_type, running_since, bracket:bracket_id!inner(category_id)')
+      .in('bracket.category_id', categoryIds)
+      .order('id')
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    rows.push(...data);
+    if (data.length < PAGE) break;
+  }
+  return rows;
 }
 
 // Takes a player out of the tournament — see withdraw_team in schema.sql.

@@ -235,13 +235,13 @@ export async function generateStageMatches(categoryId, kind, { replace = false }
     }
 
     if (!poBracket) {
-      const { data: created, error: createErr } = await supabase
+      // Another organizer may be generating this same stage right now, so
+      // this keeps whichever copy got there first and reads it back.
+      const { error: createErr } = await supabase
         .from('brackets')
-        .insert({ category_id: categoryId, letter: 'PO', order_index: 99, kind: 'playoff' })
-        .select()
-        .single();
+        .upsert({ category_id: categoryId, letter: 'PO', order_index: 99, kind: 'playoff' }, { onConflict: 'category_id,letter', ignoreDuplicates: true });
       if (createErr) throw createErr;
-      poBracket = created;
+      poBracket = await getPlayoffBracket(categoryId);
     }
 
     const seedTeam = (letter, rank) => rankedByLetter.get(letter).find((t) => t.rank === rank);
@@ -325,7 +325,9 @@ export async function generateStageMatches(categoryId, kind, { replace = false }
       match_code: stageMatchCode(kind, i + 1),
     };
   });
-  const { data, error } = await supabase.from('matches').insert(rows).select();
+  const { data, error } = await supabase.from('matches').upsert(rows, { onConflict: 'bracket_id,match_code', ignoreDuplicates: true }).select();
   if (error) throw error;
+  // Nothing written means another organizer's identical request got in first.
+  if (data.length === 0) throw new Error(`${level.label} has already been generated.`);
   return data;
 }

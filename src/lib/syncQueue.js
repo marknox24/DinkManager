@@ -21,7 +21,7 @@ const ACTIONS = {
 // triggers raise, e.g. a queued match start on a court the event's plan
 // doesn't include — without this it would sit 'pending' and block the
 // queue behind it forever.
-function isPermanentRejection(e) {
+export function isPermanentRejection(e) {
   return e.code === 'sync_rejected_stale' || e.code === 'sync_rejected_invalid_state' || e.code === '23514';
 }
 
@@ -117,7 +117,16 @@ export async function enqueueOperation({ eventId, matchId, operationType, payloa
   try {
     const match = await flushEntry(entry);
     return { queued: false, match };
-  } catch {
+  } catch (e) {
+    // The server refused this while the organizer is right there, usually
+    // because another organizer just acted on the same match or court. They
+    // need to hear that now, not find a failed entry later, so it's rethrown
+    // rather than left in the queue.
+    if (isPermanentRejection(e)) {
+      await deleteRecord('sync_queue', operationId);
+      notify();
+      throw e;
+    }
     // flushEntry already recorded the failure on the queue entry; the
     // action itself is safely queued either way, so this call still
     // "succeeds" from the caller's point of view (optimistic UI stays).
