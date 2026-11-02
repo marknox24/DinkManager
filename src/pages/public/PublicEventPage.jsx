@@ -27,7 +27,8 @@ import Logo from '../../components/ui/Logo';
 import Tabs from '../../components/ui/Tabs';
 import Modal from '../../components/ui/Modal';
 import FaqAccordion from '../../components/ui/FaqAccordion';
-import RegisteredPlayersTab from '../../components/public/RegisteredPlayersTab';
+import WhosPlayingSection, { PlayersStrip } from '../../components/public/WhosPlayingSection';
+import { usePublicRoster } from '../../hooks/usePublicRoster';
 import MatchScheduleView from '../../components/schedule/MatchScheduleView';
 import BracketView from '../../components/brackets/BracketView';
 import { bracketTreeApplies } from '../../utils/bracketTree';
@@ -314,6 +315,8 @@ export default function PublicEventPage() {
   const [selectedCategoryId, setSelectedCategoryId] = useState(null);
   const [myRegsByCategory, setMyRegsByCategory] = useState({});
   const [qrModalOpen, setQrModalOpen] = useState(false);
+  const roster = usePublicRoster(event?.id);
+  const [rosterExpanded, setRosterExpanded] = useState(() => window.location.hash === '#players');
 
   const linkBase = token ? `/t/${token}` : `/e/${slug}`;
 
@@ -327,6 +330,13 @@ export default function PublicEventPage() {
       })
       .catch(() => setEvent(null));
   }, [slug, token]);
+
+  // A shared /e/slug#players link: the section doesn't exist yet when the
+  // browser would normally jump to it.
+  const eventLoaded = !!event;
+  useEffect(() => {
+    if (eventLoaded && window.location.hash === '#players') document.getElementById('players')?.scrollIntoView();
+  }, [eventLoaded]);
 
   // Only when a player is signed in, and only for this one event — shows
   // "you're already registered" per division without touching the public,
@@ -383,7 +393,6 @@ export default function PublicEventPage() {
     { id: 'faq', label: 'FAQ', content: event.faq },
     { id: 'matches', label: 'Match Schedule', content: categories.length > 0 },
     { id: 'bracket', label: 'Bracket View', content: categories.some(bracketTreeApplies) },
-    { id: 'roster', label: 'Registered Players', content: true },
   ].filter((s) => s.content);
 
   const matchTypes = [...new Set(categories.map((c) => c.match_type).filter(Boolean))];
@@ -514,6 +523,8 @@ export default function PublicEventPage() {
               )}
             </div>
 
+            <PlayersStrip rows={roster.rows} hasRegistrations={counts.some((c) => c.active_count > 0)} onOpen={() => setRosterExpanded(true)} />
+
             {event.description && (
               <div className="mt-4">
                 <p className={`whitespace-pre-line text-sm leading-relaxed text-ink-600 ${descExpanded ? '' : 'line-clamp-3'}`}>{renderRichText(event.description)}</p>
@@ -569,6 +580,15 @@ export default function PublicEventPage() {
           )}
         </section>
 
+        <WhosPlayingSection
+          categories={categories}
+          counts={counts}
+          roster={roster}
+          closed={event.status === 'finished'}
+          expanded={rosterExpanded}
+          onExpandedChange={setRosterExpanded}
+        />
+
         {sections.length > 0 && (
           <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
             <Tabs
@@ -590,8 +610,6 @@ export default function PublicEventPage() {
                     <MatchScheduleView event={event} categories={categories} mode="public" />
                   ) : s.id === 'bracket' ? (
                     <BracketView event={event} categories={categories} />
-                  ) : s.id === 'roster' ? (
-                    <RegisteredPlayersTab event={event} categories={categories} />
                   ) : (
                     <p className="whitespace-pre-line text-sm leading-relaxed text-ink-600">{renderRichText(s.content)}</p>
                   ),

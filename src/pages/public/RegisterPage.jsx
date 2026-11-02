@@ -4,6 +4,7 @@ import { AlertTriangle, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, Id
 import {
   getEventMediaUrl,
   getPublicEventRoster,
+  noteRosterChanged,
   submitRegistration,
   uploadRegistrationFile,
   loadPublicEventBundle,
@@ -182,6 +183,7 @@ export default function RegisterPage() {
         player2_photo_path: isDoubles ? player2PhotoPath : null,
         payment_proof_path: paymentProofPath,
       });
+      noteRosterChanged(event.id);
       setSubmitted(true);
     } catch (e) {
       pushToast(e.message, 'error');
