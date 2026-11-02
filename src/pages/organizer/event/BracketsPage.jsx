@@ -53,6 +53,8 @@ import LiveMatchCard from '../../../components/organizer/LiveMatchCard';
 // RoundRobinSheetsModal/BlankScoreSheetsModal).
 const DownloadBracketsListModal = lazy(() => import('../../../components/organizer/DownloadBracketsListModal'));
 import { useNow } from '../../../hooks/useNow';
+import { useOrganizerLiveSync } from '../../../hooks/useOrganizerLiveSync';
+import { isPermanentRejection } from '../../../lib/syncQueue';
 import { usableCourts } from '../../../utils/courts';
 import { formatDuration } from '../../../utils/format';
 import { FORFEIT_POINTS } from '../../../utils/forfeit';
@@ -362,7 +364,7 @@ export default function BracketsPage() {
   const { pushToast } = useToast();
   const confirm = useConfirm();
   const { can, event } = useEventAccess();
-  const { enqueueWrite, reconnectToken, forcedOffline } = useOfflineSync();
+  const { enqueueWrite, reconnectToken, forcedOffline, pendingCount } = useOfflineSync();
   const blockIfOffline = useOnlineOnlyGuard();
   const canRedraw = can('redraw_brackets');
 
@@ -678,6 +680,12 @@ export default function BracketsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reconnectToken]);
 
+  useOrganizerLiveSync({
+    categoryIds: categories.map((c) => c.id),
+    paused: forcedOffline || pendingCount > 0,
+    onChange: () => Promise.all([loadLiveMatches(), loadBracketProgress(), loadAllBracketDetails(), loadCategoryMatches()]),
+  });
+
   const loadChanges = useCallback(async () => {
     if (!activeCategory) return;
     const catId = activeCategory.id;
@@ -875,7 +883,21 @@ export default function BracketsPage() {
   // loadCategoryMatches read on a failed fetch, and never throws on a
   // network failure, so these handlers stay this simple regardless of
   // connectivity.
-  const handleTogglePause = async (match) => {
+  // The server refused a write the organizer just made, usually because
+  // another organizer got to that match first. Says why instead of the
+  // action's success message, then shows what's really there.
+  const withRejectionNotice = (handler) => async (...args) => {
+    try {
+      return await handler(...args);
+    } catch (e) {
+      if (!isPermanentRejection(e)) throw e;
+      pushToast(e.message, 'error');
+      await Promise.all([loadLiveMatches(), loadBracketProgress(), loadAllBracketDetails(), loadCategoryMatches()]);
+      return undefined;
+    }
+  };
+
+  const handleTogglePause = withRejectionNotice(async (match) => {
     if (blockIfLocked()) return;
     if (match.running_since) {
       const accumulated_seconds = liveElapsedSeconds(match, Date.now());
@@ -895,9 +917,9 @@ export default function BracketsPage() {
       });
     }
     await loadLiveMatches();
-  };
+  });
 
-  const handleCancelMatch = async (match) => {
+  const handleCancelMatch = withRejectionNotice(async (match) => {
     if (blockIfLocked()) return;
     // A match with a match_code came from a generated match list — cancel
     // resets it to scheduled so its fixture/code isn't lost. An ad-hoc
@@ -926,9 +948,9 @@ export default function BracketsPage() {
     }
     pushToast('Match canceled', 'success');
     await Promise.all([loadLiveMatches(), loadBracketProgress(), loadCategoryMatches()]);
-  };
+  });
 
-  const handleFinishMatch = async (match, sA, sB) => {
+  const handleFinishMatch = withRejectionNotice(async (match, sA, sB) => {
     if (blockIfLocked()) return;
     const elapsedSeconds = liveElapsedSeconds(match, Date.now());
     const winner_team_id = sA > sB ? match.team_a_id : match.team_b_id;
@@ -941,7 +963,7 @@ export default function BracketsPage() {
     });
     pushToast('Match recorded', 'success');
     await Promise.all([loadAllBracketDetails(), loadLiveMatches(), loadBracketProgress(), loadCategoryMatches()]);
-  };
+  });
 
   const canMove = canRedraw && !isLocked;
   // Matches can_edit_team in schema.sql.

@@ -680,6 +680,14 @@ alter table matches add column if not exists round_number integer;
 -- instead of row-insertion time (created_at predates a scheduled match's play).
 alter table matches add column if not exists finished_at timestamptz;
 
+-- One row per match code in a bracket, and one bracket per letter in a
+-- category. Knockout rows are created by whichever organizer's device acts
+-- first, and two devices can both see "not created yet" at the same moment;
+-- these make the second insert a no-op instead of a duplicate match or stage.
+-- match_code stays nullable: null codes are always allowed to repeat.
+create unique index if not exists matches_bracket_code_uniq on matches (bracket_id, match_code);
+create unique index if not exists brackets_category_letter_uniq on brackets (category_id, letter);
+
 -- Which knockout level a match belongs to; null for every pool match.
 alter table matches add column if not exists playoff_stage text;
 alter table matches drop constraint if exists matches_playoff_stage_check;
@@ -831,6 +839,7 @@ as $$
 declare
   v_row_count int;
   v_match matches;
+  v_event uuid;
 begin
   insert into sync_operations (operation_id, device_id, match_id, operation_type, client_ts)
   values (p_operation_id, p_device_id, p_match_id, 'start', p_client_ts)
@@ -843,6 +852,25 @@ begin
 
   if not can_edit_match(p_match_id) then
     raise exception 'not authorized to edit this match';
+  end if;
+
+  -- Courts are picked from a list on each organizer's own screen, so two of
+  -- them can choose the same free court at the same moment. The lock makes
+  -- those two take turns, so the second one sees the first one's match.
+  if p_court is not null then
+    select c.event_id into v_event
+    from matches m join brackets b on b.id = m.bracket_id join categories c on c.id = b.category_id
+    where m.id = p_match_id;
+
+    perform pg_advisory_xact_lock(hashtextextended('court:' || v_event || ':' || p_court, 0));
+
+    if exists (
+      select 1 from matches m join brackets b on b.id = m.bracket_id join categories c on c.id = b.category_id
+      where c.event_id = v_event and m.court = p_court and m.status = 'in_progress' and m.id <> p_match_id
+    ) then
+      select * into v_match from matches where id = p_match_id;
+      return jsonb_build_object('status', 'rejected_invalid_state', 'match', to_jsonb(v_match), 'reason', 'Court ' || p_court || ' is already in use — pick another court.');
+    end if;
   end if;
 
   update matches
@@ -1018,6 +1046,11 @@ begin
   if not can_edit_match(p_match_id) then
     raise exception 'not authorized to edit this match';
   end if;
+
+  -- Two organizers can submit this match at the same moment. Taking the row
+  -- first makes them take turns, so the check below sees the other's result
+  -- and the newest one wins, whichever request happened to arrive last.
+  perform 1 from matches where id = p_match_id for update;
 
   select max(client_ts) into v_last_client_ts
   from sync_operations
@@ -3890,6 +3923,11 @@ begin
   if not can_edit_match(p_match_id) then
     raise exception 'not authorized to edit this match';
   end if;
+
+  -- Two organizers can submit this match at the same moment. Taking the row
+  -- first makes them take turns, so the check below sees the other's result
+  -- and the newest one wins, whichever request happened to arrive last.
+  perform 1 from matches where id = p_match_id for update;
 
   select max(client_ts) into v_last_client_ts
   from sync_operations

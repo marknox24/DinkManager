@@ -98,9 +98,11 @@ export function OfflineSyncProvider({ children }) {
       } else if (optimisticMatch) {
         await cacheMatches(eventId, optimisticMatch.category_id ?? null, [optimisticMatch]);
       }
-      const result = await enqueueOperation({ eventId, matchId, operationType, payload });
-      await refreshCounts();
-      return result;
+      try {
+        return await enqueueOperation({ eventId, matchId, operationType, payload });
+      } finally {
+        await refreshCounts();
+      }
     },
     [eventId, refreshCounts]
   );
