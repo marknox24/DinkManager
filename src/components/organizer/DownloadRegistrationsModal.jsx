@@ -1,10 +1,10 @@
 import { useMemo, useRef, useState } from 'react';
-import { toPng } from 'html-to-image';
 import { Download, FileText, Image as ImageIcon, Loader2 } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Logo from '../ui/Logo';
 import { useToast } from '../../context/ToastContext';
 import { downloadNodeAsPdf } from '../../utils/pdf';
+import { exportPng } from '../../utils/exportImage';
 import RegistrationStatusBadge from '../player/RegistrationStatusBadge';
 
 function teamName(r) {
@@ -42,10 +42,7 @@ export default function DownloadRegistrationsModal({ event, categories, registra
     if (!paperRef.current || selectedCategories.length === 0) return;
     setDownloading('png');
     try {
-      // skipFonts avoids html-to-image's CORS SecurityError reading cssRules
-      // off the cross-origin Google Fonts stylesheet — same fix used by the
-      // Randomizer's and Accounting report's exports.
-      const dataUrl = await toPng(paperRef.current, { backgroundColor: '#ffffff', pixelRatio: 2, skipFonts: true });
+      const dataUrl = await exportPng(paperRef.current, { backgroundColor: '#ffffff', pixelRatio: 2 });
       const link = document.createElement('a');
       link.download = filename('png');
       link.href = dataUrl;

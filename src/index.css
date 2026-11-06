@@ -78,6 +78,13 @@ body {
   letter-spacing: -0.015em;
 }
 
+/* Set for a moment by src/utils/exportImage.js when it can't embed the brand
+   fonts, so the node is laid out in the font the picture will be drawn in. */
+.export-system-font,
+.export-system-font * {
+  font-family: system-ui, sans-serif !important;
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;

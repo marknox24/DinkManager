@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
-import { toPng } from 'html-to-image';
 import QRCode from 'qrcode';
 import { Copy, Download, Loader2, QrCode } from 'lucide-react';
 import Modal from '../ui/Modal';
 import { useToast } from '../../context/ToastContext';
 import { formatDateRange } from '../../utils/format';
 import { copyToClipboard } from '../../utils/clipboard';
+import { exportPng } from '../../utils/exportImage';
 
 // Same 4-brand-color palette (and per-open random pick) as
 // DownloadBracketsListModal.jsx — kept as its own small copy here rather
@@ -66,7 +66,7 @@ export default function ShareEventQrModal({ event, shareUrl: shareUrlProp, onClo
     if (!paperRef.current) return;
     setDownloading(true);
     try {
-      const dataUrl = await toPng(paperRef.current, { pixelRatio: 2, skipFonts: true });
+      const dataUrl = await exportPng(paperRef.current, { pixelRatio: 2 });
       const safeName = (event.name || 'Event').replace(/[^a-z0-9]+/gi, '_').slice(0, 40);
       const link = document.createElement('a');
       link.download = `${safeName}_QR.png`;

@@ -1,13 +1,10 @@
-import { toCanvas } from 'html-to-image';
+import { exportCanvas } from './exportImage';
 import { jsPDF } from 'jspdf';
 
 // Rasterizes a DOM node (e.g. an on-screen invoice layout) into a multi-page
-// A4 PDF and triggers a download. skipFonts:true avoids a real CORS
-// SecurityError html-to-image throws trying to read cssRules from the
-// cross-origin Google Fonts stylesheet (same fix as the Randomizer's PNG
-// export) — trades the brand font in the PDF for a guaranteed-clean capture.
+// A4 PDF and triggers a download.
 export async function downloadNodeAsPdf(node, filename) {
-  const canvas = await toCanvas(node, { pixelRatio: 2, backgroundColor: '#ffffff', skipFonts: true });
+  const canvas = await exportCanvas(node, { pixelRatio: 2, backgroundColor: '#ffffff' });
 
   const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
   const pageWidth = pdf.internal.pageSize.getWidth();
@@ -71,7 +68,7 @@ export async function downloadGroupedNodesAsPdf({ containerNode, itemNodes, file
   const contentWidthPt = pageWidthPt - 2 * marginPt;
   const contentHeightPt = pageHeightPt - 2 * marginPt;
 
-  const canvas = await toCanvas(containerNode, { pixelRatio: 2, backgroundColor: '#ffffff', skipFonts: true });
+  const canvas = await exportCanvas(containerNode, { pixelRatio: 2, backgroundColor: '#ffffff' });
   const containerRect = containerNode.getBoundingClientRect();
   const scale = canvas.width / containerRect.width; // matches pixelRatio, derived rather than assumed
   const ptPerCanvasPx = contentWidthPt / canvas.width;
