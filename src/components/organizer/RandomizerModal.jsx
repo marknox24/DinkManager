@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { toPng } from 'html-to-image';
 import { Crown, Download, Loader2, PartyPopper, Radio, Shuffle, Sparkles, Trophy, Users, Zap } from 'lucide-react';
 import Modal from '../ui/Modal';
 import { inputClass } from '../ui/FormField';
 import { useToast } from '../../context/ToastContext';
 import { drawBrackets, drawTimings, flattenDrawOrder, suggestBracketCount } from '../../utils/randomizer';
+import { exportPng } from '../../utils/exportImage';
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -139,12 +139,7 @@ export default function RandomizerModal({ category, registrations, hasExistingBr
     if (!resultRef.current) return;
     setDownloading(true);
     try {
-      // skipFonts avoids html-to-image trying to read cssRules off the
-      // Google Fonts <link> stylesheet, which throws a CORS SecurityError
-      // in every browser since that stylesheet isn't same-origin — the
-      // capture still succeeds either way, this just keeps it silent and
-      // falls back to a system font instead of Space Grotesk in the PNG.
-      const dataUrl = await toPng(resultRef.current, { backgroundColor: '#ffffff', pixelRatio: 2, skipFonts: true });
+      const dataUrl = await exportPng(resultRef.current, { backgroundColor: '#ffffff', pixelRatio: 2 });
       const link = document.createElement('a');
       const slug = category.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '') || 'brackets';
       link.download = `${slug}-brackets.png`;

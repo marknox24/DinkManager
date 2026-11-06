@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { toPng, toCanvas } from 'html-to-image';
 import { ChevronLeft, ChevronRight, Crown, Download, FileText, Image as ImageIcon, Loader2 } from 'lucide-react';
 import Modal from '../ui/Modal';
 import Select from '../ui/Select';
 import { useToast } from '../../context/ToastContext';
 import { downloadPagesAsPdf } from '../../utils/pdf';
+import { exportCanvas, exportPng } from '../../utils/exportImage';
 import { listBracketsForCategory, listTeamsForCategory } from '../../data/bracketsApi';
 
 function teamName(t) {
@@ -110,7 +110,7 @@ export default function DownloadBracketsListModal({ event, categories, activeCat
     if (!paperRef.current || currentPageBrackets.length === 0) return;
     setDownloading('png');
     try {
-      const dataUrl = await toPng(paperRef.current, { pixelRatio: 2, skipFonts: true });
+      const dataUrl = await exportPng(paperRef.current, { pixelRatio: 2 });
       const link = document.createElement('a');
       link.download = `${filenameBase(`Brackets_Page${pageIndex + 1}`)}.png`;
       link.href = dataUrl;
@@ -131,7 +131,7 @@ export default function DownloadBracketsListModal({ event, categories, activeCat
       for (let i = 0; i < pages.length; i++) {
         setPageIndex(i);
         await waitForPaint();
-        canvases.push(await toCanvas(paperRef.current, { pixelRatio: 2, skipFonts: true }));
+        canvases.push(await exportCanvas(paperRef.current, { pixelRatio: 2 }));
       }
       await downloadPagesAsPdf(canvases, `${filenameBase('Brackets')}.pdf`);
     } catch (e) {
@@ -233,13 +233,13 @@ export default function DownloadBracketsListModal({ event, categories, activeCat
             {/* eyebrow pill + page indicator */}
             <div className="flex items-center justify-between">
               <span
-                className="inline-flex items-center rounded-full bg-white px-3.5 py-2 text-[11px] font-extrabold uppercase tracking-widest"
+                className="inline-flex items-center whitespace-nowrap rounded-full bg-white px-3.5 py-2 text-[11px] font-extrabold uppercase tracking-widest"
                 style={{ color: theme.pillText }}
               >
                 Brackets List
               </span>
               {pages.length > 1 && (
-                <span className="text-[11px] font-bold uppercase tracking-wide" style={{ color: theme.soft }}>
+                <span className="whitespace-nowrap text-[11px] font-bold uppercase tracking-wide" style={{ color: theme.soft }}>
                   Page {pageIndex + 1} of {pages.length}
                 </span>
               )}
@@ -269,7 +269,7 @@ export default function DownloadBracketsListModal({ event, categories, activeCat
                   const accent = SECTION_ACCENTS[sectionIdx % SECTION_ACCENTS.length];
                   return (
                     <div key={b.id} className={sectionIdx > 0 ? 'flex flex-col border-t border-ink-100 pt-6' : 'flex flex-col'}>
-                      <div className="mb-3.5 flex items-center justify-between">
+                      <div className="mb-3.5 flex items-center justify-between gap-3">
                         <div className="flex items-center gap-2.5">
                           <span
                             className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px]"
@@ -279,7 +279,7 @@ export default function DownloadBracketsListModal({ event, categories, activeCat
                           </span>
                           <span className="font-display text-lg font-bold tracking-tight text-ink-900">Bracket {b.letter}</span>
                         </div>
-                        <span className="rounded-full bg-ink-50 px-3 py-1 text-xs font-bold text-ink-500">
+                        <span className="shrink-0 whitespace-nowrap rounded-full bg-ink-50 px-3 py-1 text-xs font-bold text-ink-500">
                           {teams.length} {teams.length === 1 ? 'team' : 'teams'}
                         </span>
                       </div>
@@ -291,14 +291,14 @@ export default function DownloadBracketsListModal({ event, categories, activeCat
                             className={`flex items-center justify-between gap-3 py-3 ${i < teams.length - 1 ? 'border-b border-ink-100' : ''}`}
                           >
                             <div className="flex min-w-0 flex-col gap-0.5">
-                              <span className="truncate text-[15px] font-bold text-ink-900">{teamName(t)}</span>
-                              <span className={`text-xs ${t.club_name ? 'text-ink-500' : 'text-ink-300'}`}>{t.club_name || 'No club listed'}</span>
+                              <span className="break-words text-[15px] font-bold text-ink-900">{teamName(t)}</span>
+                              <span className={`break-words text-xs ${t.club_name ? 'text-ink-500' : 'text-ink-300'}`}>{t.club_name || 'No club listed'}</span>
                             </div>
                             <span
                               className="shrink-0 whitespace-nowrap rounded-full px-3.5 py-1.5 text-xs font-bold"
                               style={{ background: accent.pillBg, color: accent.pillText }}
                             >
-                              Seed {i + 1}
+                              {t.player2_name ? 'Pair' : 'Player'} {i + 1}
                             </span>
                           </div>
                         ))}
