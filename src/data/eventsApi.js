@@ -652,6 +652,13 @@ export async function deleteUmpire(umpireId) {
   if (error) throw error;
 }
 
+// Games officiated per umpire name (see UMPIRE ROTATION in schema.sql).
+export async function getUmpireWorkload(eventId) {
+  const { data, error } = await supabase.rpc('event_umpire_workload', { p_event_id: eventId });
+  if (error) throw error;
+  return data;
+}
+
 // ---------------------------------------------------------------------------
 // ACTIVITY LOG
 // ---------------------------------------------------------------------------

@@ -1,13 +1,16 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Trophy } from 'lucide-react';
 import Modal from '../ui/Modal';
 import FormField, { inputClass } from '../ui/FormField';
-import Select from '../ui/Select';
+import UmpirePicker from './UmpirePicker';
 import { useToast } from '../../context/ToastContext';
 import { resultTag, teamLabel } from '../../utils/match';
 import { matchLevelLabel } from '../../data/playoffApi';
 
-export default function LogScoreModal({ match, categoryName, umpires, onSave, onClose }) {
+// Editing a result also offers Clear result, for a score logged by mistake:
+// a result needs a winner, so Edit score can't take a match back to 0-0.
+// `clearLockReason` explains why clearing isn't possible, when it isn't.
+export default function LogScoreModal({ match, categoryName, umpires, workload, onSave, onClear, clearLockReason, onClose }) {
   const { pushToast } = useToast();
   const isEditing = match.status === 'completed';
   const isForfeit = isEditing && Boolean(resultTag(match.result_type));
@@ -15,6 +18,15 @@ export default function LogScoreModal({ match, categoryName, umpires, onSave, on
   const [scoreB, setScoreB] = useState(isEditing ? String(match.score_b) : '0');
   const [umpireName, setUmpireName] = useState(match.umpire_name || '');
   const [saving, setSaving] = useState(false);
+  // Keeps an umpire who has since been removed from the pool choosable, so
+  // editing their old match doesn't silently drop who officiated it.
+  const choices = useMemo(
+    () =>
+      match.umpire_name && !umpires.some((u) => u.name === match.umpire_name)
+        ? [...umpires, { id: `removed:${match.umpire_name}`, name: match.umpire_name, removed: true }]
+        : umpires,
+    [umpires, match.umpire_name]
+  );
 
   const handleSave = async () => {
     const sA = parseInt(scoreA, 10);
@@ -24,7 +36,7 @@ export default function LogScoreModal({ match, categoryName, umpires, onSave, on
       return;
     }
     if (sA === sB) {
-      pushToast('Ties are not allowed', 'error');
+      pushToast(isEditing && sA === 0 ? 'To undo a score logged by mistake, use Clear result' : 'Ties are not allowed', 'error');
       return;
     }
     if (!umpireName) {
@@ -70,32 +82,38 @@ export default function LogScoreModal({ match, categoryName, umpires, onSave, on
           </FormField>
         </div>
 
-        <FormField label="Umpire">
-          {umpires.length === 0 ? (
+        {/* Whoever is picked here is credited with the game on the Umpires
+            page, so this is also where a replacement umpire gets recorded.
+            No recommendation: this records who did officiate, not who
+            should. */}
+        {choices.length === 0 ? (
+          <FormField label="Umpire who officiated">
             <p className="rounded-xl bg-rose-50 px-3 py-2.5 text-xs font-semibold text-rose-600">
               No umpires added yet. Add one from the Umpires page first.
             </p>
-          ) : (
-            <Select value={umpireName} onChange={(e) => setUmpireName(e.target.value)} className={inputClass}>
-              <option value="" disabled>
-                Select umpire
-              </option>
-              {umpires.map((u) => (
-                <option key={u.id} value={u.name}>
-                  {u.name}
-                </option>
-              ))}
-            </Select>
-          )}
-        </FormField>
+          </FormField>
+        ) : (
+          <UmpirePicker label="Umpire who officiated" umpires={choices} workload={workload} value={umpireName} onChange={setUmpireName} />
+        )}
 
-        <div className="mt-1 flex justify-end gap-2.5">
+        {isEditing && clearLockReason && <p className="rounded-xl bg-ink-50 px-3 py-2 text-xs text-ink-500">Can't clear this result: {clearLockReason}</p>}
+
+        <div className="mt-1 flex items-center justify-end gap-2.5">
+          {isEditing && !clearLockReason && (
+            <button
+              onClick={() => onClear(match)}
+              disabled={saving}
+              className="mr-auto rounded-full px-3 py-2 text-sm font-semibold text-rose-600 transition hover:bg-rose-50 disabled:opacity-60"
+            >
+              Clear result
+            </button>
+          )}
           <button onClick={onClose} className="rounded-full px-4 py-2 text-sm font-semibold text-ink-600 transition hover:bg-ink-100">
             Cancel
           </button>
           <button
             onClick={handleSave}
-            disabled={saving || umpires.length === 0}
+            disabled={saving || choices.length === 0}
             className="rounded-full bg-brand-600 px-5 py-2 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700 disabled:opacity-60"
           >
             {saving ? 'Saving…' : isEditing ? 'Update result' : 'Save result'}

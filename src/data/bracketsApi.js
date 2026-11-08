@@ -414,6 +414,20 @@ export async function cancelLiveMatch(matchId, opts) {
   return unwrapSyncResult(data);
 }
 
+// Puts a completed match back to scheduled, for a score logged by mistake.
+// See sync_clear_result in schema.sql for when the server refuses.
+export async function clearMatchResult(matchId, opts) {
+  const { operationId, clientTs, deviceId } = newOperation(opts);
+  const { data, error } = await supabase.rpc('sync_clear_result', {
+    p_operation_id: operationId,
+    p_device_id: deviceId,
+    p_match_id: matchId,
+    p_client_ts: clientTs,
+  });
+  if (error) throw error;
+  return unwrapSyncResult(data);
+}
+
 export async function finishMatch(matchId, { score_a, score_b, winner_team_id, duration_minutes }, opts) {
   const { operationId, clientTs, deviceId } = newOperation(opts);
   const { data, error } = await supabase.rpc('sync_finish_match', {
@@ -1036,7 +1050,7 @@ export async function listMatchChangeRows(categoryIds) {
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await supabase
       .from('matches')
-      .select('id, status, score_a, score_b, court, winner_team_id, result_type, running_since, bracket:bracket_id!inner(category_id)')
+      .select('id, status, score_a, score_b, court, winner_team_id, result_type, running_since, umpire_name, finished_at, bracket:bracket_id!inner(category_id)')
       .in('bracket.category_id', categoryIds)
       .order('id')
       .range(from, from + PAGE - 1);

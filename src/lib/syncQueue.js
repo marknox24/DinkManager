@@ -1,7 +1,7 @@
 import { getAllByIndex, getAllRecords, putRecord, deleteRecord } from './offlineDb';
 import { isOnline, onConnectivityChange } from './connectivity';
 import { supabase } from './supabaseClient';
-import { startScheduledMatch, recordScheduledMatchResult, pauseMatch, resumeMatch, cancelLiveMatch, finishMatch, deleteMatch } from '../data/bracketsApi';
+import { startScheduledMatch, recordScheduledMatchResult, clearMatchResult, pauseMatch, resumeMatch, cancelLiveMatch, finishMatch, deleteMatch } from '../data/bracketsApi';
 
 // One entry per Match List write action — see bracketsApi.js's sync_* RPC
 // wrappers, which these call identically whether flushing immediately or
@@ -9,6 +9,7 @@ import { startScheduledMatch, recordScheduledMatchResult, pauseMatch, resumeMatc
 const ACTIONS = {
   start: (matchId, payload, opts) => startScheduledMatch(matchId, payload, opts),
   log_score: (matchId, payload, opts) => recordScheduledMatchResult(matchId, payload, opts),
+  clear_result: (matchId, _payload, opts) => clearMatchResult(matchId, opts),
   pause: (matchId, payload, opts) => pauseMatch(matchId, payload.accumulated_seconds, opts),
   resume: (matchId, _payload, opts) => resumeMatch(matchId, opts),
   cancel: (matchId, _payload, opts) => cancelLiveMatch(matchId, opts),

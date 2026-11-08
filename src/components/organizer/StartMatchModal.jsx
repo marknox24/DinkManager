@@ -6,12 +6,15 @@ import Select from '../ui/Select';
 import { useToast } from '../../context/ToastContext';
 import { teamLabel } from '../../utils/match';
 import { matchLevelLabel } from '../../data/playoffApi';
+import UmpirePicker from './UmpirePicker';
 
 // Court and umpire are required before a match can go live — keeps every
 // live match tied to a real court/official and never over the venue's
 // configured court count. Both lists already exclude anything in use by
 // another live match (courts already occupied, umpires already officiating).
-export default function StartMatchModal({ match, categoryName, availableCourts, availableUmpires, onStart, onClose }) {
+// The umpire list marks a recommendation (see UmpirePicker) but picks
+// nobody: the organizer may know who's on a break.
+export default function StartMatchModal({ match, categoryName, availableCourts, availableUmpires, workload, onStart, onClose }) {
   const { pushToast } = useToast();
   const [court, setCourt] = useState('');
   const [umpireName, setUmpireName] = useState('');
@@ -26,6 +29,13 @@ export default function StartMatchModal({ match, categoryName, availableCourts, 
     }
     if (!umpireName) {
       pushToast('Select an umpire', 'error');
+      return;
+    }
+    // Another organizer can start a match with this umpire while the window
+    // is open. The server only guards courts, so catch it here.
+    if (!availableUmpires.some((u) => u.name === umpireName)) {
+      pushToast(`${umpireName} just started another match. Pick another umpire.`, 'error');
+      setUmpireName('');
       return;
     }
     setStarting(true);
@@ -61,7 +71,7 @@ export default function StartMatchModal({ match, categoryName, availableCourts, 
             No umpires available. Add one from the Umpires page, or wait for one to free up from a live match.
           </p>
         ) : (
-          <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col gap-4">
             <FormField label="Court">
               <Select value={court} onChange={(e) => setCourt(e.target.value)} className={inputClass} autoFocus>
                 <option value="" disabled>
@@ -74,18 +84,7 @@ export default function StartMatchModal({ match, categoryName, availableCourts, 
                 ))}
               </Select>
             </FormField>
-            <FormField label="Umpire">
-              <Select value={umpireName} onChange={(e) => setUmpireName(e.target.value)} className={inputClass}>
-                <option value="" disabled>
-                  Select umpire
-                </option>
-                {availableUmpires.map((u) => (
-                  <option key={u.id} value={u.name}>
-                    {u.name}
-                  </option>
-                ))}
-              </Select>
-            </FormField>
+            <UmpirePicker umpires={availableUmpires} workload={workload} value={umpireName} onChange={setUmpireName} recommend />
           </div>
         )}
 

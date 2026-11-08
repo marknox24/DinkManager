@@ -25,6 +25,17 @@ export function hasDependentMatch(match, matches) {
   );
 }
 
+// Why a completed match's result can't be cleared, or null if it can. The
+// same refusals as sync_clear_result in schema.sql, so the Clear result
+// button explains itself instead of failing. `knockout` is a playoff stage or
+// a Single Elimination category, where later rounds are drawn from results.
+export function clearBlockedReason(match, matches, knockout) {
+  if (match.auto_forfeit_team_id) return 'This forfeit came from a withdrawal. Reinstate the player on the Brackets page to undo it.';
+  if (knockout && hasDependentMatch(match, matches)) return 'A later round was already drawn from this result.';
+  if (!knockout && matches.some((o) => o.playoff_stage)) return 'Playoffs were already drawn from these pool results.';
+  return null;
+}
+
 // The score/winner columns for a forfeit won by `winnerTeamId`, or a double
 // forfeit when `winnerTeamId` is null.
 export function forfeitResult(teamAId, winnerTeamId) {
