@@ -184,7 +184,7 @@ export function planRoundRobin(brackets, teamsByBracket, isDouble, gamesByBracke
   return rows;
 }
 
-function nextPowerOfTwo(n) {
+export function nextPowerOfTwo(n) {
   let size = 1;
   while (size < n) size *= 2;
   return size;

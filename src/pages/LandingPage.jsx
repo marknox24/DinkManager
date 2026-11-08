@@ -10,6 +10,7 @@ import ForPlayers from '../components/marketing/ForPlayers';
 import Community from '../components/marketing/Community';
 import SportsExpansion from '../components/marketing/SportsExpansion';
 import TournamentFlow from '../components/marketing/TournamentFlow';
+import TournamentTimeCalculator from '../components/marketing/TournamentTimeCalculator';
 import Testimonials from '../components/marketing/Testimonials';
 import FeatureGrid from '../components/marketing/FeatureGrid';
 import Pricing from '../components/marketing/Pricing';
@@ -34,6 +35,7 @@ export default function LandingPage() {
       <Community />
       <SportsExpansion />
       <TournamentFlow />
+      <TournamentTimeCalculator />
       <Testimonials />
       <FeatureGrid />
       <Pricing />

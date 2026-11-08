@@ -7,6 +7,7 @@ import Logo from '../ui/Logo';
 
 const LINKS = [
   { label: 'Features', href: '#product' },
+  { label: 'Tournament Calculator', href: '#calculator' },
   { label: 'For Organizers', href: '#organizers' },
   { label: 'For Players', href: '#players' },
   { label: 'Pricing', href: '#pricing' },

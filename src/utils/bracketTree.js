@@ -22,7 +22,7 @@ export function bracketTreeApplies(category) {
   return category.format === 'Single Elimination' || Boolean(category.playoff_enabled);
 }
 
-function stageLabel(roundIndex, totalRounds) {
+export function stageLabel(roundIndex, totalRounds) {
   const fromEnd = totalRounds - roundIndex;
   if (fromEnd <= 0) return 'Final';
   if (fromEnd === 1) return 'Semi-Final';
@@ -69,7 +69,7 @@ function matchNode({ key, matchCode, m, placeholderA, placeholderB }) {
 // aren't attributed to a specific team (Round 1 bye-team identity isn't
 // recoverable from match rows alone, since a bye produces no row) — a
 // known, documented simplification, not an attempt at full accuracy.
-function projectShape(enteringSlots, startRound) {
+export function projectShape(enteringSlots, startRound) {
   const rounds = [];
   let slots = enteringSlots;
   let round = startRound;
