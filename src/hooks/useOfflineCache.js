@@ -1,3 +1,4 @@
+import { workloadFromMatches } from '../utils/umpireRotation';
 import { getOfflineDb, getAllByIndex, getMeta, getRecord, putAll, putRecord, replaceByIndex, setMeta, deleteMetaByPrefix } from '../lib/offlineDb';
 
 // Mirrors of Match List's read queries into IndexedDB, plus their cache-only
@@ -103,4 +104,9 @@ export function getCachedMatchesForCategory(categoryId) {
 export async function getCachedLiveMatchesForEvent(eventId) {
   const matches = await getAllByIndex('matches', 'by_event', eventId);
   return matches.filter((m) => m.status === 'in_progress');
+}
+// Counted from whatever this device has cached, including results it saved
+// offline, so it can lag behind another organizer's games.
+export async function getCachedUmpireWorkload(eventId) {
+  return workloadFromMatches(await getAllByIndex('matches', 'by_event', eventId));
 }

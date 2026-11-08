@@ -11,6 +11,8 @@ const CHECK_MS = 10000;
 // the fingerprint moved, so an idle screen costs one query per check rather
 // than a full reload. `paused` is for while this device has its own writes
 // queued: reloading then would overwrite them with the older server state.
+// onChange gets the rows just read, so anything they cover (umpire counts,
+// who's on court) can be worked out from them without another query.
 export function useOrganizerLiveSync({ categoryIds, paused, onChange }) {
   const onChangeRef = useRef(onChange);
   const pausedRef = useRef(paused);
@@ -31,10 +33,11 @@ export function useOrganizerLiveSync({ categoryIds, paused, onChange }) {
       if (inFlight || pausedRef.current || !isOnline() || document.visibilityState === 'hidden') return;
       inFlight = true;
       try {
-        const signature = matchChangeSignature(await listMatchChangeRows(ids));
+        const rows = await listMatchChangeRows(ids);
+        const signature = matchChangeSignature(rows);
         const changed = lastSignature !== null && signature !== lastSignature;
         lastSignature = signature;
-        if (changed && !cancelled) await onChangeRef.current();
+        if (changed && !cancelled) await onChangeRef.current(rows);
       } catch {
         // A missed check is harmless: the next one catches up.
       } finally {

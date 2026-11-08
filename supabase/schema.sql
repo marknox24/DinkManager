@@ -767,9 +767,12 @@ begin
 end;
 $$;
 
+-- Only for writes to the columns it reads: an update that sets nothing else
+-- (an umpire rename, a timer pause) can't change the result, so it shouldn't
+-- reverse and reapply both teams' stats, or lock their rows to do it.
 drop trigger if exists on_match_recorded on matches;
 create trigger on_match_recorded
-  after insert or update on matches
+  after insert or update of status, score_a, score_b, winner_team_id, team_a_id, team_b_id on matches
   for each row execute function apply_match_result();
 
 -- ----------------------------------------------------------------------------
@@ -1016,6 +1019,18 @@ $$;
 revoke all on function sync_cancel_match(uuid, uuid, uuid, timestamptz) from public, anon;
 grant execute on function sync_cancel_match(uuid, uuid, uuid, timestamptz) to authenticated;
 
+-- Why a finish, log_score or clear_result was refused as stale, given the
+-- newer operation that was kept instead.
+create or replace function stale_reason(p_newer_type text)
+returns text
+language sql
+immutable
+as $$
+  select case when p_newer_type = 'clear_result'
+    then 'This result was cleared on another device after it was saved here.'
+    else 'A newer result from another device was kept' end
+$$;
+
 -- Completes a live match with a final score. Mirrors finishMatch's write.
 -- Same newer-wins conflict handling as sync_log_score above, since both
 -- write a match's completed result and either can race the other across
@@ -1033,6 +1048,7 @@ declare
   v_row_count int;
   v_match matches;
   v_last_client_ts timestamptz;
+  v_last_type text;
 begin
   insert into sync_operations (operation_id, device_id, match_id, operation_type, client_ts)
   values (p_operation_id, p_device_id, p_match_id, 'finish', p_client_ts)
@@ -1052,13 +1068,15 @@ begin
   -- and the newest one wins, whichever request happened to arrive last.
   perform 1 from matches where id = p_match_id for update;
 
-  select max(client_ts) into v_last_client_ts
+  select client_ts, operation_type into v_last_client_ts, v_last_type
   from sync_operations
-  where match_id = p_match_id and operation_type in ('finish', 'log_score') and operation_id <> p_operation_id;
+  where match_id = p_match_id and operation_type in ('finish', 'log_score', 'clear_result') and operation_id <> p_operation_id
+  order by client_ts desc
+  limit 1;
 
   if v_last_client_ts is not null and v_last_client_ts > p_client_ts then
     select * into v_match from matches where id = p_match_id;
-    return jsonb_build_object('status', 'rejected_stale', 'match', to_jsonb(v_match), 'reason', 'A newer result from another device was kept');
+    return jsonb_build_object('status', 'rejected_stale', 'match', to_jsonb(v_match), 'reason', stale_reason(v_last_type));
   end if;
 
   update matches
@@ -3907,6 +3925,7 @@ declare
   v_row_count int;
   v_match matches;
   v_last_client_ts timestamptz;
+  v_last_type text;
   v_score_a integer := p_score_a;
   v_score_b integer := p_score_b;
   v_winner uuid := p_winner_team_id;
@@ -3929,13 +3948,15 @@ begin
   -- and the newest one wins, whichever request happened to arrive last.
   perform 1 from matches where id = p_match_id for update;
 
-  select max(client_ts) into v_last_client_ts
+  select client_ts, operation_type into v_last_client_ts, v_last_type
   from sync_operations
-  where match_id = p_match_id and operation_type in ('finish', 'log_score') and operation_id <> p_operation_id;
+  where match_id = p_match_id and operation_type in ('finish', 'log_score', 'clear_result') and operation_id <> p_operation_id
+  order by client_ts desc
+  limit 1;
 
   if v_last_client_ts is not null and v_last_client_ts > p_client_ts then
     select * into v_match from matches where id = p_match_id;
-    return jsonb_build_object('status', 'rejected_stale', 'match', to_jsonb(v_match), 'reason', 'A newer result from another device was kept');
+    return jsonb_build_object('status', 'rejected_stale', 'match', to_jsonb(v_match), 'reason', stale_reason(v_last_type));
   end if;
 
   select * into v_match from matches where id = p_match_id;
@@ -4144,3 +4165,160 @@ end;
 $$;
 revoke all on function reinstate_team(uuid) from public, anon;
 grant execute on function reinstate_team(uuid) to authenticated;
+
+-- ----------------------------------------------------------------------------
+-- UMPIRE ROTATION
+-- ----------------------------------------------------------------------------
+-- How many games each umpire has officiated, counted from the matches every
+-- time rather than kept in a counter: a reopened match, an edited result or a
+-- replacement umpire then needs nothing undone. A game counts once it's
+-- completed and was actually played, credited to the umpire on the match at
+-- that point. Forfeits keep the starting umpire's name but nobody officiated
+-- a game, so they don't count. Mirrored by workloadFromMatches in
+-- src/utils/umpireRotation.js, which the Match List uses offline.
+create or replace function event_umpire_workload(p_event_id uuid)
+returns table (umpire_name text, completed_count integer, last_finished_at timestamptz)
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select m.umpire_name, count(*)::integer, max(m.finished_at)
+  from matches m
+  join brackets b on b.id = m.bracket_id
+  join categories c on c.id = b.category_id
+  where c.event_id = p_event_id
+    and m.status = 'completed'
+    and m.result_type = 'played'
+    and m.umpire_name is not null
+  group by m.umpire_name
+$$;
+revoke all on function event_umpire_workload(uuid) from public, anon;
+grant execute on function event_umpire_workload(uuid) to authenticated;
+
+-- Matches store the umpire's name, so renaming an umpire carries their games
+-- over to the new name instead of leaving them under one nobody has any more.
+create or replace function rename_umpire_on_matches()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update matches m
+  set umpire_name = new.name
+  from brackets b
+  join categories c on c.id = b.category_id
+  where b.id = m.bracket_id
+    and c.event_id = new.event_id
+    and m.umpire_name = old.name;
+  return new;
+end;
+$$;
+
+drop trigger if exists umpires_rename_matches on umpires;
+create trigger umpires_rename_matches
+  after update of name on umpires
+  for each row
+  when (old.name is distinct from new.name)
+  execute function rename_umpire_on_matches();
+
+-- ----------------------------------------------------------------------------
+-- CLEAR A RESULT
+-- ----------------------------------------------------------------------------
+-- Undoes a score logged by mistake: the match goes back to scheduled as if it
+-- had never been played, and apply_match_result() takes the result back out of
+-- both teams' standings. Edit score can't do this, since a result needs a
+-- winner.
+--
+-- Takes part in the same newer-wins handling as sync_finish_match and
+-- sync_log_score: an older result replayed from an offline device can't bring
+-- back a match that was cleared after it, and an older clear can't wipe a
+-- newer result.
+--
+-- Refused when something was already built on this result:
+-- - a later knockout round drawn from it (Single Elimination or a playoff
+--   stage);
+-- - playoffs drawn from the pool it belongs to;
+-- - a forfeit created by a withdrawal, which reinstate_team undoes instead.
+create or replace function sync_clear_result(
+  p_operation_id uuid, p_device_id uuid, p_match_id uuid, p_client_ts timestamptz
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_row_count int;
+  v_match matches;
+  v_bracket brackets;
+  v_format text;
+  v_last_client_ts timestamptz;
+  v_last_type text;
+  v_reason text;
+begin
+  insert into sync_operations (operation_id, device_id, match_id, operation_type, client_ts)
+  values (p_operation_id, p_device_id, p_match_id, 'clear_result', p_client_ts)
+  on conflict (operation_id) do nothing;
+  get diagnostics v_row_count = row_count;
+  if v_row_count = 0 then
+    select * into v_match from matches where id = p_match_id;
+    return jsonb_build_object('status', 'noop_replay', 'match', to_jsonb(v_match));
+  end if;
+
+  if not can_edit_match(p_match_id) then
+    raise exception 'not authorized to edit this match';
+  end if;
+
+  select * into v_match from matches where id = p_match_id for update;
+
+  select client_ts, operation_type into v_last_client_ts, v_last_type
+  from sync_operations
+  where match_id = p_match_id and operation_type in ('finish', 'log_score', 'clear_result') and operation_id <> p_operation_id
+  order by client_ts desc
+  limit 1;
+
+  if v_last_client_ts is not null and v_last_client_ts > p_client_ts then
+    return jsonb_build_object('status', 'rejected_stale', 'match', to_jsonb(v_match), 'reason', stale_reason(v_last_type));
+  end if;
+
+  select * into v_bracket from brackets where id = v_match.bracket_id;
+  select format into v_format from categories where id = v_bracket.category_id;
+
+  if v_match.status <> 'completed' then
+    v_reason := 'This match has no result to clear.';
+  elsif v_match.auto_forfeit_team_id is not null then
+    v_reason := 'This forfeit came from a withdrawal. Reinstate the player on the Brackets page to undo it.';
+  elsif (v_bracket.kind = 'playoff' or v_format ilike '%single elimination%')
+    and exists (
+      select 1 from matches o
+      where o.bracket_id = v_match.bracket_id and o.id <> v_match.id
+        and coalesce(o.round_number, 0) > coalesce(v_match.round_number, 0)
+        and (o.team_a_id in (v_match.team_a_id, v_match.team_b_id) or o.team_b_id in (v_match.team_a_id, v_match.team_b_id))
+    ) then
+    v_reason := 'A later round was already drawn from this result.';
+  elsif v_bracket.kind = 'pool' and v_format not ilike '%single elimination%'
+    and exists (
+      select 1 from matches o join brackets ob on ob.id = o.bracket_id
+      where ob.category_id = v_bracket.category_id and ob.kind = 'playoff'
+    ) then
+    v_reason := 'Playoffs were already drawn from these pool results.';
+  end if;
+
+  if v_reason is not null then
+    return jsonb_build_object('status', 'rejected_invalid_state', 'match', to_jsonb(v_match), 'reason', v_reason);
+  end if;
+
+  update matches
+  set status = 'scheduled', result_type = 'played', auto_forfeit_team_id = null,
+      score_a = null, score_b = null, winner_team_id = null, finished_at = null, duration_minutes = null,
+      court = null, umpire_name = null, started_at = null, running_since = null, accumulated_seconds = 0
+  where id = p_match_id
+  returning * into v_match;
+
+  return jsonb_build_object('status', 'applied', 'match', to_jsonb(v_match));
+end;
+$$;
+revoke all on function sync_clear_result(uuid, uuid, uuid, timestamptz) from public, anon;
+grant execute on function sync_clear_result(uuid, uuid, uuid, timestamptz) to authenticated;

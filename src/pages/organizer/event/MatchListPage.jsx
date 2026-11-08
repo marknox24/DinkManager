@@ -1,7 +1,7 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { ChevronDown, FileText, Flag, Lock, ListOrdered, Pencil, Printer, Radio, Sparkles, Timer, Trash2, Trophy } from 'lucide-react';
-import { listCategories, listUmpires } from '../../../data/eventsApi';
+import { getUmpireWorkload, listCategories, listUmpires } from '../../../data/eventsApi';
 import {
   generateRoundRobinMatchList,
   generateSingleEliminationRound1,
@@ -40,6 +40,7 @@ import {
   getCachedBrackets,
   getCachedMatchesForCategory,
   getCachedLiveMatchesForEvent,
+  getCachedUmpireWorkload,
 } from '../../../hooks/useOfflineCache';
 
 // Lazy: both pull in jspdf/html-to-image via utils/pdf.js's
@@ -53,7 +54,8 @@ import { useOrganizerLiveSync } from '../../../hooks/useOrganizerLiveSync';
 import { isPermanentRejection } from '../../../lib/syncQueue';
 import { usableCourts } from '../../../utils/courts';
 import { formatDuration } from '../../../utils/format';
-import { forfeitResult, hasDependentMatch } from '../../../utils/forfeit';
+import { clearBlockedReason, forfeitResult, hasDependentMatch } from '../../../utils/forfeit';
+import { workloadFromMatches } from '../../../utils/umpireRotation';
 import { liveElapsedSeconds, matchResultLabel, resultTag, teamLabel } from '../../../utils/match';
 
 // Match-template formats ("RR:Custom Match 1") are generated through the same
@@ -82,6 +84,8 @@ export default function MatchListPage() {
   const [brackets, setBrackets] = useState([]);
   const [matches, setMatches] = useState([]);
   const [liveMatches, setLiveMatches] = useState([]);
+  // Games officiated per umpire, for the Start match list; null if unknown.
+  const [umpireWorkload, setUmpireWorkload] = useState(null);
   const [bracketProgress, setBracketProgress] = useState([]);
   const [playoffStatus, setPlayoffStatus] = useState([]);
   const [loadingMatches, setLoadingMatches] = useState(false);
@@ -147,6 +151,20 @@ export default function MatchListPage() {
     loadLiveMatches();
   }, [loadLiveMatches]);
 
+  // Event-wide like live matches. Offline it's counted from this device's
+  // cached matches, which include the results it saved while offline.
+  const loadUmpireWorkload = useCallback(async () => {
+    const { data, source } = await readWithFallback({
+      live: () => getUmpireWorkload(eventId),
+      readCache: () => getCachedUmpireWorkload(eventId),
+    });
+    setUmpireWorkload(source === 'none' ? null : data || []);
+  }, [eventId]);
+
+  useEffect(() => {
+    loadUmpireWorkload();
+  }, [loadUmpireWorkload]);
+
   const activeCategory = categories[activeCatIdx];
 
   const reloadCategoryData = useCallback(async ({ silent = false } = {}) => {
@@ -189,6 +207,7 @@ export default function MatchListPage() {
     if (!reconnectToken) return;
     loadCategoriesAndUmpires();
     loadLiveMatches();
+    loadUmpireWorkload();
     reloadCategoryData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reconnectToken]);
@@ -243,7 +262,12 @@ export default function MatchListPage() {
   useOrganizerLiveSync({
     categoryIds: categories.map((c) => c.id),
     paused: forcedOffline || pendingCount > 0,
-    onChange: () => Promise.all([reloadCategoryData({ silent: true }), loadLiveMatches(), loadBracketProgress(), loadPlayoffStatus()]),
+    // The rows cover every match in the event, so the umpire counts come
+    // from them rather than another query per organizer per change.
+    onChange: (rows) => {
+      setUmpireWorkload(workloadFromMatches(rows));
+      return Promise.all([reloadCategoryData({ silent: true }), loadLiveMatches(), loadBracketProgress(), loadPlayoffStatus()]);
+    },
   });
 
   // A match can only go live if a court is free — capped by the event's
@@ -382,7 +406,7 @@ export default function MatchListPage() {
       setStartingMatch(null);
       setLoggingMatch(null);
       setForfeitingMatch(null);
-      await Promise.all([reloadCategoryData({ silent: true }), loadLiveMatches(), loadBracketProgress(), loadPlayoffStatus()]);
+      await Promise.all([reloadCategoryData({ silent: true }), loadLiveMatches(), loadUmpireWorkload(), loadBracketProgress(), loadPlayoffStatus()]);
       return undefined;
     }
   };
@@ -423,7 +447,43 @@ export default function MatchListPage() {
     });
     pushToast('Match recorded', 'success');
     setLoggingMatch(null);
-    await Promise.all([reloadCategoryData(), loadBracketProgress(), loadPlayoffStatus()]);
+    await Promise.all([reloadCategoryData(), loadUmpireWorkload(), loadBracketProgress(), loadPlayoffStatus()]);
+  });
+
+  // Queued like every other match write, so it works offline too.
+  const handleClearResult = withRejectionNotice(async (match) => {
+    if (blockIfLocked()) return;
+    const ok = await confirm({
+      title: 'Clear this result?',
+      confirmLabel: 'Clear result',
+      message: 'The match goes back to Scheduled as if it was never played, and both teams\' standings are updated.',
+    });
+    if (!ok) return;
+    await enqueueWrite({
+      matchId: match.id,
+      operationType: 'clear_result',
+      payload: {},
+      optimisticMatch: {
+        ...match,
+        status: 'scheduled',
+        result_type: 'played',
+        auto_forfeit_team_id: null,
+        score_a: null,
+        score_b: null,
+        winner_team_id: null,
+        finished_at: null,
+        duration_minutes: null,
+        court: null,
+        umpire_name: null,
+        started_at: null,
+        running_since: null,
+        accumulated_seconds: 0,
+        category_id: activeCategory?.id,
+      },
+    });
+    pushToast('Result cleared. The match is back to Scheduled.', 'success');
+    setLoggingMatch(null);
+    await Promise.all([reloadCategoryData(), loadUmpireWorkload(), loadBracketProgress(), loadPlayoffStatus()]);
   });
 
   // Goes through the same queued write as Log score, so it works offline.
@@ -447,7 +507,7 @@ export default function MatchListPage() {
     });
     pushToast('Forfeit recorded', 'success');
     setForfeitingMatch(null);
-    await Promise.all([reloadCategoryData(), loadLiveMatches(), loadBracketProgress(), loadPlayoffStatus()]);
+    await Promise.all([reloadCategoryData(), loadLiveMatches(), loadUmpireWorkload(), loadBracketProgress(), loadPlayoffStatus()]);
   });
 
   const handleRemove = withRejectionNotice(async (match) => {
@@ -523,7 +583,7 @@ export default function MatchListPage() {
       },
     });
     pushToast('Match recorded', 'success');
-    await Promise.all([reloadCategoryData(), loadLiveMatches(), loadBracketProgress(), loadPlayoffStatus()]);
+    await Promise.all([reloadCategoryData(), loadLiveMatches(), loadUmpireWorkload(), loadBracketProgress(), loadPlayoffStatus()]);
   });
 
   const forfeitIsLocked = (m) =>
@@ -864,7 +924,20 @@ export default function MatchListPage() {
         <ForfeitModal match={forfeitingMatch} categoryName={activeCategory?.name ?? forfeitingMatch.category_name} onSave={handleForfeit} onClose={() => setForfeitingMatch(null)} />
       )}
       {loggingMatch && (
-        <LogScoreModal match={loggingMatch} categoryName={activeCategory?.name} umpires={umpires} onSave={handleLogScore} onClose={() => setLoggingMatch(null)} />
+        <LogScoreModal
+          match={loggingMatch}
+          categoryName={activeCategory?.name}
+          umpires={umpires}
+          workload={umpireWorkload}
+          onSave={handleLogScore}
+          onClear={handleClearResult}
+          clearLockReason={
+            loggingMatch.status === 'completed'
+              ? clearBlockedReason(loggingMatch, matches, Boolean(loggingMatch.playoff_stage) || isSingleElimFormat(activeCategory?.format))
+              : null
+          }
+          onClose={() => setLoggingMatch(null)}
+        />
       )}
       {startingMatch && (
         <StartMatchModal
@@ -872,6 +945,7 @@ export default function MatchListPage() {
           categoryName={activeCategory?.name}
           availableCourts={availableCourts}
           availableUmpires={availableUmpires}
+          workload={umpireWorkload}
           onStart={handleConfirmStart}
           onClose={() => setStartingMatch(null)}
         />

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { FORFEIT_POINTS, forfeitResult, hasDependentMatch, isDoubleForfeit, matchIsDecided, resolveFixture } from './forfeit.js';
+import { FORFEIT_POINTS, clearBlockedReason, forfeitResult, hasDependentMatch, isDoubleForfeit, matchIsDecided, resolveFixture } from './forfeit.js';
 
 test('forfeitResult: the winner gets the forfeit score on their own side', () => {
   assert.deepEqual(forfeitResult('a', 'a'), { result_type: 'forfeit', score_a: FORFEIT_POINTS, score_b: 0, winner_team_id: 'a' });
@@ -86,4 +86,16 @@ test('resolveFixture: both sides out is a double forfeit with no winner', () => 
     assert.equal(r.score_a, 0);
     assert.equal(r.score_b, 0);
   }
+});
+
+test('clearBlockedReason: mirrors the refusals in sync_clear_result', () => {
+  const row = (id, round, a, b, extra = {}) => ({ id, bracket_id: 'B', round_number: round, team_a_id: a, team_b_id: b, ...extra });
+  const r1 = row('r1', 1, 'a', 'b', { status: 'completed' });
+  const r2 = row('r2', 2, 'a', 'c');
+  assert.equal(clearBlockedReason(r1, [r1], true), null);
+  assert.match(clearBlockedReason(r1, [r1, r2], true), /later round/);
+  // In a pool, later rounds share teams without depending on each other.
+  assert.equal(clearBlockedReason(r1, [r1, r2], false), null);
+  assert.match(clearBlockedReason(r1, [r1, row('qf', 7, 'a', 'd', { playoff_stage: 'quarterfinal' })], false), /Playoffs/);
+  assert.match(clearBlockedReason({ ...r1, auto_forfeit_team_id: 'b' }, [r1], false), /withdrawal/);
 });
