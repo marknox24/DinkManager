@@ -13,8 +13,16 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import FormField, { inputClass } from '../../components/ui/FormField';
 import ImageDropzone from '../../components/ui/ImageDropzone';
+import ProfileLinkField from '../../components/ui/ProfileLinkField';
 import QualificationPanel from '../../components/public/QualificationPanel';
 import { renderRichText } from '../../utils/richText';
+import { isValidProfileUrl, normalizeProfileUrl } from '../../utils/socialProfile';
+
+// Organizers use the link to look into a player's history, which they can't
+// do on a private profile.
+function profileHint(required) {
+  return `${required ? 'Required' : 'Optional'} — make sure the profile is set to Public so the organizer can view it.`;
+}
 
 export default function RegisterPage() {
   const { slug, token } = useParams();
@@ -42,6 +50,8 @@ export default function RegisterPage() {
   const [phone, setPhone] = useState('');
   const [clubName, setClubName] = useState('');
   const [address, setAddress] = useState('');
+  const [player1Profile, setPlayer1Profile] = useState('');
+  const [player2Profile, setPlayer2Profile] = useState('');
   const [customValues, setCustomValues] = useState({});
   const [uploadingField, setUploadingField] = useState(null);
   const [player1PhotoPath, setPlayer1PhotoPath] = useState(null);
@@ -87,13 +97,16 @@ export default function RegisterPage() {
 
   const selectedCategory = categories.find((c) => c.id === categoryId);
   const isDoubles = /doubles/i.test(selectedCategory?.match_type || '');
+  const profileRequired = Boolean(event?.require_social_profile);
 
   const canProceedFromStep = (i) => {
     if (steps[i] === 'Category') return !!categoryId;
     if (steps[i] === 'Your details') {
       const namesOk = isDoubles ? player1Name.trim() && player2Name.trim() : player1Name.trim();
       const photosOk = isDoubles ? !!player1PhotoPath && !!player2PhotoPath : !!player1PhotoPath;
-      return namesOk && /\S+@\S+\.\S+/.test(email) && !!phone.trim() && photosOk && termsAgreed;
+      const profiles = isDoubles ? [player1Profile, player2Profile] : [player1Profile];
+      const profilesOk = profiles.every((p) => isValidProfileUrl(p) && (!profileRequired || p.trim()));
+      return namesOk && /\S+@\S+\.\S+/.test(email) && !!phone.trim() && photosOk && profilesOk && termsAgreed;
     }
     if (steps[i] === 'More info') return fields.every((f) => !f.required || (customValues[f.id] && String(customValues[f.id]).trim()));
     if (steps[i] === 'Payment') return !!paymentProofPath;
@@ -177,6 +190,8 @@ export default function RegisterPage() {
         phone: phone.trim(),
         club_name: clubName.trim() || null,
         address: address.trim() || null,
+        player_social_url: normalizeProfileUrl(player1Profile),
+        player2_social_url: isDoubles ? normalizeProfileUrl(player2Profile) : null,
         custom_field_values: customValues,
         player_id: isPlayer ? user.id : null,
         photo_path: player1PhotoPath,
@@ -365,6 +380,22 @@ export default function RegisterPage() {
                 <FormField label="Player 2 name">
                   <input value={player2Name} onChange={(e) => setPlayer2Name(e.target.value)} className={inputClass} />
                 </FormField>
+              )}
+              <ProfileLinkField
+                label={isDoubles ? 'Player 1 Facebook or social media profile' : 'Facebook or social media profile'}
+                value={player1Profile}
+                onChange={setPlayer1Profile}
+                required={profileRequired}
+                hint={profileHint(profileRequired)}
+              />
+              {isDoubles && (
+                <ProfileLinkField
+                  label="Player 2 Facebook or social media profile"
+                  value={player2Profile}
+                  onChange={setPlayer2Profile}
+                  required={profileRequired}
+                  hint={profileHint(profileRequired)}
+                />
               )}
               {duplicateError && (
                 <div className="flex items-start gap-2 rounded-xl bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-rose-700">

@@ -54,6 +54,7 @@ import RegistrationFieldEditor from '../../components/organizer/RegistrationFiel
 import ContactsEditor from '../../components/organizer/ContactsEditor';
 import FormField, { inputClass, textareaClass } from '../../components/ui/FormField';
 import Select from '../../components/ui/Select';
+import Switch from '../../components/ui/Switch';
 import RequestDateChangeModal from '../../components/organizer/RequestDateChangeModal';
 import ContactAdminModal from '../../components/organizer/ContactAdminModal';
 import { formatDateRange } from '../../utils/format';
@@ -956,7 +957,17 @@ export default function EventEditorPage() {
 
           {step === 5 && (
             <>
-              <StepHeader title="Player registration questions" subtitle="Extra info players fill in after picking a category" />
+              <StepHeader title="Player registration" subtitle="What players fill in after picking a category" />
+              <div className="mb-6 flex items-center justify-between gap-4 rounded-xl bg-ink-50 px-4 py-3">
+                <div>
+                  <div className="text-sm font-semibold text-ink-800">Require a Facebook or social media profile</div>
+                  <div className="text-xs text-ink-500">
+                    Players must link a public profile for each player on the entry, so you can look into their history. When off, the link is optional.
+                  </div>
+                </div>
+                <Switch checked={!!event.require_social_profile} onChange={(on) => saveField({ require_social_profile: on })} />
+              </div>
+              <h3 className="mb-2 text-[11px] font-bold uppercase tracking-wide text-ink-500">Extra questions</h3>
               <div className="flex flex-col gap-2">
                 {fields.map((f) => (
                   <RegistrationFieldEditor key={f.id} field={f} onSave={saveRegField} onDelete={() => removeField(f)} />
