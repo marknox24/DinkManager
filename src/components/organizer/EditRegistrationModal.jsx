@@ -3,6 +3,8 @@ import { UserCog } from 'lucide-react';
 import Modal from '../ui/Modal';
 import FormField, { inputClass } from '../ui/FormField';
 import Select from '../ui/Select';
+import ProfileLinkField from '../ui/ProfileLinkField';
+import { isValidProfileUrl, normalizeProfileUrl } from '../../utils/socialProfile';
 
 function isDoublesFormat(matchType) {
   return /doubles/i.test(matchType || '');
@@ -16,6 +18,8 @@ export default function EditRegistrationModal({ registration, categories, onSave
   const [phone, setPhone] = useState(registration.phone || '');
   const [clubName, setClubName] = useState(registration.club_name || '');
   const [address, setAddress] = useState(registration.address || '');
+  const [profile1, setProfile1] = useState(registration.player_social_url || '');
+  const [profile2, setProfile2] = useState(registration.player2_social_url || '');
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -26,6 +30,8 @@ export default function EditRegistrationModal({ registration, categories, onSave
     setPhone(registration.phone || '');
     setClubName(registration.club_name || '');
     setAddress(registration.address || '');
+    setProfile1(registration.player_social_url || '');
+    setProfile2(registration.player2_social_url || '');
   }, [registration]);
 
   const selectedCategory = categories.find((c) => c.id === categoryId);
@@ -34,6 +40,7 @@ export default function EditRegistrationModal({ registration, categories, onSave
   const handleSave = async () => {
     if (!player1.trim()) return;
     if (isDoubles && !player2.trim()) return;
+    if (!canSave) return;
     setSaving(true);
     try {
       await onSave({
@@ -44,13 +51,15 @@ export default function EditRegistrationModal({ registration, categories, onSave
         phone: phone.trim() || null,
         club_name: clubName.trim() || null,
         address: address.trim() || null,
+        player_social_url: normalizeProfileUrl(profile1),
+        player2_social_url: isDoubles ? normalizeProfileUrl(profile2) : null,
       });
     } finally {
       setSaving(false);
     }
   };
 
-  const canSave = player1.trim() && (!isDoubles || player2.trim());
+  const canSave = player1.trim() && (!isDoubles || player2.trim()) && isValidProfileUrl(profile1) && (!isDoubles || isValidProfileUrl(profile2));
 
   return (
     <Modal open onClose={onClose} title="Edit registration" icon={UserCog} maxWidth="max-w-lg">
@@ -91,6 +100,11 @@ export default function EditRegistrationModal({ registration, categories, onSave
           <FormField label="Address">
             <input value={address} onChange={(e) => setAddress(e.target.value)} className={inputClass} />
           </FormField>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <ProfileLinkField label={isDoubles ? 'Player 1 profile link' : 'Profile link'} value={profile1} onChange={setProfile1} hint="Facebook or other social media" />
+          {isDoubles && <ProfileLinkField label="Player 2 profile link" value={profile2} onChange={setProfile2} hint="Facebook or other social media" />}
         </div>
 
         <div className="mt-2 flex justify-end gap-2.5">

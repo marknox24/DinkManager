@@ -7,6 +7,7 @@ import {
   Download,
   FileSpreadsheet,
   ImageIcon,
+  Link2,
   Lock,
   Pencil,
   QrCode,
@@ -43,6 +44,8 @@ import ConnectionStatusPill from '../../../components/organizer/ConnectionStatus
 import DateRangePicker from '../../../components/ui/DateRangePicker';
 import { toLocalYmd } from '../../../utils/format';
 import EditRegistrationModal from '../../../components/organizer/EditRegistrationModal';
+import ProfileLinksModal, { FacebookGlyph } from '../../../components/organizer/ProfileLinksModal';
+import { profilePlatform, registrationProfiles } from '../../../utils/socialProfile';
 import AddPlayerModal from '../../../components/organizer/AddPlayerModal';
 import Modal from '../../../components/ui/Modal';
 import RegistrationStatusBadge, { STATUS_LABELS } from '../../../components/player/RegistrationStatusBadge';
@@ -84,6 +87,23 @@ function checkinTitle(r) {
 // actually renders. `isCollapsed` already accounts for the "a filter/search
 // is active" override — the caller decides that, this component just draws
 // whatever it's told.
+// One small button for all of a registration's profile links, so the table
+// stays as compact as it was. A Facebook "f" when every link given is a
+// Facebook profile, a plain link icon otherwise; nothing when there are none.
+function ProfileLinksButton({ registration, onClick }) {
+  const urls = registrationProfiles(registration)
+    .map((p) => p.url)
+    .filter(Boolean);
+  if (urls.length === 0) return null;
+  const facebook = urls.every((u) => profilePlatform(u) === 'Facebook');
+  const label = urls.length > 1 ? 'View profile links' : 'View profile link';
+  return (
+    <button onClick={onClick} title={label} aria-label={label} className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-50 text-blue-600 hover:bg-blue-100">
+      {facebook ? <FacebookGlyph size={14} /> : <Link2 size={13} />}
+    </button>
+  );
+}
+
 function CategorySection({
   cat,
   catRegs,
@@ -99,6 +119,7 @@ function CategorySection({
   onApprove,
   onDeny,
   onViewPhoto,
+  onViewLinks,
   onEdit,
   onRemove,
   isFiltering,
@@ -205,6 +226,7 @@ function CategorySection({
                               <XCircle size={14} />
                             </button>
                           )}
+                          <ProfileLinksButton registration={r} onClick={() => onViewLinks(r)} />
                           {r.photo_path && (
                             <button
                               onClick={() => onViewPhoto(r, 'photo_path', r.player2_name ? 'Player 1 ID' : 'ID Photo')}
@@ -275,6 +297,7 @@ export default function RegistrationsPage() {
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [downloadModalOpen, setDownloadModalOpen] = useState(false);
   const [photoPreview, setPhotoPreview] = useState(null); // { url, name }
+  const [linksReg, setLinksReg] = useState(null);
   const [collapsedCategoryIds, setCollapsedCategoryIds] = useState(() => new Set());
   const [statusFilter, setStatusFilter] = useState('all');
   const [query, setQuery] = useState('');
@@ -637,6 +660,7 @@ export default function RegistrationsPage() {
                     onApprove={(r) => setStatus(r, 'approved')}
                     onDeny={(r) => setStatus(r, 'denied')}
                     onViewPhoto={viewPhoto}
+                    onViewLinks={setLinksReg}
                     onEdit={setEditingReg}
                     onRemove={removeRegistration}
                   />
@@ -692,6 +716,8 @@ export default function RegistrationsPage() {
           />
         </Suspense>
       )}
+
+      {linksReg && <ProfileLinksModal registration={linksReg} onClose={() => setLinksReg(null)} />}
 
       {photoPreview && (
         <Modal open onClose={() => setPhotoPreview(null)} title={photoPreview.label || 'Registration photo'} icon={ImageIcon}>
