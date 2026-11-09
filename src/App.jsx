@@ -69,8 +69,15 @@ function RouteFallback() {
 // (see sw.js for the service-worker-side half of this fix). With no
 // boundary here, that render-time rejection unmounted the whole tree with
 // nothing in its place: the blank white screen this exists to catch.
-// Reloads once automatically (a fresh index.html always resolves it); the
-// sessionStorage guard stops a genuinely broken deploy from reload-looping.
+// Reloads automatically (a fresh index.html always resolves it). The guard
+// is a timestamp, not a one-time flag: a tab left open all event day can hit
+// this again after the next deploy, but a genuinely broken deploy that fails
+// straight after its own reload still can't loop. The pattern matches
+// Chrome ("Failed to fetch dynamically imported module"), Firefox ("error
+// loading dynamically imported module"), Safari, and Vite's CSS preload.
+const CHUNK_RELOAD_KEY = 'dm_chunk_reload_at';
+const CHUNK_RELOAD_COOLDOWN_MS = 30000;
+
 class AppErrorBoundary extends Component {
   state = { hasError: false };
 
@@ -79,11 +86,18 @@ class AppErrorBoundary extends Component {
   }
 
   componentDidCatch(error) {
-    const isChunkError = /fetch dynamically imported module|importing a module script failed/i.test(error?.message || '');
-    if (isChunkError && !sessionStorage.getItem('dm_chunk_reload')) {
-      sessionStorage.setItem('dm_chunk_reload', '1');
-      window.location.reload();
+    const isChunkError = /dynamically imported module|importing a module script failed|unable to preload css/i.test(error?.message || '');
+    if (!isChunkError) return;
+    try {
+      const last = Number(sessionStorage.getItem(CHUNK_RELOAD_KEY)) || 0;
+      if (Date.now() - last < CHUNK_RELOAD_COOLDOWN_MS) return;
+      sessionStorage.setItem(CHUNK_RELOAD_KEY, String(Date.now()));
+    } catch {
+      // Storage blocked (private mode): skip the guard and let the visible
+      // Reload button below handle it rather than risk a loop.
+      return;
     }
+    window.location.reload();
   }
 
   render() {

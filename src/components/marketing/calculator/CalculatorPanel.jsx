@@ -53,7 +53,14 @@ export default function CalculatorPanel() {
     [result.brackets]
   );
 
-  const addCategory = () => setBrackets([...brackets, createEmptyBracket({ name: `Category ${brackets.length + 1}` })]);
+  // First unused number, so deleting "Category 2" and adding again doesn't
+  // produce a second "Category 3".
+  const addCategory = () => {
+    const names = new Set(brackets.map((b) => b.name));
+    let n = brackets.length + 1;
+    while (names.has(`Category ${n}`)) n += 1;
+    setBrackets([...brackets, createEmptyBracket({ name: `Category ${n}` })]);
+  };
 
   return (
     <div className="flex flex-col gap-6">

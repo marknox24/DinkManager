@@ -9,7 +9,7 @@
 //
 // Registration's own duplicate check stays on the direct path, since it needs
 // the current answer.
-import { isUuid, LONG_STALE_WINDOW_SECONDS, sendCached, sendError, supabaseConfig, UPSTREAM_TIMEOUT_MS } from './_cache.js';
+import { fetchAllPages, isUuid, LONG_STALE_WINDOW_SECONDS, sendCached, sendError, supabaseConfig } from './_cache.js';
 
 export default async function handler(req, res) {
   const { event } = req.query;
@@ -18,13 +18,11 @@ export default async function handler(req, res) {
   if (!cfg) return sendError(res, 500, 'Supabase is not configured');
 
   try {
-    const params = new URLSearchParams({ p_event_id: event });
-    const upstream = await fetch(`${cfg.url}/rest/v1/rpc/public_event_roster?${params}`, {
-      headers: cfg.headers,
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-    });
-    if (!upstream.ok) return sendError(res, 502, 'roster unavailable');
-    sendCached(res, await upstream.json(), { maxAge: 60, staleWhileRevalidate: LONG_STALE_WINDOW_SECONDS });
+    // Paged: the 1000-row cap applies to set-returning functions too. The
+    // order matches the function's own (newest first), with id to keep pages
+    // stable.
+    const rows = await fetchAllPages(cfg, 'rpc/public_event_roster', { p_event_id: event, order: 'created_at.desc,id.desc' });
+    sendCached(res, rows, { maxAge: 60, staleWhileRevalidate: LONG_STALE_WINDOW_SECONDS });
   } catch {
     sendError(res, 502, 'roster unavailable');
   }

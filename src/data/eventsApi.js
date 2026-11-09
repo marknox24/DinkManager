@@ -218,13 +218,20 @@ export async function getPublishedEvents() {
 // Public roster for the "Registered Players" tab — pending, approved, and
 // waitlisted only (denied is excluded server-side by public_event_roster,
 // never client-side). categoryId omitted/null returns every category.
+// Paged, since PostgREST's 1000-row cap applies to set-returning functions.
 export async function getPublicEventRoster(eventId, categoryId) {
-  const { data, error } = await supabase.rpc('public_event_roster', {
-    p_event_id: eventId,
-    p_category_id: categoryId || null,
-  });
-  if (error) throw error;
-  return data;
+  const PAGE = 1000;
+  const rows = [];
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .rpc('public_event_roster', { p_event_id: eventId, p_category_id: categoryId || null })
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(from, from + PAGE - 1);
+    if (error) throw error;
+    rows.push(...data);
+    if (data.length < PAGE) return rows;
+  }
 }
 
 const rosterChangedKey = (eventId) => `dink-roster-changed:${eventId}`;
@@ -310,7 +317,11 @@ export async function deleteCategory(categoryId) {
 // used to run themselves, so errors (e.g. a draft event) behave as before.
 //   key:     { slug } | { token } | { id }
 //   include: any of 'counts' | 'sponsors' | 'fields'
-export async function loadPublicEventBundle(key, include = []) {
+// `directFallback: false` is for background refreshes (see
+// listScheduleMatchesPublic): when the CDN is slow, a page full of
+// spectators polling must not all fall through to the database at once.
+// It returns null instead, and the caller keeps what it already shows.
+export async function loadPublicEventBundle(key, include = [], { directFallback = true } = {}) {
   const params = new URLSearchParams();
   Object.entries(key).forEach(([k, v]) => v && params.set(k, v));
   if (include.length) params.set('include', [...include].sort().join(','));
@@ -318,6 +329,7 @@ export async function loadPublicEventBundle(key, include = []) {
   if (cached) {
     return { event: cached.event, categories: cached.categories, counts: cached.counts ?? [], sponsors: cached.sponsors ?? [], fields: cached.fields ?? [] };
   }
+  if (!directFallback) return null;
   const event = key.token ? await getPublicEventByShareToken(key.token) : key.slug ? await getPublicEventBySlug(key.slug) : await getEventById(key.id);
   const [categories, counts, sponsors, fields] = await Promise.all([
     listCategories(event.id),
@@ -455,12 +467,19 @@ export async function deleteRegistration(registrationId) {
 // the update would come back empty (RETURNING is itself SELECT-gated) —
 // re-fetching through the view afterward is what actually works.
 // ---------------------------------------------------------------------------
+// Paged: the whole-event roster passes PostgREST's 1000-row cap once an
+// event has that many registrations.
 async function listCheckinRosterDirect(eventId, categoryId) {
-  let query = supabase.from('public_checkin_roster').select('*').eq('event_id', eventId);
-  if (categoryId) query = query.eq('category_id', categoryId);
-  const { data, error } = await query;
-  if (error) throw error;
-  return data;
+  const PAGE = 1000;
+  const rows = [];
+  for (let from = 0; ; from += PAGE) {
+    let query = supabase.from('public_checkin_roster').select('*').eq('event_id', eventId);
+    if (categoryId) query = query.eq('category_id', categoryId);
+    const { data, error } = await query.order('id').range(from, from + PAGE - 1);
+    if (error) throw error;
+    rows.push(...data);
+    if (data.length < PAGE) return rows;
+  }
 }
 
 // Tries the CDN-cached /api/checkin-roster endpoint first — a crowd

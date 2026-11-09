@@ -115,6 +115,15 @@ export async function enqueueOperation({ eventId, matchId, operationType, payloa
   if (!isOnline()) {
     return { queued: true };
   }
+  // An older write is still waiting (or mid-flush), e.g. the organizer
+  // kept working through a wifi blip. Flushing this one directly would let
+  // it reach the server ahead of those, and a finish landing before its own
+  // start gets rejected as stale. Hand it to the FIFO drain instead.
+  const pending = await getAllByIndex('sync_queue', 'by_status', 'pending');
+  if (pending.some((e) => e.operation_id !== operationId)) {
+    drainQueue();
+    return { queued: true };
+  }
   try {
     const match = await flushEntry(entry);
     return { queued: false, match };
@@ -226,8 +235,23 @@ let drainPromise = null;
 // the second resolve immediately while the drain it meant to wait for is
 // still running, which is exactly wrong for anything that needs to know the
 // drain has actually finished (e.g. refreshing a page's data afterward).
+// A request that arrives mid-drain also queues one more pass: the running
+// drain read its entry list before that request's write was saved, so
+// without the extra pass a fresh write would wait for the 30s safety net.
+let drainRequested = false;
 export function drainQueue() {
-  if (!drainPromise) drainPromise = doDrain().finally(() => { drainPromise = null; });
+  if (drainPromise) {
+    drainRequested = true;
+    return drainPromise;
+  }
+  drainPromise = (async () => {
+    do {
+      drainRequested = false;
+      await doDrain();
+    } while (drainRequested && isOnline());
+  })().finally(() => {
+    drainPromise = null;
+  });
   return drainPromise;
 }
 

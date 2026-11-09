@@ -82,7 +82,7 @@ export function useMatchSchedule({ view, event: initialEvent, categories: initia
           // be frozen at whatever was passed in at mount and never updated,
           // so a spectator who opened the page before a new category
           // existed would never see it without a manual reload.
-          const bundle = await loadPublicEventBundle({ id: eventId }).catch(() => null);
+          const bundle = await loadPublicEventBundle({ id: eventId }, [], { directFallback: false }).catch(() => null);
           if (bundle?.categories) {
             setEvent(bundle.event);
             setCategories(bundle.categories);

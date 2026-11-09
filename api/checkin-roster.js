@@ -16,7 +16,7 @@
 // The actual check-in write, and the read immediately after it that
 // confirms the write succeeded, stay on the direct Supabase path in
 // src/data/eventsApi.js — only roster *browsing* goes through this cache.
-import { isUuid, sendCached, sendError, supabaseConfig, UPSTREAM_TIMEOUT_MS } from './_cache.js';
+import { fetchAllPages, isUuid, sendCached, sendError, supabaseConfig } from './_cache.js';
 
 export default async function handler(req, res) {
   const { event, category } = req.query;
@@ -26,14 +26,15 @@ export default async function handler(req, res) {
   if (!cfg) return sendError(res, 500, 'Supabase is not configured');
 
   try {
-    const params = new URLSearchParams({ select: '*', event_id: `eq.${event}` });
-    if (category) params.set('category_id', `eq.${category}`);
-    const upstream = await fetch(`${cfg.url}/rest/v1/public_checkin_roster?${params}`, {
-      headers: cfg.headers,
-      signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
-    });
-    if (!upstream.ok) return sendError(res, 502, 'roster unavailable');
-    sendCached(res, await upstream.json(), { maxAge: 5, staleWhileRevalidate: 10 });
+    // Paged: a whole-event roster passes PostgREST's 1000-row cap once an
+    // event has that many registrations.
+    const params = { select: '*', event_id: `eq.${event}`, order: 'id.asc' };
+    if (category) params.category_id = `eq.${category}`;
+    const rows = await fetchAllPages(cfg, 'public_checkin_roster', params);
+    // A minute of stale-while-revalidate: past 5s, the next viewer still gets
+    // an instant answer while one background request refreshes it, instead of
+    // a crowd all missing at once and each querying the database.
+    sendCached(res, rows, { maxAge: 5, staleWhileRevalidate: 60 });
   } catch {
     sendError(res, 502, 'roster unavailable');
   }

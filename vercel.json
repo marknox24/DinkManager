@@ -25,6 +25,6 @@
       "has": [{ "type": "header", "key": "user-agent", "value": ".*(facebookexternalhit|Facebot|Twitterbot|LinkedInBot|Slackbot|WhatsApp|TelegramBot|Discordbot|Pinterest|redditbot|SkypeUriPreview|Viber|line-poker|vkShare|Applebot|Googlebot|bingbot).*" }],
       "destination": "/api/event-meta?token=:token"
     },
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    { "source": "/((?!api/|assets/).*)", "destination": "/index.html" }
   ]
 }
