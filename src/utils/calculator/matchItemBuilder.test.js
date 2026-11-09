@@ -175,3 +175,42 @@ test('an unsupported format string is rejected explicitly, never silently treate
   assert.deepEqual(items, []);
   assert.match(warnings[0], /unsupported format/);
 });
+
+// --- Playoffs as a Round Robin switch ---------------------------------------
+
+test('round robin with playoffs on and groups split: same group + knockout result as the legacy format', () => {
+  const switched = buildBracketItems(rrBracket({ teamCount: 16, splitIntoBrackets: true, groupSizes: [4, 4, 4, 4], playoffs: true, advancePerGroup: 2 }), 20);
+  const legacy = buildBracketItems(rrBracket({ format: 'Round Robin + Playoffs', groupSizes: [4, 4, 4, 4], advancePerGroup: 2 }), 20);
+  assert.deepEqual(switched.warnings, []);
+  assert.equal(switched.items.length, legacy.items.length);
+  assert.equal(switched.items.filter((it) => it.stage === 'knockout').length, 7); // QF 4 + SF 2 + F 1
+});
+
+test('round robin with playoffs on and one group: the whole field is one group seeding its own top 4', () => {
+  const { items, warnings } = buildBracketItems(rrBracket({ teamCount: 8, playoffs: true, advancePerGroup: 4 }), 20);
+  assert.deepEqual(warnings, []);
+  assert.equal(items.filter((it) => it.stage === 'group').length, roundRobinShape(8).totalMatches);
+  assert.equal(items.filter((it) => it.stage === 'knockout').length, 3); // SF 2 + F 1
+});
+
+test('double round robin with playoffs doubles the group stage, not the knockout', () => {
+  const single = buildBracketItems(rrBracket({ teamCount: 8, splitIntoBrackets: true, groupSizes: [4, 4], playoffs: true, advancePerGroup: 2 }), 20);
+  const double = buildBracketItems(rrBracket({ teamCount: 8, splitIntoBrackets: true, groupSizes: [4, 4], playoffs: true, advancePerGroup: 2, doubleRoundRobin: true }), 20);
+  const groups = (r) => r.items.filter((it) => it.stage === 'group').length;
+  const knockout = (r) => r.items.filter((it) => it.stage === 'knockout').length;
+  assert.equal(groups(double), groups(single) * 2);
+  assert.equal(knockout(double), knockout(single));
+});
+
+test('playoffs switch is ignored for single elimination', () => {
+  const bracket = { id: 'b9', name: 'Elite', format: 'Single Elimination', teamCount: 8, thirdPlace: false, playoffs: true, matchDurationMinutes: null };
+  const { items } = buildBracketItems(bracket, 20);
+  assert.ok(items.every((it) => it.stage !== 'group'));
+  assert.equal(items.filter((it) => !it.isBye).length, 7);
+});
+
+test('advancing more teams than the smallest group holds is flagged, not scheduled', () => {
+  const { items, warnings } = buildBracketItems(rrBracket({ teamCount: 7, splitIntoBrackets: true, groupSizes: [4, 3], playoffs: true, advancePerGroup: 4 }), 20);
+  assert.equal(items.length, 0);
+  assert.match(warnings[0], /Group B has only 3 teams/);
+});

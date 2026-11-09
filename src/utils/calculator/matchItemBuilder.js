@@ -7,6 +7,21 @@
 import { generateRoundRobinRounds } from '../scheduling.js';
 import { roundRobinShape, singleEliminationShape, groupKnockoutShape, multiPoolRoundRobinShape } from './bracketMath.js';
 
+// Playoffs are a switch on a Round Robin (`playoffs: true`), not a format
+// of their own. 'Round Robin + Playoffs' is the older spelling of the same
+// thing, still accepted so saved configs and tests keep working.
+export function hasPlayoffs(bracket) {
+  return bracket.format === 'Round Robin + Playoffs' || (bracket.format === 'Round Robin' && Boolean(bracket.playoffs));
+}
+
+// The round-robin pools a Round Robin category plays: its split brackets
+// when there's more than one, otherwise one pool of every team. The legacy
+// playoffs format always carried its groups in `groupSizes`.
+export function poolSizesFor(bracket) {
+  if (bracket.format === 'Round Robin + Playoffs' || bracket.splitIntoBrackets) return bracket.groupSizes || [];
+  return [bracket.teamCount];
+}
+
 function teamToken(bracketId, n) {
   return `${bracketId}:T${n}`;
 }
@@ -195,36 +210,42 @@ function multiPoolRoundRobinItems(bracket, matchMinutes) {
   return items;
 }
 
-function groupKnockoutItems(bracket, groupShape, matchMinutes) {
+function groupKnockoutItems(bracket, groupSizes, groupShape, matchMinutes) {
   const items = [];
-  const groupSizes = bracket.groupSizes;
+  const cycles = bracket.doubleRoundRobin ? [false, true] : [false];
   let matchNumber = 0;
   let lastGroupRound = 0;
   groupSizes.forEach((size, groupIdx) => {
     const letter = String.fromCharCode(65 + groupIdx);
     const teamIds = Array.from({ length: size }, (_, i) => i + 1);
-    const rounds = generateRoundRobinRounds(teamIds);
-    rounds.forEach((pairs, roundIdx) => {
-      pairs.forEach(([a, b]) => {
-        matchNumber += 1;
-        items.push({
-          key: `${bracket.id}:GRP${letter}:${matchNumber}`,
-          bracketId: bracket.id,
-          bracketName: bracket.name,
-          stage: 'group',
-          roundNumber: roundIdx + 1,
-          matchLabel: `Group ${letter} · Round ${roundIdx + 1}`,
-          matchNumber,
-          teamAId: teamToken(bracket.id, `${letter}${a}`),
-          teamBId: teamToken(bracket.id, `${letter}${b}`),
-          teamALabel: `Group ${letter} — ${teamLabel(a)}`,
-          teamBLabel: `Group ${letter} — ${teamLabel(b)}`,
-          projected: false,
-          matchMinutes,
+    let roundOffset = 0;
+    for (const reversed of cycles) {
+      const rounds = generateRoundRobinRounds(teamIds);
+      rounds.forEach((pairs, roundIdx) => {
+        const round = roundOffset + roundIdx + 1;
+        pairs.forEach(([a, b]) => {
+          matchNumber += 1;
+          const [x, y] = reversed ? [b, a] : [a, b];
+          items.push({
+            key: `${bracket.id}:GRP${letter}:${matchNumber}`,
+            bracketId: bracket.id,
+            bracketName: bracket.name,
+            stage: 'group',
+            roundNumber: round,
+            matchLabel: `Group ${letter} · Round ${round}`,
+            matchNumber,
+            teamAId: teamToken(bracket.id, `${letter}${x}`),
+            teamBId: teamToken(bracket.id, `${letter}${y}`),
+            teamALabel: `Group ${letter} — ${teamLabel(x)}`,
+            teamBLabel: `Group ${letter} — ${teamLabel(y)}`,
+            projected: false,
+            matchMinutes,
+          });
         });
+        lastGroupRound = Math.max(lastGroupRound, round);
       });
-      lastGroupRound = Math.max(lastGroupRound, roundIdx + 1);
-    });
+      roundOffset += rounds.length;
+    }
   });
   // Knockout: every level is a placeholder — no real group standings
   // exist here — gated to start only after every group's round-robin has
@@ -266,6 +287,13 @@ export function buildBracketItems(bracket, globalMatchDurationMinutes) {
     return { items: [], warnings: [`Bracket "${bracket.id}" needs a name.`], shape: null };
   }
 
+  if (hasPlayoffs(bracket)) {
+    const groupSizes = poolSizesFor(bracket);
+    const shape = groupKnockoutShape({ groupSizes, advancePerGroup: bracket.advancePerGroup, thirdPlace: bracket.thirdPlace, double: bracket.doubleRoundRobin });
+    if (!shape.valid) return { items: [], warnings: [`${bracket.name}: ${shape.error}`], shape };
+    return { items: groupKnockoutItems(bracket, groupSizes, shape, matchMinutes), warnings: [], shape };
+  }
+
   if (bracket.format === 'Round Robin') {
     if (bracket.splitIntoBrackets) {
       const groupSizes = bracket.groupSizes || [];
@@ -282,13 +310,6 @@ export function buildBracketItems(bracket, globalMatchDurationMinutes) {
     const shape = singleEliminationShape(bracket.teamCount, { thirdPlace: bracket.thirdPlace });
     if (!shape.valid) return { items: [], warnings: [`${bracket.name}: ${shape.error}`], shape };
     return { items: singleElimItems(bracket, shape, matchMinutes), warnings: [], shape };
-  }
-
-  if (bracket.format === 'Round Robin + Playoffs') {
-    const groupSizes = bracket.groupSizes || [];
-    const shape = groupKnockoutShape({ groupSizes, advancePerGroup: bracket.advancePerGroup, thirdPlace: bracket.thirdPlace });
-    if (!shape.valid) return { items: [], warnings: [`${bracket.name}: ${shape.error}`], shape };
-    return { items: groupKnockoutItems(bracket, shape, matchMinutes), warnings: [], shape };
   }
 
   return { items: [], warnings: [`${bracket.name}: unsupported format "${bracket.format}".`], shape: null };

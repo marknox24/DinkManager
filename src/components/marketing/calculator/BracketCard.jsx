@@ -3,30 +3,28 @@ import FormField, { inputClass } from '../../ui/FormField';
 import Select from '../../ui/Select';
 import Switch from '../../ui/Switch';
 import NumberInput from '../../ui/NumberInput';
+import { groupKnockoutShape } from '../../../utils/calculator/bracketMath.js';
+import { hasPlayoffs, poolSizesFor } from '../../../utils/calculator/index.js';
 
-const FORMATS = ['Round Robin', 'Single Elimination', 'Round Robin + Playoffs'];
+// Double Round Robin is a format choice here, not a separate "Rounds"
+// field: it's stored as a Round Robin with doubleRoundRobin on, which is
+// all the engine needs. Playoffs aren't a format either — they're a switch
+// on either Round Robin, since they add a stage rather than replace one.
+const FORMATS = ['Round Robin', 'Double Round Robin', 'Single Elimination'];
+
+function formatValue(bracket) {
+  if (bracket.format === 'Single Elimination') return 'Single Elimination';
+  return bracket.doubleRoundRobin ? 'Double Round Robin' : 'Round Robin';
+}
+
+const isRoundRobin = (bracket) => bracket.format !== 'Single Elimination';
 
 // How many physical brackets this category produces — matches the real
 // product's model (a category can contain several brackets: one per group,
-// plus a knockout bracket). Single Elimination is always a single bracket;
-// Round Robin + Playoffs is one bracket per group plus one knockout
-// bracket; a split Round Robin is one independent bracket per pool (no
-// knockout); a plain Round Robin is a single bracket.
+// plus a knockout bracket when playoffs are on).
 function bracketCountFor(bracket) {
-  if (bracket.format === 'Round Robin + Playoffs') {
-    return (bracket.groupSizes || []).length + 1;
-  }
-  if (bracket.format === 'Round Robin' && bracket.splitIntoBrackets) {
-    return (bracket.groupSizes || []).length;
-  }
-  return 1;
-}
-
-// Both Round Robin + Playoffs and a split Round Robin describe their team
-// counts via `groupSizes` (one entry per bracket) instead of a single flat
-// `teamCount` — this decides whether the per-bracket breakdown shows.
-function usesGroupSizes(bracket) {
-  return bracket.format === 'Round Robin + Playoffs' || (bracket.format === 'Round Robin' && bracket.splitIntoBrackets);
+  if (!isRoundRobin(bracket)) return 1;
+  return poolSizesFor(bracket).length + (hasPlayoffs(bracket) ? 1 : 0);
 }
 
 // Divides `total` teams as evenly as possible across `n` brackets — any
@@ -39,19 +37,43 @@ function evenSplit(total, n) {
   return Array.from({ length: n }, (_, i) => base + (i < remainder ? 1 : 0));
 }
 
+// Every "top N advance" choice that forms a real knockout bracket for these
+// groups, labeled with the stage it starts at. Asks the engine itself, so
+// the dropdown can only ever offer what the calculator will accept.
+function advanceOptions(groupSizes) {
+  return [1, 2, 4, 8, 16]
+    .map((n) => ({ n, shape: groupKnockoutShape({ groupSizes, advancePerGroup: n }) }))
+    .filter(({ shape }) => shape.valid)
+    .map(({ n, shape }) => ({ n, firstStage: shape.knockoutLevels[0].label }));
+}
+
+// Keeps advancePerGroup on a valid choice whenever groups change, so the
+// card never sits in a state the dropdown can't show. Prefers the current
+// value, then the largest valid one below it, then the smallest.
+function withValidAdvance(bracket) {
+  if (!hasPlayoffs(bracket)) return bracket;
+  const options = advanceOptions(poolSizesFor(bracket)).map((o) => o.n);
+  if (options.length === 0 || options.includes(bracket.advancePerGroup)) return bracket;
+  const below = options.filter((n) => n < bracket.advancePerGroup);
+  return { ...bracket, advancePerGroup: below.length ? below[below.length - 1] : options[0] };
+}
+
 // Pure array-in-local-state pattern (mirrors ContactsEditor.jsx) — there's
 // no backend here, so unlike the real app's CategoryEditor this never
 // "commits" anything; every keystroke just calls onChange with the next
 // bracket object.
 export default function BracketCard({ bracket, errors, totalMatches, onChange, onRemove }) {
-  const set = (patch) => onChange({ ...bracket, ...patch });
+  const set = (patch) => onChange(withValidAdvance({ ...bracket, ...patch }));
 
-  // Round Robin only: the total-teams field also drives the per-bracket
-  // split (when one is active) so "Teams / Pairs" stays the single source
-  // of truth for the category's size — editing it re-balances evenly
-  // rather than leaving the per-bracket chips stale.
+  const setFormat = (value) => {
+    if (value === 'Single Elimination') set({ format: 'Single Elimination' });
+    else set({ format: 'Round Robin', doubleRoundRobin: value === 'Double Round Robin' });
+  };
+
+  // Teams / Pairs is the category's size for every format. With groups, it
+  // re-balances them evenly rather than leaving the per-group chips stale.
   const setTeamCount = (v) => {
-    if (bracket.format === 'Round Robin' && bracket.splitIntoBrackets) {
+    if (isRoundRobin(bracket) && bracket.splitIntoBrackets) {
       const n = (bracket.groupSizes || []).length || 1;
       set({ teamCount: v, groupSizes: evenSplit(v, n) });
     } else {
@@ -59,28 +81,26 @@ export default function BracketCard({ bracket, errors, totalMatches, onChange, o
     }
   };
 
-  // Number of brackets is itself the on/off control now (1 = no split) —
-  // changing it always re-derives an even split from the current team
-  // count, which is the whole point: type a count and a bracket number,
-  // get a working breakdown with no manual per-bracket math.
-  const setBracketCount = (count) => {
+  // The group count is itself the on/off control for splitting (1 = no
+  // split) — changing it always re-derives an even split from the current
+  // team count, so there's no manual per-group math.
+  const setGroupCount = (count) => {
     const n = Math.max(1, Math.min(8, count ?? 1));
     set({ splitIntoBrackets: n > 1, groupSizes: evenSplit(bracket.teamCount, n) });
   };
 
-  const setGroupCount = (count) => {
-    const n = Math.max(1, Math.min(8, count ?? 1));
-    const sizes = bracket.groupSizes || [];
-    const next = Array.from({ length: n }, (_, i) => sizes[i] ?? 4);
-    set({ groupSizes: next });
-  };
+  // Fine-tuning one group keeps Teams / Pairs equal to the sum of groups.
   const setGroupSize = (idx, size) => {
     const next = [...(bracket.groupSizes || [])];
     next[idx] = size ?? 2;
-    set({ groupSizes: next });
+    set({ groupSizes: next, teamCount: next.reduce((sum, s) => sum + s, 0) });
   };
 
-  const bracketCountValue = bracket.splitIntoBrackets ? (bracket.groupSizes || []).length : 1;
+  const roundRobin = isRoundRobin(bracket);
+  const playoffs = roundRobin && hasPlayoffs(bracket);
+  const groupCount = bracket.splitIntoBrackets ? (bracket.groupSizes || []).length : 1;
+  const groupWord = playoffs ? 'group' : 'bracket';
+  const options = playoffs ? advanceOptions(poolSizesFor(bracket)) : [];
 
   return (
     <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
@@ -124,7 +144,7 @@ export default function BracketCard({ bracket, errors, totalMatches, onChange, o
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <FormField label="Format">
-          <Select value={bracket.format} onChange={(e) => set({ format: e.target.value })} className={inputClass}>
+          <Select value={formatValue(bracket)} onChange={(e) => setFormat(e.target.value)} className={inputClass}>
             {FORMATS.map((f) => (
               <option key={f} value={f}>
                 {f}
@@ -133,59 +153,32 @@ export default function BracketCard({ bracket, errors, totalMatches, onChange, o
           </Select>
         </FormField>
 
-        {bracket.format !== 'Round Robin + Playoffs' && (
-          <FormField label="Teams / Pairs" hint={errors?.teamCount}>
-            <NumberInput value={bracket.teamCount} onChange={setTeamCount} min={2} max={128} className={errors?.teamCount ? 'border-rose-300' : ''} />
+        <FormField label="Teams / Pairs" hint={errors?.teamCount}>
+          <NumberInput value={bracket.teamCount} onChange={setTeamCount} min={2} max={128} className={errors?.teamCount ? 'border-rose-300' : ''} />
+        </FormField>
+
+        {roundRobin && (
+          <FormField label={`Number of ${groupWord}s`} hint={`Each ${groupWord} plays its own round robin. 1 keeps everyone together.`}>
+            <NumberInput value={groupCount} onChange={setGroupCount} min={1} max={8} />
           </FormField>
         )}
 
-        {bracket.format === 'Round Robin' && (
-          <FormField label="Number of brackets" hint="Most categories split into a few brackets — 1 keeps it as one">
-            <NumberInput value={bracketCountValue} onChange={setBracketCount} min={1} max={8} />
-          </FormField>
-        )}
-
-        {bracket.format === 'Round Robin' && (
-          <FormField label="Rounds">
-            <Select value={bracket.doubleRoundRobin ? 'twice' : 'once'} onChange={(e) => set({ doubleRoundRobin: e.target.value === 'twice' })} className={inputClass}>
-              <option value="once">Play once</option>
-              <option value="twice">Play twice (double round robin)</option>
-            </Select>
-          </FormField>
-        )}
-
-        {bracket.format === 'Single Elimination' && (
-          <FormField label="3rd place match" hint="Only offered when a real 4-player semifinal exists">
+        {!roundRobin && (
+          <FormField label="3rd place match" hint="Only added when there's a real semifinal">
             <div className="flex h-[42px] items-center">
               <Switch checked={bracket.thirdPlace} onChange={(v) => set({ thirdPlace: v })} />
             </div>
           </FormField>
         )}
-
-        {bracket.format === 'Round Robin + Playoffs' && (
-          <>
-            <FormField label="Number of groups">
-              <NumberInput value={(bracket.groupSizes || []).length} onChange={setGroupCount} min={1} max={8} />
-            </FormField>
-            <FormField label="Advance per group" hint={errors?.advancePerGroup || 'Supports 1, 2, or 4 advancing to a clean knockout bracket'}>
-              <NumberInput value={bracket.advancePerGroup} onChange={(v) => set({ advancePerGroup: v })} min={1} max={4} className={errors?.advancePerGroup ? 'border-rose-300' : ''} />
-            </FormField>
-            <FormField label="3rd place match">
-              <div className="flex h-[42px] items-center">
-                <Switch checked={bracket.thirdPlace} onChange={(v) => set({ thirdPlace: v })} />
-              </div>
-            </FormField>
-          </>
-        )}
       </div>
 
-      {usesGroupSizes(bracket) && (
+      {roundRobin && bracket.splitIntoBrackets && (
         <div className="animate-slide-down mt-3">
           <p className="mb-1.5 text-xs font-bold uppercase tracking-wide text-ink-500">
-            {bracket.format === 'Round Robin + Playoffs' ? 'Teams per group' : 'Teams per bracket'}
+            Teams per {groupWord}
             {errors?.groupSizes ? <span className="ml-2 font-semibold normal-case text-rose-600">{errors.groupSizes}</span> : null}
           </p>
-          {bracket.format === 'Round Robin' && <p className="mb-1.5 text-[11px] text-ink-400">Divided evenly from Teams / Pairs — edit any bracket below to fine-tune.</p>}
+          <p className="mb-1.5 text-[11px] text-ink-400">Divided evenly from Teams / Pairs. Edit any {groupWord} to fine-tune.</p>
           <div className="flex flex-wrap gap-2">
             {(bracket.groupSizes || []).map((size, i) => (
               <div key={i} className="flex items-center gap-1.5 rounded-xl border border-ink-200 bg-ink-50/50 px-2.5 py-1.5">
@@ -194,6 +187,47 @@ export default function BracketCard({ bracket, errors, totalMatches, onChange, o
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {roundRobin && (
+        <div className={`mt-4 rounded-xl border transition-colors duration-200 ${playoffs ? 'border-brand-200 bg-brand-50/40' : 'border-ink-100 bg-ink-50/40'}`}>
+          <label className="flex cursor-pointer items-center justify-between gap-3 px-4 py-3">
+            <span className="min-w-0">
+              <span className="block text-sm font-bold text-ink-900">Add playoffs</span>
+              <span className="block text-[11px] text-ink-500">Top teams from each group move on to a knockout bracket</span>
+            </span>
+            <Switch checked={playoffs} onChange={(v) => set({ playoffs: v })} />
+          </label>
+
+          {playoffs && (
+            <div className="animate-slide-down grid grid-cols-1 gap-3 border-t border-brand-100 px-4 pt-3 pb-4 sm:grid-cols-2">
+              {options.length > 0 ? (
+                <FormField label="Advance per group" hint={errors?.advancePerGroup}>
+                  <Select value={bracket.advancePerGroup} onChange={(e) => set({ advancePerGroup: Number(e.target.value) })} className={inputClass}>
+                    {options.map(({ n, firstStage }) => (
+                      <option key={n} value={n}>
+                        Top {n} → {firstStage}
+                      </option>
+                    ))}
+                  </Select>
+                </FormField>
+              ) : (
+                <p className="text-xs font-semibold text-amber-700 sm:col-span-2">
+                  {groupCount === 1
+                    ? 'Playoffs need at least 2 teams in the group.'
+                    : 'Playoffs pair groups against each other, so use 1, 2, 4 or 8 groups.'}
+                </p>
+              )}
+              {options.length > 0 && (
+                <FormField label="3rd place match">
+                  <div className="flex h-[42px] items-center">
+                    <Switch checked={bracket.thirdPlace} onChange={(v) => set({ thirdPlace: v })} />
+                  </div>
+                </FormField>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

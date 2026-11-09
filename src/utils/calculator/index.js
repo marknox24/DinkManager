@@ -2,9 +2,11 @@
 // runCalculator({ brackets, settings }) -> everything the UI needs to
 // render Overview / Court Timeline / Match List / Team Schedule, with no
 // further calculation required in a component.
-import { buildBracketItems } from './matchItemBuilder.js';
+import { buildBracketItems, hasPlayoffs, poolSizesFor } from './matchItemBuilder.js';
 import { scheduleTournament } from './courtScheduler.js';
 import { combineDateAndTime, addMinutes } from './timeFormat.js';
+
+export { hasPlayoffs, poolSizesFor };
 
 const MIN = 60000;
 
@@ -31,7 +33,8 @@ export function createEmptyBracket(overrides = {}) {
     teamCount: 8,
     doubleRoundRobin: false,
     thirdPlace: false,
-    splitIntoBrackets: false, // Round Robin only: divide teamCount into independent pools (groupSizes), no knockout
+    splitIntoBrackets: false, // Round Robin only: divide teamCount into pools (groupSizes)
+    playoffs: false, // Round Robin only: top advancePerGroup from each pool go on to a knockout bracket
     groupSizes: [4, 4],
     advancePerGroup: 2,
     matchDurationMinutes: null, // null = inherits settings.matchDurationMinutes
@@ -43,10 +46,10 @@ export function createEmptyBracket(overrides = {}) {
 // from matchItemBuilder's own warnings (which are also surfaced, for
 // anything validation here doesn't catch, like an unreachable knockout
 // ceiling that depends on the engine's own math).
-// True when this category's team count comes from per-bracket `groupSizes`
-// rather than a single flat `teamCount` — either because the format always
-// works that way (Round Robin + Playoffs) or because "split into brackets"
-// was turned on for a plain Round Robin.
+// True when this category's team count comes from per-pool `groupSizes`
+// rather than a single flat `teamCount`: a Round Robin split into more than
+// one group, or the legacy 'Round Robin + Playoffs' format, which always
+// carried its groups that way.
 function usesGroupSizes(bracket) {
   return bracket.format === 'Round Robin + Playoffs' || (bracket.format === 'Round Robin' && bracket.splitIntoBrackets);
 }
@@ -60,18 +63,18 @@ export function validateBracket(bracket) {
     } else if (bracket.groupSizes.some((s) => !Number.isInteger(s) || s < 2)) {
       errors.groupSizes = 'Each bracket needs at least 2 teams.';
     }
-    if (bracket.format === 'Round Robin + Playoffs' && (!Number.isInteger(bracket.advancePerGroup) || bracket.advancePerGroup < 1)) {
-      errors.advancePerGroup = 'At least 1 team must advance per group.';
-    }
   } else if (!Number.isInteger(bracket.teamCount) || bracket.teamCount < 2) {
     errors.teamCount = 'Needs at least 2 teams.';
+  }
+  if (hasPlayoffs(bracket) && (!Number.isInteger(bracket.advancePerGroup) || bracket.advancePerGroup < 1)) {
+    errors.advancePerGroup = 'At least 1 team must advance per group.';
   }
   return { valid: Object.keys(errors).length === 0, errors };
 }
 
 function totalTeamsFor(bracket) {
-  if (usesGroupSizes(bracket)) {
-    return (bracket.groupSizes || []).reduce((sum, s) => sum + s, 0);
+  if (bracket.format !== 'Single Elimination') {
+    return poolSizesFor(bracket).reduce((sum, s) => sum + (s || 0), 0);
   }
   return bracket.teamCount || 0;
 }

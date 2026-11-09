@@ -96,17 +96,32 @@ export function multiPoolRoundRobinShape({ groupSizes, double = false }) {
 // (capped at Round of 32 / 32 teams advancing — a config beyond that
 // comes back invalid with deriveLadder's own concrete message, surfaced
 // as-is rather than silently extended).
-export function groupKnockoutShape({ groupSizes, advancePerGroup, thirdPlace = false }) {
+export function groupKnockoutShape({ groupSizes, advancePerGroup, thirdPlace = false, double = false }) {
   if (!Array.isArray(groupSizes) || groupSizes.length === 0 || groupSizes.some((s) => !Number.isInteger(s) || s < 2)) {
     return { valid: false, error: 'Each group needs at least 2 teams.', groupMatches: 0, knockoutMatches: 0, totalMatches: 0, knockoutLevels: [] };
   }
   if (!Number.isInteger(advancePerGroup) || advancePerGroup < 1) {
     return { valid: false, error: 'At least 1 team must advance from each group.', groupMatches: 0, knockoutMatches: 0, totalMatches: 0, knockoutLevels: [] };
   }
-  const groupMatches = groupSizes.reduce((sum, size) => sum + expectedRoundRobin(size, false, null).total, 0);
+  const groupMatches = groupSizes.reduce((sum, size) => sum + expectedRoundRobin(size, double, null).total, 0);
 
   const letters = groupSizes.map((_, i) => String.fromCharCode(65 + i)); // A, B, C, ...
   const poolCount = letters.length;
+
+  // deriveLadder only checks the bracket size, not whether each group has
+  // enough teams to send that many through.
+  const smallest = Math.min(...groupSizes);
+  if (advancePerGroup > smallest) {
+    const letter = letters[groupSizes.indexOf(smallest)];
+    return {
+      valid: false,
+      error: `${poolCount === 1 ? 'The group' : `Group ${letter}`} has only ${smallest} teams, so top ${advancePerGroup} can't advance.`,
+      groupMatches,
+      knockoutMatches: 0,
+      totalMatches: groupMatches,
+      knockoutLevels: [],
+    };
+  }
   // Sequential pairing (A-B, C-D, ...) — the calculator has no real
   // seeding/standings to pair by, so pools are crossed over in the order
   // they were entered; deriveLadder itself is agnostic to how pairs were
