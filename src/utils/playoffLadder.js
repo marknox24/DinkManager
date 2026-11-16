@@ -180,3 +180,100 @@ export function expandSinglePoolSlots(letter, advancePerPool) {
   }
   return slots;
 }
+
+// ---------------------------------------------------------------------------
+// POINTS-SYSTEM SEMIFINAL SEEDING
+// ---------------------------------------------------------------------------
+// An alternative to the crossover for a ladder that starts at the
+// semifinals. Who qualifies is unchanged (each pool's top N by the normal
+// standings); only the matchups differ. The four qualifiers are reseeded 1-4
+// by point differential from round robin, ignoring wins and losses, and paired
+// by the organizer's chosen pattern. Ties are settled by the organizer (a
+// coin toss), never by the app.
+
+// Pairing pattern key -> the two semifinals, as seed numbers. SF1 is listed
+// first, so the Final is SF1's winner vs SF2's.
+export const SEMIFINAL_PAIRINGS = {
+  '1v4': { label: '1 vs 4 · 2 vs 3', matches: [[1, 4], [2, 3]] },
+  '1v2': { label: '1 vs 2 · 3 vs 4', matches: [[1, 2], [3, 4]] },
+  '1v3': { label: '1 vs 3 · 2 vs 4', matches: [[1, 3], [2, 4]] },
+};
+
+export const POINTS_METRICS = {
+  total: { label: 'Total point differential', short: 'point diff' },
+  average: { label: 'Average point differential per game', short: 'avg point diff' },
+};
+
+// The setting only has meaning when the knockout opens with the semifinals;
+// for any other ladder the crossover always applies, whatever is saved.
+export function usesPointsSeeding(category, ladder) {
+  return category.playoff_semifinal_seeding === 'points' && Boolean(ladder?.valid) && ladder.levels[0]?.kind === 'semifinal';
+}
+
+export function semifinalPairing(category) {
+  return SEMIFINAL_PAIRINGS[category.playoff_semifinal_pairing] || SEMIFINAL_PAIRINGS['1v4'];
+}
+
+// A team's seeding value as an exact fraction, so "average per game" ties
+// are found exactly rather than through rounded floats. Games played is
+// wins + losses (pickleball has no draws); a team yet to play counts as 1 so
+// its value is simply 0.
+function pointsFraction(team, metric) {
+  const diff = (team.points_for || 0) - (team.points_against || 0);
+  const games = metric === 'average' ? Math.max(1, (team.wins || 0) + (team.losses || 0)) : 1;
+  return { diff, games };
+}
+
+function comparePoints(a, b, metric) {
+  const x = pointsFraction(a, metric);
+  const y = pointsFraction(b, metric);
+  return y.diff * x.games - x.diff * y.games; // > 0 when b is higher
+}
+
+// The number shown next to a seed: "+12", or "+2.40" per game.
+export function formatPointsValue(team, metric) {
+  const { diff, games } = pointsFraction(team, metric);
+  const value = metric === 'average' ? diff / games : diff;
+  const text = metric === 'average' ? Math.abs(value).toFixed(2) : String(Math.abs(value));
+  return `${value < 0 ? '−' : '+'}${text}`;
+}
+
+// Qualifiers best-first with their tie groups: [{ team, group }], where
+// teams sharing a `group` number are level on the metric and need the
+// organizer to order them. Within a tie, the incoming order is kept, so
+// passing the teams in an organizer's chosen order keeps that order.
+export function rankByPoints(teams, metric) {
+  const sorted = teams.map((team, i) => ({ team, i })).sort((a, b) => comparePoints(a.team, b.team, metric) || a.i - b.i);
+  let group = 0;
+  return sorted.map(({ team }, i) => {
+    if (i > 0 && comparePoints(sorted[i - 1].team, team, metric) !== 0) group += 1;
+    return { team, group };
+  });
+}
+
+export function hasPointsTie(ranked) {
+  return ranked.some((r, i) => i > 0 && ranked[i - 1].group === r.group);
+}
+
+// Turns an organizer's seed order (team ids, best first) into the final
+// seeding. The order may only rearrange teams within a tie: anything else
+// would let a lower differential outrank a higher one. Without an order, a
+// tie is refused rather than broken silently.
+export function applySeedOrder(teams, metric, seedOrder) {
+  const ranked = rankByPoints(teams, metric);
+  if (!seedOrder) {
+    if (hasPointsTie(ranked)) throw new Error('Two or more semifinalists are tied on point differential. Settle the tie before generating the Semifinals.');
+    return ranked.map((r) => r.team);
+  }
+  const byId = new Map(teams.map((t) => [t.id, t]));
+  if (seedOrder.length !== teams.length || new Set(seedOrder).size !== teams.length || !seedOrder.every((id) => byId.has(id))) {
+    throw new Error('The semifinal seeding no longer matches the qualified teams. Reopen it and try again.');
+  }
+  const ordered = seedOrder.map((id) => byId.get(id));
+  for (let i = 1; i < ordered.length; i++) {
+    if (comparePoints(ordered[i - 1], ordered[i], metric) > 0) {
+      throw new Error('The semifinal seeding no longer matches the standings. Reopen it and try again.');
+    }
+  }
+  return ordered;
+}

@@ -10,7 +10,8 @@ import {
   listLiveMatchesForEvent,
   listMatchesForCategory,
 } from '../../../data/bracketsApi';
-import { PLAYOFF_STAGES, generateStageMatches, getPlayoffStatus, matchLevelLabel, savePlan } from '../../../data/playoffApi';
+import { PLAYOFF_STAGES, deriveLadderFromPlan, generateStageMatches, getPlayoffStatus, matchLevelLabel, savePlan } from '../../../data/playoffApi';
+import { usesPointsSeeding } from '../../../utils/playoffLadder';
 import { getCustomFormat } from '../../../data/customFormats';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
@@ -27,6 +28,7 @@ import ForfeitModal from '../../../components/organizer/ForfeitModal';
 import LogScoreModal from '../../../components/organizer/LogScoreModal';
 import StartMatchModal from '../../../components/organizer/StartMatchModal';
 import PlayoffCrossoverConfirmModal from '../../../components/organizer/PlayoffCrossoverConfirmModal';
+import PointsSeedingConfirmModal from '../../../components/organizer/PointsSeedingConfirmModal';
 import MatchlistPreviewModal from '../../../components/organizer/MatchlistPreviewModal';
 import RoundRobinScoreSheets from '../../../components/organizer/RoundRobinScoreSheets';
 import BlankScoreSheets from '../../../components/organizer/BlankScoreSheets';
@@ -94,6 +96,7 @@ export default function MatchListPage() {
   const [generatePreviewOpen, setGeneratePreviewOpen] = useState(false);
   const [generatingStage, setGeneratingStage] = useState(null);
   const [confirmingLevel, setConfirmingLevel] = useState(null);
+  const [pointsSeedingLevel, setPointsSeedingLevel] = useState(null);
   const [loggingMatch, setLoggingMatch] = useState(null);
   const [forfeitingMatch, setForfeitingMatch] = useState(null);
   const [startingMatch, setStartingMatch] = useState(null);
@@ -351,9 +354,14 @@ export default function MatchListPage() {
   // weren't necessarily known when the playoff plan was set up in Event
   // Details — gets a confirm dialog first (see PlayoffCrossoverConfirmModal).
   // A single-pool plan has no crossover to confirm (nothing to pair the
-  // lone pool with), so it skips straight to generating.
+  // lone pool with), so it skips straight to generating. A points-seeded
+  // semifinal confirms its seeds instead, and that's where ties get settled.
   const handleGenerateStageClick = (level) => {
     const isFirstStage = playoffStatus[0]?.kind === level.kind;
+    if (isFirstStage && usesPointsSeeding(activeCategory, deriveLadderFromPlan(activeCategory))) {
+      setPointsSeedingLevel(level);
+      return;
+    }
     if (isFirstStage && activeCategory.playoff_pool_count !== 1) {
       setConfirmingLevel(level);
       return;
@@ -361,11 +369,11 @@ export default function MatchListPage() {
     handleGenerateStage(level.kind);
   };
 
-  const handleGenerateStage = async (kind) => {
+  const handleGenerateStage = async (kind, options = {}) => {
     if (blockIfLocked() || blockIfOffline()) return;
     setGeneratingStage(kind);
     try {
-      await generateStageMatches(activeCategory.id, kind);
+      await generateStageMatches(activeCategory.id, kind, options);
       pushToast(`${PLAYOFF_STAGES[kind].label} generated`, 'success');
       await Promise.all([reloadCategoryData(), loadPlayoffStatus(), loadBracketProgress()]);
     } catch (e) {
@@ -948,6 +956,17 @@ export default function MatchListPage() {
           workload={umpireWorkload}
           onStart={handleConfirmStart}
           onClose={() => setStartingMatch(null)}
+        />
+      )}
+      {pointsSeedingLevel && (
+        <PointsSeedingConfirmModal
+          level={pointsSeedingLevel}
+          categoryId={activeCategory.id}
+          onConfirm={async (seedOrder) => {
+            await handleGenerateStage(pointsSeedingLevel.kind, { seedOrder });
+            setPointsSeedingLevel(null);
+          }}
+          onClose={() => setPointsSeedingLevel(null)}
         />
       )}
       {confirmingLevel && (

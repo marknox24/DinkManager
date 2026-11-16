@@ -13,7 +13,21 @@ import { rankTeams, isTiedAtCut } from '../utils/standings';
 // MatchScheduleView.jsx) keeps working unchanged.
 // (a plain `export { X } from 'Y'` re-export wouldn't bind these names
 // locally, and this file's own functions below call them directly)
-import { PLAYOFF_STAGES, matchLevelLabel, deriveLadder, deriveLadderFromPlan, priorStageOf, stageMatchCode, unpairedPools, expandFirstStageSlots, expandSinglePoolSlots } from '../utils/playoffLadder';
+import {
+  PLAYOFF_STAGES,
+  matchLevelLabel,
+  deriveLadder,
+  deriveLadderFromPlan,
+  priorStageOf,
+  stageMatchCode,
+  unpairedPools,
+  expandFirstStageSlots,
+  expandSinglePoolSlots,
+  usesPointsSeeding,
+  semifinalPairing,
+  rankByPoints,
+  applySeedOrder,
+} from '../utils/playoffLadder';
 export { PLAYOFF_STAGES, matchLevelLabel, deriveLadder, deriveLadderFromPlan, unpairedPools, expandFirstStageSlots, expandSinglePoolSlots };
 
 function ordinal(n) {
@@ -34,6 +48,9 @@ export function readPlan(category) {
     playoff_advance_per_pool: category.playoff_advance_per_pool,
     playoff_pool_pairs: category.playoff_pool_pairs || [],
     playoff_third_place: category.playoff_third_place,
+    playoff_semifinal_seeding: category.playoff_semifinal_seeding || 'crossover',
+    playoff_semifinal_pairing: category.playoff_semifinal_pairing || '1v4',
+    playoff_points_metric: category.playoff_points_metric || 'total',
   };
 }
 
@@ -128,10 +145,65 @@ async function arePoolsComplete(poolBracketIds) {
   return arePoolsReady(poolBracketIds, teams, matches);
 }
 
+// Every pool's qualifiers for a points-seeded semifinal: each pool's top N
+// by the normal standings, exactly as the crossover picks them. Only the
+// seeding afterwards differs. Each team carries its pool letter for display.
+async function loadPointsQualifiers(plan, poolBrackets, level) {
+  if (poolBrackets.length !== plan.playoff_pool_count) {
+    throw new Error(
+      `This plan expects ${plan.playoff_pool_count} pool${plan.playoff_pool_count === 1 ? '' : 's'}, but ${poolBrackets.length} ${poolBrackets.length === 1 ? 'was' : 'were'} drawn — update the playoff plan to match.`
+    );
+  }
+  const { data: poolRows, error } = await supabase
+    .from('teams')
+    .select('*')
+    .in(
+      'bracket_id',
+      poolBrackets.map((b) => b.id)
+    );
+  if (error) throw error;
+  const qualifiers = [];
+  for (const b of poolBrackets) {
+    const poolTeams = poolRows.filter((t) => t.bracket_id === b.id && !t.withdrawn_at);
+    if (poolTeams.length < plan.playoff_advance_per_pool) {
+      throw new Error(`Pool ${b.letter} only has ${poolTeams.length} team${poolTeams.length === 1 ? '' : 's'}, fewer than the ${plan.playoff_advance_per_pool} needed to advance.`);
+    }
+    const ranked = rankTeams(poolTeams);
+    for (let rank = 1; rank <= plan.playoff_advance_per_pool; rank++) {
+      if (isTiedAtCut(ranked, rank)) {
+        throw new Error(`Pool ${b.letter} has a tie for ${ordinal(rank)} place — settle it before generating ${level.label}.`);
+      }
+    }
+    qualifiers.push(...ranked.slice(0, plan.playoff_advance_per_pool).map((t) => ({ ...t, pool_letter: b.letter })));
+  }
+  return qualifiers;
+}
+
+// What the organizer confirms before a points-seeded semifinal is generated:
+// the four qualifiers best-first, with tie groups the organizer orders.
+export async function getPointsSeeding(categoryId) {
+  const { data: category, error: catErr } = await supabase.from('categories').select('*').eq('id', categoryId).single();
+  if (catErr) throw catErr;
+  const plan = readPlan(category);
+  const ladder = deriveLadderFromPlan(plan);
+  if (!plan.playoff_enabled || !usesPointsSeeding(plan, ladder)) throw new Error('This category does not use points seeding.');
+  const { data: poolBrackets, error: poolErr } = await supabase.from('brackets').select('id, letter').eq('category_id', categoryId).eq('kind', 'pool');
+  if (poolErr) throw poolErr;
+  poolBrackets.sort((a, b) => a.letter.localeCompare(b.letter));
+  const qualifiers = await loadPointsQualifiers(plan, poolBrackets, ladder.levels[0]);
+  return {
+    metric: plan.playoff_points_metric,
+    pairing: semifinalPairing(plan),
+    ranked: rankByPoints(qualifiers, plan.playoff_points_metric),
+  };
+}
+
 // Generates exactly one stage's matches. { replace: true } deletes that
 // stage's still-scheduled rows first (refusing if any are completed/
 // in_progress) before regenerating — used after the plan changes.
-export async function generateStageMatches(categoryId, kind, { replace = false } = {}) {
+// `seedOrder` (team ids, best first) is the organizer's tie-settled order for
+// a points-seeded semifinal; see applySeedOrder.
+export async function generateStageMatches(categoryId, kind, { replace = false, seedOrder = null } = {}) {
   const { data: category, error: catErr } = await supabase.from('categories').select('*').eq('id', categoryId).single();
   if (catErr) throw catErr;
   const plan = readPlan(category);
@@ -179,8 +251,17 @@ export async function generateStageMatches(categoryId, kind, { replace = false }
   if (isFirstStage) {
     let rankedByLetter;
     let slots;
+    // Every seed this stage needs ({ seedLabel, source team }) and its
+    // fixtures as pairs of seed labels.
+    let seedEntries;
+    let slotLabels;
 
-    if (plan.playoff_pool_count === 1) {
+    if (usesPointsSeeding(plan, ladder)) {
+      const qualifiers = await loadPointsQualifiers(plan, poolBrackets, level);
+      const seeds = applySeedOrder(qualifiers, plan.playoff_points_metric, seedOrder);
+      seedEntries = seeds.map((source, i) => ({ seedLabel: `S${i + 1}`, source }));
+      slotLabels = semifinalPairing(plan).matches.map(([a, b]) => ({ a: `S${a}`, b: `S${b}` }));
+    } else if (plan.playoff_pool_count === 1) {
       if (poolBrackets.length !== 1) {
         throw new Error(`This plan expects 1 pool, but ${poolBrackets.length} pool${poolBrackets.length === 1 ? '' : 's'} were drawn — update the playoff plan to match.`);
       }
@@ -234,6 +315,17 @@ export async function generateStageMatches(categoryId, kind, { replace = false }
       slots = expandFirstStageSlots(plan.playoff_pool_pairs, plan.playoff_advance_per_pool);
     }
 
+    if (!seedEntries) {
+      const seedTeam = (letter, rank) => rankedByLetter.get(letter).find((t) => t.rank === rank);
+      const neededSeeds = new Map();
+      slots.forEach((slot) => {
+        neededSeeds.set(`${slot.a.letter}${slot.a.rank}`, slot.a);
+        neededSeeds.set(`${slot.b.letter}${slot.b.rank}`, slot.b);
+      });
+      seedEntries = Array.from(neededSeeds.entries()).map(([seedLabel, { letter, rank }]) => ({ seedLabel, source: seedTeam(letter, rank) }));
+      slotLabels = slots.map((slot) => ({ a: `${slot.a.letter}${slot.a.rank}`, b: `${slot.b.letter}${slot.b.rank}` }));
+    }
+
     if (!poBracket) {
       // Another organizer may be generating this same stage right now, so
       // this keeps whichever copy got there first and reads it back.
@@ -244,15 +336,7 @@ export async function generateStageMatches(categoryId, kind, { replace = false }
       poBracket = await getPlayoffBracket(categoryId);
     }
 
-    const seedTeam = (letter, rank) => rankedByLetter.get(letter).find((t) => t.rank === rank);
-    const neededSeeds = new Map();
-    slots.forEach((slot) => {
-      neededSeeds.set(`${slot.a.letter}${slot.a.rank}`, slot.a);
-      neededSeeds.set(`${slot.b.letter}${slot.b.rank}`, slot.b);
-    });
-
-    const teamRows = Array.from(neededSeeds.entries()).map(([seedLabel, { letter, rank }]) => {
-      const source = seedTeam(letter, rank);
+    const teamRows = seedEntries.map(({ seedLabel, source }) => {
       return {
         bracket_id: poBracket.id,
         registration_id: null,
@@ -270,10 +354,7 @@ export async function generateStageMatches(categoryId, kind, { replace = false }
     if (teamInsertErr) throw teamInsertErr;
     const teamBySeed = new Map(insertedTeams.map((t) => [t.seed_label, t]));
 
-    teamPairs = slots.map((slot) => ({
-      a: teamBySeed.get(`${slot.a.letter}${slot.a.rank}`).id,
-      b: teamBySeed.get(`${slot.b.letter}${slot.b.rank}`).id,
-    }));
+    teamPairs = slotLabels.map((slot) => ({ a: teamBySeed.get(slot.a).id, b: teamBySeed.get(slot.b).id }));
   } else {
     if (!poBracket) throw new Error('Generate the earlier playoff stages first.');
     const prior = priorStageOf(kind, ladderKinds);

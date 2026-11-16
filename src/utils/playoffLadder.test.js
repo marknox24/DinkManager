@@ -204,3 +204,63 @@ test('a Round of 16 row builds a full tree of placeholders with matching codes',
   assert.equal(r16.matches[1].teamA.label, 'Pool B · Rank 1');
   assert.equal(quarters.matches[1].teamA.label, 'Winner of R16-3');
 });
+
+// --- Points-system semifinal seeding ---------------------------------------
+
+import { applySeedOrder, formatPointsValue, hasPointsTie, rankByPoints, semifinalPairing, usesPointsSeeding } from './playoffLadder.js';
+
+const t = (id, w, l, pf, pa) => ({ id, wins: w, losses: l, points_for: pf, points_against: pa });
+
+test('points seeding ranks by point differential only, ignoring wins and losses', () => {
+  // B has the best record but the smallest differential.
+  const teams = [t('A', 3, 2, 50, 40), t('B', 5, 0, 55, 50), t('C', 2, 3, 60, 30), t('D', 4, 1, 45, 37)];
+  const seeds = applySeedOrder(teams, 'total');
+  assert.deepEqual(seeds.map((x) => x.id), ['C', 'A', 'D', 'B']); // +30, +10, +8, +5
+});
+
+test('average per game puts a smaller pool on equal footing', () => {
+  // A: +12 over 6 games (+2.0/game); B: +10 over 4 games (+2.5/game).
+  const teams = [t('A', 4, 2, 60, 48), t('B', 3, 1, 40, 30), t('C', 1, 3, 30, 35), t('D', 2, 2, 40, 40)];
+  assert.deepEqual(applySeedOrder(teams, 'total').map((x) => x.id), ['A', 'B', 'D', 'C']);
+  assert.deepEqual(applySeedOrder(teams, 'average').map((x) => x.id), ['B', 'A', 'D', 'C']);
+  assert.equal(formatPointsValue(teams[1], 'average'), '+2.50');
+  assert.equal(formatPointsValue(teams[2], 'total'), '−5');
+});
+
+test('a tie on the metric is found exactly, even for averages that only match as fractions', () => {
+  // +6 over 3 games and +4 over 2 games are both +2.00/game.
+  const teams = [t('A', 2, 1, 30, 24), t('B', 2, 0, 22, 18), t('C', 0, 3, 10, 30), t('D', 1, 1, 20, 20)];
+  const ranked = rankByPoints(teams, 'average');
+  assert.equal(hasPointsTie(ranked), true);
+  assert.equal(ranked[0].group, ranked[1].group);
+  assert.equal(hasPointsTie(rankByPoints(teams, 'total')), false);
+});
+
+test('a tie is refused without an organizer order, and the organizer may order only within it', () => {
+  const teams = [t('John', 3, 2, 50, 38), t('James', 2, 3, 47, 35), t('C', 3, 2, 40, 39), t('D', 4, 1, 30, 40)];
+  assert.throws(() => applySeedOrder(teams, 'total'), /tied on point differential/);
+  // Coin toss: James takes seed 1.
+  assert.deepEqual(applySeedOrder(teams, 'total', ['James', 'John', 'C', 'D']).map((x) => x.id), ['James', 'John', 'C', 'D']);
+  assert.throws(() => applySeedOrder(teams, 'total', ['C', 'John', 'James', 'D']), /no longer matches the standings/);
+  assert.throws(() => applySeedOrder(teams, 'total', ['John', 'James', 'C']), /no longer matches the qualified teams/);
+});
+
+test('points seeding only applies to a ladder that opens at the semifinals', () => {
+  const semis = deriveLadderFromPlan(row({ playoff_advance_per_pool: 2 })); // 2 pools x top 2
+  const quarters = deriveLadderFromPlan(row({ playoff_pool_count: 4, playoff_pool_pairs: [['A', 'C'], ['B', 'D']], playoff_advance_per_pool: 2 }));
+  assert.equal(usesPointsSeeding({ playoff_semifinal_seeding: 'points' }, semis), true);
+  assert.equal(usesPointsSeeding({ playoff_semifinal_seeding: 'points' }, quarters), false);
+  assert.equal(usesPointsSeeding({ playoff_semifinal_seeding: 'crossover' }, semis), false);
+  assert.deepEqual(semifinalPairing({}).matches, [[1, 4], [2, 3]]);
+  assert.deepEqual(semifinalPairing({ playoff_semifinal_pairing: '1v2' }).matches, [[1, 2], [3, 4]]);
+});
+
+test('a points-seeded semifinal shows seed placeholders in the bracket until it is generated', () => {
+  const category = row({ playoff_semifinal_seeding: 'points', playoff_semifinal_pairing: '1v2', playoff_points_metric: 'average' });
+  const { trees } = buildBracketTreesForCategory({ ...category, ladder: categoryLadder(category) }, []);
+  const semis = trees[0].rounds[0].matches;
+  assert.deepEqual(
+    semis.map((m) => [m.teamA?.label ?? m.placeholderA, m.teamB?.label ?? m.placeholderB]),
+    [['Seed 1 · avg point diff', 'Seed 2 · avg point diff'], ['Seed 3 · avg point diff', 'Seed 4 · avg point diff']]
+  );
+});

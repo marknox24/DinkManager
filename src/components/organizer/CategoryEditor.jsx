@@ -3,6 +3,7 @@ import { ChevronDown, ImagePlus, ShieldCheck, Trash2, Trophy } from 'lucide-reac
 import { CURRENCIES, MATCH_FORMATS, MATCH_TYPES } from '../../data/constants';
 import { getEventMediaUrl, uploadEventMedia } from '../../data/eventsApi';
 import { PLAYOFF_STAGES, deriveLadderFromPlan } from '../../data/playoffApi';
+import { semifinalPairing, usesPointsSeeding } from '../../utils/playoffLadder';
 import { useToast } from '../../context/ToastContext';
 import FormField, { inputClass, textareaClass } from '../ui/FormField';
 import Select from '../ui/Select';
@@ -37,7 +38,8 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete, de
     if (!local.playoff_enabled) return '';
     const ladder = deriveLadderFromPlan(local);
     if (!ladder.valid) return 'Invalid setup';
-    return ladder.levels.map((l) => PLAYOFF_STAGES[l.kind].short).join(' → ');
+    const stages = ladder.levels.map((l) => PLAYOFF_STAGES[l.kind].short).join(' → ');
+    return usesPointsSeeding(local, ladder) ? `${stages} · SF by points (${semifinalPairing(local).label})` : stages;
   })();
 
   const handleImageUpload = async (file) => {
@@ -187,6 +189,7 @@ export default function CategoryEditor({ eventId, category, onSave, onDelete, de
                         patch.playoff_pool_pairs = [];
                         patch.playoff_advance_per_pool = 2;
                         patch.playoff_third_place = true;
+                        patch.playoff_semifinal_seeding = 'crossover';
                       }
                       commit(patch);
                     }

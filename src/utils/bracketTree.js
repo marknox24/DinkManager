@@ -1,6 +1,6 @@
 import { isDoubleForfeit, resolveFixture } from './forfeit.js';
 import { compareMatchCode, teamLabel } from './match.js';
-import { expandFirstStageSlots, expandSinglePoolSlots, PLAYOFF_STAGES, stageMatchCode } from './playoffLadder.js';
+import { expandFirstStageSlots, expandSinglePoolSlots, PLAYOFF_STAGES, POINTS_METRICS, semifinalPairing, stageMatchCode, usesPointsSeeding } from './playoffLadder.js';
 
 // Turns a category's matches into the shape a visual bracket tree can
 // render directly — one or more trees (a pure Single Elimination category
@@ -458,7 +458,9 @@ function buildEntrantList(categoryTeams, categoryMatches = []) {
 // instead of the vertical timeline the Playoff Stages editor shows
 // organizers. `ladder` is categoryLadder(category) — computed by the
 // caller so this module takes plain data, not a live category row.
-function buildPlayoffLadderTree({ ladder, poolPairs, poolCount, advancePerPool, matches }) {
+// `pointsSeeding` ({ pairing, metric }) replaces the pool-rank placeholders
+// of a points-seeded semifinal with "Seed n" ones.
+function buildPlayoffLadderTree({ ladder, poolPairs, poolCount, advancePerPool, matches, pointsSeeding = null }) {
   if (!ladder?.valid || ladder.levels.length === 0) return null;
   const poMatches = matches.filter((m) => m.bracket_letter === 'PO' && m.status !== 'canceled');
   const byStage = new Map();
@@ -468,8 +470,12 @@ function buildPlayoffLadderTree({ ladder, poolPairs, poolCount, advancePerPool, 
   }
   for (const list of byStage.values()) list.sort((a, b) => compareMatchCode(a.match_code, b.match_code));
 
-  const firstSlots = poolCount === 1 ? expandSinglePoolSlots('A', advancePerPool) : expandFirstStageSlots(poolPairs, advancePerPool);
-  const slotLabel = (slot) => `Pool ${slot.letter} · Rank ${slot.rank}`;
+  const firstSlots = pointsSeeding
+    ? pointsSeeding.pairing.matches.map(([a, b]) => ({ a: { seed: a }, b: { seed: b } }))
+    : poolCount === 1
+      ? expandSinglePoolSlots('A', advancePerPool)
+      : expandFirstStageSlots(poolPairs, advancePerPool);
+  const slotLabel = (slot) => (slot.seed ? `Seed ${slot.seed} · ${POINTS_METRICS[pointsSeeding.metric].short}` : `Pool ${slot.letter} · Rank ${slot.rank}`);
 
   const rounds = ladder.levels
     .filter((level) => level.kind !== 'third_place') // rendered as a side note, not a tree column — see thirdPlaceRow below
@@ -549,6 +555,9 @@ export function buildBracketTreesForCategory(category, matches, teams = []) {
       poolCount: category.playoff_pool_count,
       advancePerPool: category.playoff_advance_per_pool,
       matches: categoryMatches,
+      pointsSeeding: usesPointsSeeding(category, category.ladder)
+        ? { pairing: semifinalPairing(category), metric: category.playoff_points_metric === 'average' ? 'average' : 'total' }
+        : null,
     });
     // Entrants aren't shown for playoff-ladder categories — their full
     // roster is already visible via the pool standings table and the

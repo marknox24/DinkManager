@@ -5,6 +5,7 @@ import Switch from '../ui/Switch';
 import Select from '../ui/Select';
 import FormField, { inputClass } from '../ui/FormField';
 import { deriveLadder, expandFirstStageSlots, expandSinglePoolSlots, readPlan, unpairedPools } from '../../data/playoffApi';
+import { POINTS_METRICS, SEMIFINAL_PAIRINGS } from '../../utils/playoffLadder';
 
 // Same visual language as RandomizerModal's bracket cards, so a pool looks
 // the same everywhere it shows up in the app.
@@ -61,6 +62,9 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
   const [advance, setAdvance] = useState(initial.playoff_advance_per_pool || 2);
   const [pairs, setPairs] = useState(initial.playoff_pool_pairs.length > 0 ? initial.playoff_pool_pairs : defaultPairs(initial.playoff_pool_count || 4));
   const [thirdPlace, setThirdPlace] = useState(initial.playoff_third_place);
+  const [seeding, setSeeding] = useState(initial.playoff_semifinal_seeding);
+  const [pairing, setPairing] = useState(initial.playoff_semifinal_pairing);
+  const [metric, setMetric] = useState(initial.playoff_points_metric);
 
   // Every option POOL_COUNT_OPTIONS offers is already a legal value (1, or
   // even), so there's no clamping/rounding to do here — unlike the old
@@ -97,6 +101,12 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
   // nothing for it to be paired with.
   const missing = useMemo(() => (poolCount === 1 ? [] : unpairedPools(allLetters, pairs)), [poolCount, allLetters, pairs]);
 
+  // Points seeding is a semifinal-only choice: offered only when the ladder
+  // opens at the semifinals, and saved as crossover for any other ladder so
+  // a stale choice never lingers.
+  const semisFirst = ladder.valid && ladder.levels[0]?.kind === 'semifinal';
+  const pointsSeeding = semisFirst && seeding === 'points';
+
   const canSave = !enabled || (ladder.valid && missing.length === 0);
 
   const handleSave = () => {
@@ -106,6 +116,9 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
       playoff_advance_per_pool: advance,
       playoff_pool_pairs: pairs,
       playoff_third_place: thirdPlace,
+      playoff_semifinal_seeding: pointsSeeding ? 'points' : 'crossover',
+      playoff_semifinal_pairing: pairing,
+      playoff_points_metric: metric,
     });
   };
 
@@ -164,7 +177,61 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
               <Switch checked={thirdPlace} onChange={setThirdPlace} />
             </div>
 
-            {poolCount > 1 && (
+            {semisFirst && (
+              <div className="mt-4">
+                <div className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-500">Semifinal matchups</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {[
+                    { value: 'crossover', title: poolCount === 1 ? 'Standings' : 'Crossover', hint: poolCount === 1 ? 'Seeded by pool standings' : 'Pools play each other' },
+                    { value: 'points', title: 'Points system', hint: 'Seeded by point differential' },
+                  ].map((opt) => (
+                    <button
+                      key={opt.value}
+                      type="button"
+                      onClick={() => setSeeding(opt.value)}
+                      aria-pressed={seeding === opt.value}
+                      className={`rounded-xl border-2 px-3 py-2.5 text-left transition ${
+                        seeding === opt.value ? 'border-brand-500 bg-brand-50/60' : 'border-ink-100 bg-white hover:border-ink-200'
+                      }`}
+                    >
+                      <span className="block text-sm font-bold text-ink-900">{opt.title}</span>
+                      <span className="block text-[11px] text-ink-500">{opt.hint}</span>
+                    </button>
+                  ))}
+                </div>
+                {pointsSeeding && (
+                  <div className="animate-slide-down mt-3 flex flex-col gap-3 rounded-xl border border-brand-100 bg-brand-50/30 p-3.5">
+                    <p className="text-xs text-ink-600">
+                      The 4 semifinalists qualify exactly as before. They're then ranked 1–4 by point differential from round robin. Wins and losses
+                      don't count. If teams are tied, you choose their order (e.g. by coin toss) when you generate the Semifinals.
+                    </p>
+                    <FormField label="Matchups">
+                      <Select value={pairing} onChange={(e) => setPairing(e.target.value)} className={inputClass}>
+                        {Object.entries(SEMIFINAL_PAIRINGS).map(([key, p]) => (
+                          <option key={key} value={key}>
+                            {p.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </FormField>
+                    <FormField
+                      label="Rank by"
+                      hint={metric === 'average' ? 'Point differential divided by games played, so a team from a smaller pool isn’t disadvantaged.' : 'The +/− shown in the standings table.'}
+                    >
+                      <Select value={metric} onChange={(e) => setMetric(e.target.value)} className={inputClass}>
+                        {Object.entries(POINTS_METRICS).map(([key, m]) => (
+                          <option key={key} value={key}>
+                            {m.label}
+                          </option>
+                        ))}
+                      </Select>
+                    </FormField>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {poolCount > 1 && !pointsSeeding && (
             <div className="mt-4">
               <div className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-500">Pool crossover</div>
               <p className="mb-2 text-xs text-ink-400">Which pools feed into each other for the first knockout round.</p>
@@ -226,7 +293,18 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
                         {level.matchCount} match{level.matchCount === 1 ? '' : 'es'}
                       </span>
                     </div>
-                    {i === 0 && (
+                    {i === 0 && pointsSeeding && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {SEMIFINAL_PAIRINGS[pairing].matches.map(([a, b]) => (
+                          <span key={`${a}-${b}`} className="flex items-center gap-1 rounded-full bg-ink-50 px-2 py-1 text-[11px] font-semibold text-ink-600">
+                            <ListChecks size={11} className="text-ink-300" />
+                            Seed {a} vs Seed {b}
+                          </span>
+                        ))}
+                        <span className="w-full text-[11px] text-ink-400">Seeds ranked by {POINTS_METRICS[metric].short}</span>
+                      </div>
+                    )}
+                    {i === 0 && !pointsSeeding && (
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {firstStageSlots.map((slot, si) => (
                           <span key={si} className="flex items-center gap-1 rounded-full bg-ink-50 px-2 py-1 text-[11px] font-semibold text-ink-600">

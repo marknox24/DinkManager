@@ -303,6 +303,9 @@ export default function EventEditorPage() {
         playoff_advance_per_pool: cat.playoff_advance_per_pool,
         playoff_pool_pairs: cat.playoff_pool_pairs,
         playoff_third_place: cat.playoff_third_place,
+        playoff_semifinal_seeding: cat.playoff_semifinal_seeding,
+        playoff_semifinal_pairing: cat.playoff_semifinal_pairing,
+        playoff_points_metric: cat.playoff_points_metric,
       });
       setCategories((prev) => prev.map((c) => (c.id === cat.id ? cat : c)));
     } catch (e) {
