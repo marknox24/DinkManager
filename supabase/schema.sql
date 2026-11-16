@@ -1448,6 +1448,13 @@ grant select on public_checkin_roster to anon, authenticated;
 -- body (not parameters), so a caller cannot widen either — same safety
 -- shape as public_published_events() below. p_category_id null = all
 -- categories (denied still excluded either way).
+-- show_public_roster is the organizer's "Show registered players" switch
+-- (event Settings > General). Off, this returns nothing at all, so names are
+-- unreachable rather than just hidden by the page; the registration form's
+-- early duplicate check then finds nothing, and the duplicate trigger above
+-- still blocks a real duplicate at submit.
+alter table events add column if not exists show_public_roster boolean not null default true;
+
 create or replace function public_event_roster(p_event_id uuid, p_category_id uuid default null)
 returns table (
   id uuid,
@@ -1468,6 +1475,7 @@ as $$
   join events e on e.id = r.event_id
   where e.id = p_event_id
     and e.is_published = true
+    and e.show_public_roster
     and r.status <> 'denied'
     and (p_category_id is null or r.category_id = p_category_id)
   order by r.created_at desc;

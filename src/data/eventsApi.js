@@ -85,6 +85,7 @@ export async function duplicateEvent(eventId) {
       cancellation_policy: source.cancellation_policy,
       refund_policy: source.refund_policy,
       randomizer_allow_same_club: source.randomizer_allow_same_club,
+      show_public_roster: source.show_public_roster ?? true,
       match_duration_minutes: source.match_duration_minutes,
       daily_start_time: source.daily_start_time,
       duplicated_from: source.id,

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { AlertTriangle, CalendarDays, Check, Coins, Copy, Files, LayoutGrid, Lock, MessageCircleQuestion, Plus, RefreshCw, Send, Shuffle, Sparkles, Trash2 } from 'lucide-react';
+import { AlertTriangle, CalendarDays, Check, Coins, Copy, Files, LayoutGrid, Lock, MessageCircleQuestion, Plus, RefreshCw, Send, Shuffle, Sparkles, Trash2, Users } from 'lucide-react';
 import { deleteEvent, duplicateEvent, getPendingPlanRequestForEvent, listCategories, regenerateShareToken, setEventVisibility, updateCategory, updateEvent } from '../../../data/eventsApi';
 import { addChangeRequestMessage, listChangeRequestMessages, listMyChangeRequests } from '../../../data/changeRequestsApi';
 import { CURRENCIES, COURT_TYPES } from '../../../data/constants';
@@ -395,6 +395,16 @@ export default function SettingsPage() {
     }
   };
 
+  const toggleShowRoster = async (show) => {
+    try {
+      const updated = await updateEvent(eventId, { show_public_roster: show });
+      setEvent(updated);
+      pushToast(show ? 'Registered players are now public' : 'Registered players are now hidden', 'success');
+    } catch (e) {
+      pushToast(e.message, 'error');
+    }
+  };
+
   const toggleVisibility = async (makePrivate) => {
     try {
       const updated = await setEventVisibility(eventId, makePrivate ? 'private' : 'public', event.share_token);
@@ -562,6 +572,24 @@ export default function SettingsPage() {
                           </button>
                         </div>
                       )}
+                    </div>
+
+                    <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
+                      <div className="flex items-center justify-between gap-2.5">
+                        <div className="flex items-center gap-2.5">
+                          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-brand-50 text-brand-600">
+                            <Users size={17} strokeWidth={2.3} />
+                          </span>
+                          <div>
+                            <h2 className="font-display text-base font-bold text-ink-900">Show registered players</h2>
+                            <p className="text-xs text-ink-500">
+                              List players and teams on the public event page. Turn off to keep names private; division slot counts still show.
+                            </p>
+                          </div>
+                        </div>
+                        {/* A missing value (an event loaded before this setting existed) means on. */}
+                        <Switch checked={event.show_public_roster !== false} onChange={toggleShowRoster} />
+                      </div>
                     </div>
 
                     <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">

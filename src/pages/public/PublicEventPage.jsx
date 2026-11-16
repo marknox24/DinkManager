@@ -315,7 +315,11 @@ export default function PublicEventPage() {
   const [selectedCategoryId, setSelectedCategoryId] = useState(null);
   const [myRegsByCategory, setMyRegsByCategory] = useState({});
   const [qrModalOpen, setQrModalOpen] = useState(false);
-  const roster = usePublicRoster(event?.id);
+  // The organizer's "Show registered players" switch. Off, the roster is never
+  // requested (the database would return nothing anyway) and both the hero
+  // strip and Who's playing are left out. Missing means on.
+  const showRoster = event?.show_public_roster !== false;
+  const roster = usePublicRoster(showRoster ? event?.id : undefined);
   const [rosterExpanded, setRosterExpanded] = useState(() => window.location.hash === '#players');
 
   const linkBase = token ? `/t/${token}` : `/e/${slug}`;
@@ -523,7 +527,9 @@ export default function PublicEventPage() {
               )}
             </div>
 
-            <PlayersStrip rows={roster.rows} hasRegistrations={counts.some((c) => c.active_count > 0)} onOpen={() => setRosterExpanded(true)} />
+            {showRoster && (
+              <PlayersStrip rows={roster.rows} hasRegistrations={counts.some((c) => c.active_count > 0)} onOpen={() => setRosterExpanded(true)} />
+            )}
 
             {event.description && (
               <div className="mt-4">
@@ -580,14 +586,16 @@ export default function PublicEventPage() {
           )}
         </section>
 
-        <WhosPlayingSection
-          categories={categories}
-          counts={counts}
-          roster={roster}
-          closed={event.status === 'finished'}
-          expanded={rosterExpanded}
-          onExpandedChange={setRosterExpanded}
-        />
+        {showRoster && (
+          <WhosPlayingSection
+            categories={categories}
+            counts={counts}
+            roster={roster}
+            closed={event.status === 'finished'}
+            expanded={rosterExpanded}
+            onExpandedChange={setRosterExpanded}
+          />
+        )}
 
         {sections.length > 0 && (
           <div className="rounded-2xl border border-ink-100 bg-white p-5 shadow-sm">
