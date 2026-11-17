@@ -11,7 +11,7 @@ import {
   listMatchesForCategory,
 } from '../../../data/bracketsApi';
 import { PLAYOFF_STAGES, deriveLadderFromPlan, generateStageMatches, getPlayoffStatus, matchLevelLabel, savePlan } from '../../../data/playoffApi';
-import { usesPointsSeeding } from '../../../utils/playoffLadder';
+import { semifinalSetupSummary } from '../../../utils/playoffLadder';
 import { getCustomFormat } from '../../../data/customFormats';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
@@ -28,7 +28,7 @@ import ForfeitModal from '../../../components/organizer/ForfeitModal';
 import LogScoreModal from '../../../components/organizer/LogScoreModal';
 import StartMatchModal from '../../../components/organizer/StartMatchModal';
 import PlayoffCrossoverConfirmModal from '../../../components/organizer/PlayoffCrossoverConfirmModal';
-import PointsSeedingConfirmModal from '../../../components/organizer/PointsSeedingConfirmModal';
+import SemifinalSetupModal from '../../../components/organizer/SemifinalSetupModal';
 import MatchlistPreviewModal from '../../../components/organizer/MatchlistPreviewModal';
 import RoundRobinScoreSheets from '../../../components/organizer/RoundRobinScoreSheets';
 import BlankScoreSheets from '../../../components/organizer/BlankScoreSheets';
@@ -96,7 +96,8 @@ export default function MatchListPage() {
   const [generatePreviewOpen, setGeneratePreviewOpen] = useState(false);
   const [generatingStage, setGeneratingStage] = useState(null);
   const [confirmingLevel, setConfirmingLevel] = useState(null);
-  const [pointsSeedingLevel, setPointsSeedingLevel] = useState(null);
+  const [semifinalLevel, setSemifinalLevel] = useState(null); // the Semifinals level whose setup popup is open
+  const [semifinalSettings, setSemifinalSettings] = useState(null); // what was confirmed there, carried through the crossover step
   const [loggingMatch, setLoggingMatch] = useState(null);
   const [forfeitingMatch, setForfeitingMatch] = useState(null);
   const [startingMatch, setStartingMatch] = useState(null);
@@ -358,8 +359,9 @@ export default function MatchListPage() {
   // semifinal confirms its seeds instead, and that's where ties get settled.
   const handleGenerateStageClick = (level) => {
     const isFirstStage = playoffStatus[0]?.kind === level.kind;
-    if (isFirstStage && usesPointsSeeding(activeCategory, deriveLadderFromPlan(activeCategory))) {
-      setPointsSeedingLevel(level);
+    // Always ask for the semifinal setup, so it can't be forgotten on the day.
+    if (level.kind === 'semifinal') {
+      setSemifinalLevel(level);
       return;
     }
     if (isFirstStage && activeCategory.playoff_pool_count !== 1) {
@@ -385,11 +387,26 @@ export default function MatchListPage() {
     }
   };
 
+  // The semifinal popup was confirmed. Points seeding generates straight
+  // away; the crossover of a semifinals-first knockout still needs its pool
+  // pairing confirmed in the next step (which then carries these settings).
+  const handleConfirmSemifinal = async ({ settings, seedOrder }) => {
+    const isFirstStage = playoffStatus[0]?.kind === semifinalLevel.kind;
+    setSemifinalSettings(settings);
+    if (settings.seeding !== 'points' && isFirstStage && activeCategory.playoff_pool_count !== 1) {
+      setConfirmingLevel(semifinalLevel);
+      setSemifinalLevel(null);
+      return;
+    }
+    await handleGenerateStage(semifinalLevel.kind, { seedOrder, semifinal: settings });
+    setSemifinalLevel(null);
+  };
+
   const handleConfirmCrossover = async ({ playoff_pool_pairs, playoff_advance_per_pool }) => {
     if (blockIfOffline()) return;
     await savePlan(activeCategory.id, { playoff_pool_pairs, playoff_advance_per_pool });
     setCategories((prev) => prev.map((c) => (c.id === activeCategory.id ? { ...c, playoff_pool_pairs, playoff_advance_per_pool } : c)));
-    await handleGenerateStage(confirmingLevel.kind);
+    await handleGenerateStage(confirmingLevel.kind, confirmingLevel.kind === 'semifinal' ? { semifinal: semifinalSettings } : {});
     setConfirmingLevel(null);
   };
 
@@ -710,6 +727,11 @@ export default function MatchListPage() {
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-bold text-ink-400">Level {i + 2}</span>
                         <span className="text-sm font-semibold text-ink-800">{level.label}</span>
+                        {level.kind === 'semifinal' && level.status !== 'generated' && level.status !== 'complete' && (
+                          <span className="rounded-full bg-brand-50 px-2 py-0.5 text-[11px] font-semibold text-brand-700" title="Set in Event Details › Categories › Playoffs. You'll be asked to confirm it when you generate.">
+                            Set up: {semifinalSetupSummary(activeCategory, deriveLadderFromPlan(activeCategory))}
+                          </span>
+                        )}
                         {(level.status === 'generated' || level.status === 'complete') && (
                           <span className="rounded-full bg-ink-100 px-2 py-0.5 text-[11px] font-bold text-ink-500">
                             {level.completedCount}/{level.matchCount} played
@@ -958,15 +980,13 @@ export default function MatchListPage() {
           onClose={() => setStartingMatch(null)}
         />
       )}
-      {pointsSeedingLevel && (
-        <PointsSeedingConfirmModal
-          level={pointsSeedingLevel}
-          categoryId={activeCategory.id}
-          onConfirm={async (seedOrder) => {
-            await handleGenerateStage(pointsSeedingLevel.kind, { seedOrder });
-            setPointsSeedingLevel(null);
-          }}
-          onClose={() => setPointsSeedingLevel(null)}
+      {semifinalLevel && (
+        <SemifinalSetupModal
+          level={semifinalLevel}
+          category={activeCategory}
+          opensKnockout={playoffStatus[0]?.kind === semifinalLevel.kind}
+          onConfirm={handleConfirmSemifinal}
+          onClose={() => setSemifinalLevel(null)}
         />
       )}
       {confirmingLevel && (

@@ -207,7 +207,7 @@ test('a Round of 16 row builds a full tree of placeholders with matching codes',
 
 // --- Points-system semifinal seeding ---------------------------------------
 
-import { applySeedOrder, formatPointsValue, hasPointsTie, rankByPoints, semifinalPairing, usesPointsSeeding } from './playoffLadder.js';
+import { applySeedOrder, crossoverOption, formatPointsValue, hasPointsTie, hasSemifinal, semifinalSetupSummary, rankByPoints, semifinalOpensKnockout, semifinalPairing, usesPointsSeeding } from './playoffLadder.js';
 
 const t = (id, w, l, pf, pa) => ({ id, wins: w, losses: l, points_for: pf, points_against: pa });
 
@@ -245,12 +245,17 @@ test('a tie is refused without an organizer order, and the organizer may order o
   assert.throws(() => applySeedOrder(teams, 'total', ['John', 'James', 'C']), /no longer matches the qualified teams/);
 });
 
-test('points seeding only applies to a ladder that opens at the semifinals', () => {
+test('points seeding applies to any ladder with a semifinal, but not one that goes straight to the final', () => {
   const semis = deriveLadderFromPlan(row({ playoff_advance_per_pool: 2 })); // 2 pools x top 2
   const quarters = deriveLadderFromPlan(row({ playoff_pool_count: 4, playoff_pool_pairs: [['A', 'C'], ['B', 'D']], playoff_advance_per_pool: 2 }));
+  const finalOnly = deriveLadderFromPlan(row({ playoff_advance_per_pool: 1 })); // 2 pools x top 1
   assert.equal(usesPointsSeeding({ playoff_semifinal_seeding: 'points' }, semis), true);
-  assert.equal(usesPointsSeeding({ playoff_semifinal_seeding: 'points' }, quarters), false);
+  assert.equal(usesPointsSeeding({ playoff_semifinal_seeding: 'points' }, quarters), true);
+  assert.equal(usesPointsSeeding({ playoff_semifinal_seeding: 'points' }, finalOnly), false);
   assert.equal(usesPointsSeeding({ playoff_semifinal_seeding: 'crossover' }, semis), false);
+  assert.equal(semifinalOpensKnockout(semis), true);
+  assert.equal(semifinalOpensKnockout(quarters), false);
+  assert.equal(hasSemifinal(finalOnly), false);
   assert.deepEqual(semifinalPairing({}).matches, [[1, 4], [2, 3]]);
   assert.deepEqual(semifinalPairing({ playoff_semifinal_pairing: '1v2' }).matches, [[1, 2], [3, 4]]);
 });
@@ -263,4 +268,34 @@ test('a points-seeded semifinal shows seed placeholders in the bracket until it 
     semis.map((m) => [m.teamA?.label ?? m.placeholderA, m.teamB?.label ?? m.placeholderB]),
     [['Seed 1 · avg point diff', 'Seed 2 · avg point diff'], ['Seed 3 · avg point diff', 'Seed 4 · avg point diff']]
   );
+});
+
+test('a points-seeded semifinal after the quarterfinals shows seed placeholders, and the quarterfinals keep their pool slots', () => {
+  const category = row({
+    playoff_pool_count: 4,
+    playoff_pool_pairs: [['A', 'C'], ['B', 'D']],
+    playoff_advance_per_pool: 2,
+    playoff_semifinal_seeding: 'points',
+    playoff_semifinal_pairing: '1v3',
+    playoff_points_metric: 'total',
+  });
+  const { trees } = buildBracketTreesForCategory({ ...category, ladder: categoryLadder(category) }, []);
+  const label = (m) => [m.teamA?.label ?? m.placeholderA, m.teamB?.label ?? m.placeholderB];
+  const [quarters, semis] = trees[0].rounds;
+  assert.equal(label(quarters.matches[0])[0], 'Pool A · Rank 1');
+  assert.deepEqual(semis.matches.map(label), [['Seed 1 · point diff', 'Seed 3 · point diff'], ['Seed 2 · point diff', 'Seed 4 · point diff']]);
+});
+
+test('the semifinal setup is summarised the way an organizer chose it', () => {
+  const semis = deriveLadderFromPlan(row({ playoff_advance_per_pool: 2 }));
+  const quarters = deriveLadderFromPlan(row({ playoff_pool_count: 4, playoff_pool_pairs: [['A', 'C'], ['B', 'D']], playoff_advance_per_pool: 2 }));
+  const finalOnly = deriveLadderFromPlan(row({ playoff_advance_per_pool: 1 }));
+  assert.equal(semifinalSetupSummary({ playoff_pool_count: 2, playoff_semifinal_seeding: 'crossover' }, semis), 'Crossover');
+  assert.equal(semifinalSetupSummary({ playoff_pool_count: 4, playoff_semifinal_seeding: 'crossover' }, quarters), 'Bracket order');
+  assert.equal(
+    semifinalSetupSummary({ playoff_semifinal_seeding: 'points', playoff_semifinal_pairing: '1v2', playoff_points_metric: 'average' }, quarters),
+    'Points system · 1 vs 2 · 3 vs 4 · avg point diff'
+  );
+  assert.equal(semifinalSetupSummary({ playoff_semifinal_seeding: 'points' }, finalOnly), '');
+  assert.equal(crossoverOption(1, true).title, 'Standings');
 });

@@ -204,14 +204,46 @@ export const POINTS_METRICS = {
   average: { label: 'Average point differential per game', short: 'avg point diff' },
 };
 
-// The setting only has meaning when the knockout opens with the semifinals;
-// for any other ladder the crossover always applies, whatever is saved.
+// The setting only has meaning when the ladder has a semifinal round at all
+// (a plain final-only ladder has nothing to seed). It applies whether the
+// knockout opens with the semifinals (the four qualifiers are seeded) or
+// with the quarterfinals or earlier (the four teams that reach the semifinals
+// are seeded once the previous round is played).
+export function hasSemifinal(ladder) {
+  return Boolean(ladder?.valid) && ladder.levels.some((l) => l.kind === 'semifinal');
+}
+
+// True when the semifinals are the knockout's first round, so seeding picks
+// the four qualifiers straight from the pools.
+export function semifinalOpensKnockout(ladder) {
+  return Boolean(ladder?.valid) && ladder.levels[0]?.kind === 'semifinal';
+}
+
 export function usesPointsSeeding(category, ladder) {
-  return category.playoff_semifinal_seeding === 'points' && Boolean(ladder?.valid) && ladder.levels[0]?.kind === 'semifinal';
+  return category.playoff_semifinal_seeding === 'points' && hasSemifinal(ladder);
 }
 
 export function semifinalPairing(category) {
   return SEMIFINAL_PAIRINGS[category.playoff_semifinal_pairing] || SEMIFINAL_PAIRINGS['1v4'];
+}
+
+// The non-points way of matching the semifinals, named for how this ladder
+// actually does it (so a quarterfinals-first category doesn't say "crossover").
+export function crossoverOption(poolCount, opensKnockout) {
+  if (!opensKnockout) return { title: 'Bracket order', hint: 'Winners meet as drawn' };
+  if (poolCount === 1) return { title: 'Standings', hint: 'Seeded by pool standings' };
+  return { title: 'Crossover', hint: 'Pools play each other' };
+}
+
+// One line describing how a category's semifinals are set up, for showing
+// where they get generated.
+export function semifinalSetupSummary(category, ladder) {
+  if (!hasSemifinal(ladder)) return '';
+  if (usesPointsSeeding(category, ladder)) {
+    const metric = POINTS_METRICS[category.playoff_points_metric] || POINTS_METRICS.total;
+    return `Points system · ${semifinalPairing(category).label} · ${metric.short}`;
+  }
+  return crossoverOption(category.playoff_pool_count, semifinalOpensKnockout(ladder)).title;
 }
 
 // A team's seeding value as an exact fraction, so "average per game" ties

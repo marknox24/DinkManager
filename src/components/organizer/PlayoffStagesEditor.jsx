@@ -5,7 +5,7 @@ import Switch from '../ui/Switch';
 import Select from '../ui/Select';
 import FormField, { inputClass } from '../ui/FormField';
 import { deriveLadder, expandFirstStageSlots, expandSinglePoolSlots, readPlan, unpairedPools } from '../../data/playoffApi';
-import { POINTS_METRICS, SEMIFINAL_PAIRINGS } from '../../utils/playoffLadder';
+import { POINTS_METRICS, SEMIFINAL_PAIRINGS, crossoverOption, hasSemifinal, semifinalOpensKnockout } from '../../utils/playoffLadder';
 
 // Same visual language as RandomizerModal's bracket cards, so a pool looks
 // the same everywhere it shows up in the app.
@@ -101,11 +101,18 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
   // nothing for it to be paired with.
   const missing = useMemo(() => (poolCount === 1 ? [] : unpairedPools(allLetters, pairs)), [poolCount, allLetters, pairs]);
 
-  // Points seeding is a semifinal-only choice: offered only when the ladder
-  // opens at the semifinals, and saved as crossover for any other ladder so
-  // a stale choice never lingers.
-  const semisFirst = ladder.valid && ladder.levels[0]?.kind === 'semifinal';
-  const pointsSeeding = semisFirst && seeding === 'points';
+  // Points seeding is a semifinal-only choice, offered whenever the ladder
+  // has a semifinal round and saved as crossover for any other ladder so a
+  // stale choice never lingers. Chosen up front (even though it only takes
+  // effect once the semifinalists are known) so nothing is forgotten on the
+  // day. When the semifinals open the knockout it replaces the pool crossover;
+  // after an earlier round it only seeds the semifinals.
+  const hasSemis = hasSemifinal(ladder);
+  const semisFirst = semifinalOpensKnockout(ladder);
+  const semisFollow = hasSemis && !semisFirst;
+  const pointsSeeding = hasSemis && seeding === 'points';
+  const crossoverByPoints = pointsSeeding && semisFirst;
+  const semisPriorLabel = semisFollow ? ladder.levels[ladder.levels.findIndex((l) => l.kind === 'semifinal') - 1]?.label : null;
 
   const canSave = !enabled || (ladder.valid && missing.length === 0);
 
@@ -179,23 +186,22 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
 
             {/* Shown even when it can't apply, so organizers can find the
                 option and see what setup unlocks it. */}
-            {ladder.valid && !semisFirst && (
+            {ladder.valid && !hasSemis && (
               <div className="mt-4">
                 <div className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-500">Semifinal matchups</div>
                 <div className="rounded-xl border border-dashed border-ink-200 bg-ink-50/50 p-3.5 text-xs text-ink-500">
-                  <span className="font-semibold text-ink-700">Points system</span> (seeding the semifinals by point differential) is available when
-                  the knockout starts at the Semifinals, with 4 teams advancing: 1 pool × top 4, 2 pools × top 2, or 4 pools × top 1. This setup starts
-                  at the {ladder.levels[0].label}.
+                  <span className="font-semibold text-ink-700">Points system</span> (seeding the semifinals by point differential) needs a Semifinals
+                  round, and this setup goes straight to the Final. Advance 4 or more teams to choose how the Semifinals are matched.
                 </div>
               </div>
             )}
 
-            {semisFirst && (
+            {hasSemis && (
               <div className="mt-4">
                 <div className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-500">Semifinal matchups</div>
                 <div className="grid grid-cols-2 gap-2">
                   {[
-                    { value: 'crossover', title: poolCount === 1 ? 'Standings' : 'Crossover', hint: poolCount === 1 ? 'Seeded by pool standings' : 'Pools play each other' },
+                    { value: 'crossover', ...crossoverOption(poolCount, semisFirst) },
                     { value: 'points', title: 'Points system', hint: 'Seeded by point differential' },
                   ].map((opt) => (
                     <button
@@ -215,8 +221,11 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
                 {pointsSeeding && (
                   <div className="animate-slide-down mt-3 flex flex-col gap-3 rounded-xl border border-brand-100 bg-brand-50/30 p-3.5">
                     <p className="text-xs text-ink-600">
-                      The 4 semifinalists qualify exactly as before. They're then ranked 1–4 by point differential from round robin. Wins and losses
-                      don't count. If teams are tied, you choose their order (e.g. by coin toss) when you generate the Semifinals.
+                      {semisFirst
+                        ? 'The 4 semifinalists qualify exactly as before. '
+                        : `The ${semisPriorLabel} are played as set up below. The 4 teams that win them go through to the Semifinals. `}
+                      They're then ranked 1–4 by point differential from round robin. Wins and losses don't count. If teams are tied, you choose
+                      their order (e.g. by coin toss) when you generate the Semifinals.
                     </p>
                     <FormField label="Matchups">
                       <Select value={pairing} onChange={(e) => setPairing(e.target.value)} className={inputClass}>
@@ -244,7 +253,7 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
               </div>
             )}
 
-            {poolCount > 1 && !pointsSeeding && (
+            {poolCount > 1 && !crossoverByPoints && (
             <div className="mt-4">
               <div className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-500">Pool crossover</div>
               <p className="mb-2 text-xs text-ink-400">Which pools feed into each other for the first knockout round.</p>
@@ -306,7 +315,7 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
                         {level.matchCount} match{level.matchCount === 1 ? '' : 'es'}
                       </span>
                     </div>
-                    {i === 0 && pointsSeeding && (
+                    {pointsSeeding && level.kind === 'semifinal' && (
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {SEMIFINAL_PAIRINGS[pairing].matches.map(([a, b]) => (
                           <span key={`${a}-${b}`} className="flex items-center gap-1 rounded-full bg-ink-50 px-2 py-1 text-[11px] font-semibold text-ink-600">
@@ -314,10 +323,13 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
                             Seed {a} vs Seed {b}
                           </span>
                         ))}
-                        <span className="w-full text-[11px] text-ink-400">Seeds ranked by {POINTS_METRICS[metric].short}</span>
+                        <span className="w-full text-[11px] text-ink-400">
+                          Seeds ranked by {POINTS_METRICS[metric].short}
+                          {semisFollow ? ` among the ${semisPriorLabel} winners` : ''}
+                        </span>
                       </div>
                     )}
-                    {i === 0 && !pointsSeeding && (
+                    {i === 0 && !crossoverByPoints && (
                       <div className="mt-2 flex flex-wrap gap-1.5">
                         {firstStageSlots.map((slot, si) => (
                           <span key={si} className="flex items-center gap-1 rounded-full bg-ink-50 px-2 py-1 text-[11px] font-semibold text-ink-600">

@@ -24,8 +24,9 @@ import {
   expandFirstStageSlots,
   expandSinglePoolSlots,
   usesPointsSeeding,
+  hasSemifinal,
+  semifinalOpensKnockout,
   semifinalPairing,
-  rankByPoints,
   applySeedOrder,
 } from '../utils/playoffLadder';
 export { PLAYOFF_STAGES, matchLevelLabel, deriveLadder, deriveLadderFromPlan, unpairedPools, expandFirstStageSlots, expandSinglePoolSlots };
@@ -179,34 +180,95 @@ async function loadPointsQualifiers(plan, poolBrackets, level) {
   return qualifiers;
 }
 
-// What the organizer confirms before a points-seeded semifinal is generated:
-// the four qualifiers best-first, with tie groups the organizer orders.
-export async function getPointsSeeding(categoryId) {
+// A double-forfeited match sends nobody on, but a fixture needs two
+// teams — one who forfeited fills the slot and resolveFixture closes the
+// match as a walkover (see utils/forfeit.js).
+const winnerSide = (m) => (isDoubleForfeit(m) ? { team: m.team_a_id, dead: true } : { team: m.winner_team_id, dead: false });
+const loserSide = (m) =>
+  isDoubleForfeit(m) ? { team: m.team_b_id, dead: true } : { team: m.winner_team_id === m.team_a_id ? m.team_b_id : m.team_a_id, dead: false };
+
+// The previous knockout round's matches in code order (numerically: the
+// database sorts R32-10 before R32-2, which would pair the wrong winners),
+// once every one of them has a result.
+async function loadDecidedStage(poBracket, prior, priorLevel) {
+  if (!poBracket) throw new Error('Generate the earlier playoff stages first.');
+  const { data: priorMatches, error } = await supabase.from('matches').select('*').eq('bracket_id', poBracket.id).eq('playoff_stage', prior);
+  if (error) throw error;
+  priorMatches.sort((a, b) => compareMatchCode(a.match_code, b.match_code));
+  if (priorMatches.length !== priorLevel?.matchCount || !priorMatches.every(matchIsDecided)) {
+    throw new Error(`${PLAYOFF_STAGES[prior].label} isn't finished yet.`);
+  }
+  return priorMatches;
+}
+
+// The four teams that won their way into a points-seeded semifinal that
+// follows an earlier knockout round, each carrying its round-robin record
+// (what the seeding ranks on), its pool letter, and the knockout-bracket
+// team (`poTeamId`) that actually plays the fixture.
+async function loadPointsWinners(priorMatches, poolBrackets) {
+  const sides = priorMatches.map(winnerSide);
+  if (sides.length !== 4) throw new Error('A points-seeded semifinal needs exactly four teams.');
+  const { data: poTeams, error: poErr } = await supabase
+    .from('teams')
+    .select('id, source_team_id')
+    .in(
+      'id',
+      sides.map((s) => s.team)
+    );
+  if (poErr) throw poErr;
+  const { data: sources, error: srcErr } = await supabase
+    .from('teams')
+    .select('*')
+    .in(
+      'id',
+      poTeams.map((t) => t.source_team_id).filter(Boolean)
+    );
+  if (srcErr) throw srcErr;
+  const letterByBracket = new Map(poolBrackets.map((b) => [b.id, b.letter]));
+  return sides.map((side) => {
+    const po = poTeams.find((t) => t.id === side.team);
+    const source = sources.find((s) => s.id === po?.source_team_id);
+    if (!source) throw new Error("Couldn't find a semifinalist's round-robin record to seed from.");
+    return { ...source, pool_letter: letterByBracket.get(source.bracket_id), poTeamId: side.team, dead: side.dead };
+  });
+}
+
+// The four teams a points-seeded semifinal would be drawn from (with their
+// round-robin records), unranked: the generate popup ranks them itself so the
+// organizer can switch the ranking metric without another round trip.
+export async function getSemifinalCandidates(categoryId) {
   const { data: category, error: catErr } = await supabase.from('categories').select('*').eq('id', categoryId).single();
   if (catErr) throw catErr;
   const plan = readPlan(category);
   const ladder = deriveLadderFromPlan(plan);
-  if (!plan.playoff_enabled || !usesPointsSeeding(plan, ladder)) throw new Error('This category does not use points seeding.');
+  if (!plan.playoff_enabled || !hasSemifinal(ladder)) throw new Error('This category has no semifinals.');
   const { data: poolBrackets, error: poolErr } = await supabase.from('brackets').select('id, letter').eq('category_id', categoryId).eq('kind', 'pool');
   if (poolErr) throw poolErr;
   poolBrackets.sort((a, b) => a.letter.localeCompare(b.letter));
-  const qualifiers = await loadPointsQualifiers(plan, poolBrackets, ladder.levels[0]);
-  return {
-    metric: plan.playoff_points_metric,
-    pairing: semifinalPairing(plan),
-    ranked: rankByPoints(qualifiers, plan.playoff_points_metric),
-  };
+  if (semifinalOpensKnockout(ladder)) return loadPointsQualifiers(plan, poolBrackets, ladder.levels[0]);
+  const prior = priorStageOf('semifinal', new Set(ladder.levels.map((l) => l.kind)));
+  const priorMatches = await loadDecidedStage(await getPlayoffBracket(categoryId), prior, ladder.levels.find((l) => l.kind === prior));
+  return loadPointsWinners(priorMatches, poolBrackets);
 }
 
 // Generates exactly one stage's matches. { replace: true } deletes that
 // stage's still-scheduled rows first (refusing if any are completed/
 // in_progress) before regenerating — used after the plan changes.
 // `seedOrder` (team ids, best first) is the organizer's tie-settled order for
-// a points-seeded semifinal; see applySeedOrder.
-export async function generateStageMatches(categoryId, kind, { replace = false, seedOrder = null } = {}) {
+// a points-seeded semifinal; see applySeedOrder. `semifinal`
+// ({ seeding, pairing, metric }) is what the organizer confirmed in the
+// generate popup: it overrides the category's saved semifinal setup for this
+// one generation, so someone without permission to edit categories can still
+// generate with the settings they confirmed.
+export async function generateStageMatches(categoryId, kind, { replace = false, seedOrder = null, semifinal = null } = {}) {
   const { data: category, error: catErr } = await supabase.from('categories').select('*').eq('id', categoryId).single();
   if (catErr) throw catErr;
-  const plan = readPlan(category);
+  const plan = {
+    ...readPlan(category),
+    ...(semifinal
+      ? { playoff_semifinal_seeding: semifinal.seeding, playoff_semifinal_pairing: semifinal.pairing, playoff_points_metric: semifinal.metric }
+      : {}),
+  };
   const ladder = deriveLadderFromPlan(plan);
   if (!plan.playoff_enabled || !ladder.valid) throw new Error('This category has no valid playoff plan.');
   const level = ladder.levels.find((l) => l.kind === kind);
@@ -256,7 +318,7 @@ export async function generateStageMatches(categoryId, kind, { replace = false, 
     let seedEntries;
     let slotLabels;
 
-    if (usesPointsSeeding(plan, ladder)) {
+    if (usesPointsSeeding(plan, ladder) && semifinalOpensKnockout(ladder)) {
       const qualifiers = await loadPointsQualifiers(plan, poolBrackets, level);
       const seeds = applySeedOrder(qualifiers, plan.playoff_points_metric, seedOrder);
       seedEntries = seeds.map((source, i) => ({ seedLabel: `S${i + 1}`, source }));
@@ -356,31 +418,17 @@ export async function generateStageMatches(categoryId, kind, { replace = false, 
 
     teamPairs = slotLabels.map((slot) => ({ a: teamBySeed.get(slot.a).id, b: teamBySeed.get(slot.b).id }));
   } else {
-    if (!poBracket) throw new Error('Generate the earlier playoff stages first.');
     const prior = priorStageOf(kind, ladderKinds);
     const priorLevel = ladder.levels.find((l) => l.kind === prior);
-    const { data: priorMatches, error: priorErr } = await supabase
-      .from('matches')
-      .select('*')
-      .eq('bracket_id', poBracket.id)
-      .eq('playoff_stage', prior);
-    if (priorErr) throw priorErr;
-    // In code order, numerically: the database sorts R32-10 before R32-2,
-    // which would pair the wrong winners below.
-    priorMatches.sort((a, b) => compareMatchCode(a.match_code, b.match_code));
-    if (priorMatches.length !== priorLevel?.matchCount || !priorMatches.every(matchIsDecided)) {
-      throw new Error(`${PLAYOFF_STAGES[prior].label} isn't finished yet.`);
-    }
-
-    // A double-forfeited match sends nobody on, but a fixture needs two
-    // teams — one who forfeited fills the slot and resolveFixture closes the
-    // match as a walkover (see utils/forfeit.js).
-    const winnerSide = (m) => (isDoubleForfeit(m) ? { team: m.team_a_id, dead: true } : { team: m.winner_team_id, dead: false });
-    const loserSide = (m) =>
-      isDoubleForfeit(m) ? { team: m.team_b_id, dead: true } : { team: m.winner_team_id === m.team_a_id ? m.team_b_id : m.team_a_id, dead: false };
+    const priorMatches = await loadDecidedStage(poBracket, prior, priorLevel);
     const pairOf = (sideA, sideB) => ({ a: sideA.team, b: sideB.team, deadA: sideA.dead, deadB: sideB.dead });
 
-    if (kind === 'third_place') {
+    if (kind === 'semifinal' && usesPointsSeeding(plan, ladder)) {
+      // Seeded by round-robin point differential, not by bracket position.
+      const winners = await loadPointsWinners(priorMatches, poolBrackets);
+      const seeds = applySeedOrder(winners, plan.playoff_points_metric, seedOrder);
+      teamPairs = semifinalPairing(plan).matches.map(([a, b]) => pairOf({ team: seeds[a - 1].poTeamId, dead: seeds[a - 1].dead }, { team: seeds[b - 1].poTeamId, dead: seeds[b - 1].dead }));
+    } else if (kind === 'third_place') {
       teamPairs = [pairOf(loserSide(priorMatches[0]), loserSide(priorMatches[1]))];
     } else {
       teamPairs = [];

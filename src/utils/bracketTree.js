@@ -458,8 +458,9 @@ function buildEntrantList(categoryTeams, categoryMatches = []) {
 // instead of the vertical timeline the Playoff Stages editor shows
 // organizers. `ladder` is categoryLadder(category) — computed by the
 // caller so this module takes plain data, not a live category row.
-// `pointsSeeding` ({ pairing, metric }) replaces the pool-rank placeholders
-// of a points-seeded semifinal with "Seed n" ones.
+// `pointsSeeding` ({ pairing, metric }) replaces the placeholders of a
+// points-seeded semifinal with "Seed n" ones (pool-rank ones when the
+// semifinals open the knockout, "Winner of QF1" ones when they follow it).
 function buildPlayoffLadderTree({ ladder, poolPairs, poolCount, advancePerPool, matches, pointsSeeding = null }) {
   if (!ladder?.valid || ladder.levels.length === 0) return null;
   const poMatches = matches.filter((m) => m.bracket_letter === 'PO' && m.status !== 'canceled');
@@ -470,7 +471,8 @@ function buildPlayoffLadderTree({ ladder, poolPairs, poolCount, advancePerPool, 
   }
   for (const list of byStage.values()) list.sort((a, b) => compareMatchCode(a.match_code, b.match_code));
 
-  const firstSlots = pointsSeeding
+  const semisFirst = ladder.levels[0].kind === 'semifinal';
+  const firstSlots = pointsSeeding && semisFirst
     ? pointsSeeding.pairing.matches.map(([a, b]) => ({ a: { seed: a }, b: { seed: b } }))
     : poolCount === 1
       ? expandSinglePoolSlots('A', advancePerPool)
@@ -491,6 +493,12 @@ function buildPlayoffLadderTree({ ladder, poolPairs, poolCount, advancePerPool, 
             // Each slot is one whole fixture, so box i is simply slot i.
             placeholderA = firstSlots[i] ? slotLabel(firstSlots[i].a) : null;
             placeholderB = firstSlots[i] ? slotLabel(firstSlots[i].b) : null;
+          } else if (pointsSeeding && level.kind === 'semifinal') {
+            // Who plays whom depends on round-robin point differential, so
+            // the fixture can only be described by seed until it is generated.
+            const [a, b] = pointsSeeding.pairing.matches[i] || [];
+            placeholderA = a ? slotLabel({ seed: a }) : null;
+            placeholderB = b ? slotLabel({ seed: b }) : null;
           } else {
             const prevKind = ladder.levels[levelIndex - 1].kind;
             placeholderA = `Winner of ${stageMatchCode(prevKind, i * 2 + 1)}`;
