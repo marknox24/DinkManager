@@ -177,6 +177,19 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
               <Switch checked={thirdPlace} onChange={setThirdPlace} />
             </div>
 
+            {/* Shown even when it can't apply, so organizers can find the
+                option and see what setup unlocks it. */}
+            {ladder.valid && !semisFirst && (
+              <div className="mt-4">
+                <div className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-500">Semifinal matchups</div>
+                <div className="rounded-xl border border-dashed border-ink-200 bg-ink-50/50 p-3.5 text-xs text-ink-500">
+                  <span className="font-semibold text-ink-700">Points system</span> (seeding the semifinals by point differential) is available when
+                  the knockout starts at the Semifinals, with 4 teams advancing: 1 pool × top 4, 2 pools × top 2, or 4 pools × top 1. This setup starts
+                  at the {ladder.levels[0].label}.
+                </div>
+              </div>
+            )}
+
             {semisFirst && (
               <div className="mt-4">
                 <div className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-500">Semifinal matchups</div>
