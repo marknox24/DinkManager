@@ -7,6 +7,7 @@ import { useEventAccess } from '../../context/EventAccessContext';
 import { useOfflineSync } from '../../context/OfflineSyncContext';
 import { permissionForNavId } from '../../data/permissions';
 import Logo from '../ui/Logo';
+import AppVersionBadge from './AppVersionBadge';
 
 const NAV_ITEMS = [
   { id: 'overview', label: 'Overview', icon: LayoutGrid },
@@ -70,7 +71,7 @@ export default function EventWorkspaceLayout({ event: eventProp, children }) {
   };
 
   const sidebarContent = (
-    <div className="flex h-full w-64 shrink-0 flex-col bg-ink-950 px-4 py-5">
+    <div className="flex h-full w-64 shrink-0 flex-col overflow-y-auto overscroll-contain bg-ink-950 px-4 py-5">
       <div className="mb-6 flex items-center justify-between px-1">
         <Link to="/dashboard" className="flex items-center gap-2.5">
           <Logo size={34} />
@@ -107,7 +108,8 @@ export default function EventWorkspaceLayout({ event: eventProp, children }) {
       </nav>
 
       <div className="mt-auto flex flex-col gap-2 pt-4">
-        <div className="truncate text-[10px] text-ink-500">{user?.email}</div>
+        <AppVersionBadge />
+        <div className="truncate px-1 text-[10px] text-ink-500">{user?.email}</div>
         <button
           onClick={handleSignOut}
           className="flex items-center gap-2 rounded-xl px-3 py-2 text-xs font-semibold text-ink-400 transition hover:bg-white/5 hover:text-white"
