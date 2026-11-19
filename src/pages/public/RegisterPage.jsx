@@ -19,9 +19,28 @@ import { renderRichText } from '../../utils/richText';
 import { isValidProfileUrl, normalizeProfileUrl } from '../../utils/socialProfile';
 
 // Organizers use the link to look into a player's history, which they can't
-// do on a private profile.
-function profileHint(required) {
-  return `${required ? 'Required' : 'Optional'} — make sure the profile is set to Public so the organizer can view it.`;
+// do on a private profile. When the event requires the link, the notice says
+// the registration depends on it; when it's optional, it only asks that a
+// link given be public (the organizer never made it a condition).
+function ProfilePublicNotice({ required }) {
+  return (
+    <div className="flex items-start gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-3 text-xs text-amber-900">
+      <AlertTriangle size={16} className="mt-0.5 shrink-0 text-amber-600" />
+      <div>
+        <p className="font-bold">{required ? 'Make your profile public' : 'If you add a profile link'}</p>
+        {required ? (
+          <p className="mt-0.5 leading-relaxed">
+            Set your Facebook (or other social media) profile to <span className="font-bold">Public</span>. The organizer checks it to confirm your
+            registration. If it can&apos;t be opened, your registration will not be confirmed.
+          </p>
+        ) : (
+          <p className="mt-0.5 leading-relaxed">
+            Set the profile to <span className="font-bold">Public</span> so the organizer can open it.
+          </p>
+        )}
+      </div>
+    </div>
+  );
 }
 
 export default function RegisterPage() {
@@ -381,12 +400,13 @@ export default function RegisterPage() {
                   <input value={player2Name} onChange={(e) => setPlayer2Name(e.target.value)} className={inputClass} />
                 </FormField>
               )}
+              <ProfilePublicNotice required={profileRequired} />
               <ProfileLinkField
                 label={isDoubles ? 'Player 1 Facebook or social media profile' : 'Facebook or social media profile'}
                 value={player1Profile}
                 onChange={setPlayer1Profile}
                 required={profileRequired}
-                hint={profileHint(profileRequired)}
+                hint={profileRequired ? 'Required' : 'Optional'}
               />
               {isDoubles && (
                 <ProfileLinkField
@@ -394,7 +414,7 @@ export default function RegisterPage() {
                   value={player2Profile}
                   onChange={setPlayer2Profile}
                   required={profileRequired}
-                  hint={profileHint(profileRequired)}
+                  hint={profileRequired ? 'Required' : 'Optional'}
                 />
               )}
               {duplicateError && (

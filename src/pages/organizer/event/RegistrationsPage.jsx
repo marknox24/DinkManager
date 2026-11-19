@@ -160,115 +160,129 @@ function CategorySection({
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[560px] text-sm">
+              {/* On a phone the Club, Status and Actions columns fold into the
+                  Player cell, so the profile link, ID photos and Approve/Deny
+                  are all on screen without scrolling sideways. */}
+              <table className="w-full text-sm sm:min-w-[560px]">
                 <thead>
                   <tr className="border-b border-ink-100 text-[11px] font-bold uppercase tracking-wide text-ink-400">
                     <th className="px-4 py-2.5 text-left">Player</th>
-                    <th className="px-4 py-2.5 text-left">Club</th>
-                    <th className="px-4 py-2.5 text-left">Status</th>
-                    <th className="px-4 py-2.5 text-right">Actions</th>
+                    <th className="hidden px-4 py-2.5 text-left sm:table-cell">Club</th>
+                    <th className="hidden px-4 py-2.5 text-left sm:table-cell">Status</th>
+                    <th className="hidden px-4 py-2.5 text-right sm:table-cell">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleRegs.map((r) => (
-                    <tr key={r.id} className="border-b border-ink-50">
-                      <td className="px-4 py-2.5">
-                        <div className="font-semibold text-ink-800">
-                          {r.player_name}
-                          {r.player2_name ? ` & ${r.player2_name}` : ''}
-                        </div>
-                        {(r.player_email || r.phone) && (
-                          <div className="text-xs text-ink-400">{[r.player_email, r.phone].filter(Boolean).join(' · ')}</div>
-                        )}
-                        {r.address && <div className="text-xs text-ink-400">{r.address}</div>}
-                      </td>
-                      <td className="px-4 py-2.5 text-ink-600">{r.club_name || '—'}</td>
-                      <td className="px-4 py-2.5">
-                        <div className="flex items-center gap-1.5">
-                          <RegistrationStatusBadge status={r.status} />
-                          {bracketAssignments[r.id] && (
-                            <span
-                              title={`Bracket ${bracketAssignments[r.id]}`}
-                              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-violet-100 text-[10px] font-bold text-violet-700"
-                            >
-                              {bracketAssignments[r.id]}
-                            </span>
-                          )}
-                          {r.status === 'approved' &&
-                            (r.player2_name ? (
-                              <span title={checkinTitle(r)} className="flex shrink-0 items-center gap-0.5">
-                                <span className={`h-2.5 w-2.5 rounded-full transition-colors duration-200 ${r.player1_checked_in_at ? 'bg-brand-600' : 'bg-ink-200'}`} />
-                                <span className={`h-2.5 w-2.5 rounded-full transition-colors duration-200 ${r.player2_checked_in_at ? 'bg-brand-600' : 'bg-ink-200'}`} />
-                              </span>
-                            ) : (
-                              <QrCode
-                                size={14}
-                                title={checkinTitle(r)}
-                                className={`shrink-0 transition-colors duration-200 ${r.player1_checked_in_at ? 'text-brand-600' : 'text-ink-200'}`}
-                              />
-                            ))}
-                        </div>
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <div className="flex justify-end gap-1.5">
-                          {r.status !== 'approved' && (
-                            <button onClick={() => onApprove(r)} title="Approve" className="flex h-7 items-center justify-center gap-1 rounded-full bg-brand-50 px-2.5 text-xs font-bold text-brand-700 hover:bg-brand-100">
-                              <CheckCircle2 size={14} /> Approve
-                            </button>
-                          )}
-                          {r.status !== 'denied' && (
-                            <button
-                              onClick={() => onDeny(r)}
-                              disabled={Boolean(bracketAssignments[r.id])}
-                              title={bracketAssignments[r.id] ? 'Already placed in a bracket — remove them from the bracket first' : 'Deny'}
-                              className="flex h-7 w-7 items-center justify-center rounded-full bg-rose-50 text-rose-600 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-rose-50"
-                            >
-                              <XCircle size={14} />
-                            </button>
-                          )}
-                          <ProfileLinksButton registration={r} onClick={() => onViewLinks(r)} />
-                          {r.photo_path && (
-                            <button
-                              onClick={() => onViewPhoto(r, 'photo_path', r.player2_name ? 'Player 1 ID' : 'ID Photo')}
-                              title={r.player2_name ? 'View Player 1 ID' : 'View ID photo'}
-                              className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-50 text-violet-600 hover:bg-violet-100"
-                            >
-                              <ImageIcon size={13} />
-                            </button>
-                          )}
-                          {r.player2_photo_path && (
-                            <button
-                              onClick={() => onViewPhoto(r, 'player2_photo_path', 'Player 2 ID')}
-                              title="View Player 2 ID"
-                              className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-50 text-violet-600 hover:bg-violet-100"
-                            >
-                              <ImageIcon size={13} />
-                            </button>
-                          )}
-                          {r.payment_proof_path && (
-                            <button
-                              onClick={() => onViewPhoto(r, 'payment_proof_path', 'Payment Proof')}
-                              title="View payment proof"
-                              className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
-                            >
-                              <Receipt size={13} />
-                            </button>
-                          )}
-                          <button onClick={() => onEdit(r)} title="Edit" className="flex h-7 w-7 items-center justify-center rounded-full bg-sky-50 text-sky-600 hover:bg-sky-100">
-                            <Pencil size={13} />
-                          </button>
-                          <button
-                            onClick={() => onRemove(r)}
-                            disabled={Boolean(bracketAssignments[r.id])}
-                            title={bracketAssignments[r.id] ? 'Already placed in a bracket — remove them from the bracket first' : 'Remove'}
-                            className="flex h-7 w-7 items-center justify-center rounded-full bg-ink-100 text-ink-500 hover:bg-ink-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-ink-100"
+                  {visibleRegs.map((r) => {
+                    const status = (
+                      <div className="flex items-center gap-1.5">
+                        <RegistrationStatusBadge status={r.status} />
+                        {bracketAssignments[r.id] && (
+                          <span
+                            title={`Bracket ${bracketAssignments[r.id]}`}
+                            className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-violet-100 text-[10px] font-bold text-violet-700"
                           >
-                            <Trash2 size={13} />
+                            {bracketAssignments[r.id]}
+                          </span>
+                        )}
+                        {r.status === 'approved' &&
+                          (r.player2_name ? (
+                            <span title={checkinTitle(r)} className="flex shrink-0 items-center gap-0.5">
+                              <span className={`h-2.5 w-2.5 rounded-full transition-colors duration-200 ${r.player1_checked_in_at ? 'bg-brand-600' : 'bg-ink-200'}`} />
+                              <span className={`h-2.5 w-2.5 rounded-full transition-colors duration-200 ${r.player2_checked_in_at ? 'bg-brand-600' : 'bg-ink-200'}`} />
+                            </span>
+                          ) : (
+                            <QrCode
+                              size={14}
+                              title={checkinTitle(r)}
+                              className={`shrink-0 transition-colors duration-200 ${r.player1_checked_in_at ? 'text-brand-600' : 'text-ink-200'}`}
+                            />
+                          ))}
+                      </div>
+                    );
+                    const actions = (
+                      <>
+                        {r.status !== 'approved' && (
+                          <button onClick={() => onApprove(r)} title="Approve" className="flex h-7 items-center justify-center gap-1 rounded-full bg-brand-50 px-2.5 text-xs font-bold text-brand-700 hover:bg-brand-100">
+                            <CheckCircle2 size={14} /> Approve
                           </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        )}
+                        {r.status !== 'denied' && (
+                          <button
+                            onClick={() => onDeny(r)}
+                            disabled={Boolean(bracketAssignments[r.id])}
+                            title={bracketAssignments[r.id] ? 'Already placed in a bracket — remove them from the bracket first' : 'Deny'}
+                            className="flex h-7 w-7 items-center justify-center rounded-full bg-rose-50 text-rose-600 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-rose-50"
+                          >
+                            <XCircle size={14} />
+                          </button>
+                        )}
+                        <ProfileLinksButton registration={r} onClick={() => onViewLinks(r)} />
+                        {r.photo_path && (
+                          <button
+                            onClick={() => onViewPhoto(r, 'photo_path', r.player2_name ? 'Player 1 ID' : 'ID Photo')}
+                            title={r.player2_name ? 'View Player 1 ID' : 'View ID photo'}
+                            className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-50 text-violet-600 hover:bg-violet-100"
+                          >
+                            <ImageIcon size={13} />
+                          </button>
+                        )}
+                        {r.player2_photo_path && (
+                          <button
+                            onClick={() => onViewPhoto(r, 'player2_photo_path', 'Player 2 ID')}
+                            title="View Player 2 ID"
+                            className="flex h-7 w-7 items-center justify-center rounded-full bg-violet-50 text-violet-600 hover:bg-violet-100"
+                          >
+                            <ImageIcon size={13} />
+                          </button>
+                        )}
+                        {r.payment_proof_path && (
+                          <button
+                            onClick={() => onViewPhoto(r, 'payment_proof_path', 'Payment Proof')}
+                            title="View payment proof"
+                            className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-50 text-emerald-600 hover:bg-emerald-100"
+                          >
+                            <Receipt size={13} />
+                          </button>
+                        )}
+                        <button onClick={() => onEdit(r)} title="Edit" className="flex h-7 w-7 items-center justify-center rounded-full bg-sky-50 text-sky-600 hover:bg-sky-100">
+                          <Pencil size={13} />
+                        </button>
+                        <button
+                          onClick={() => onRemove(r)}
+                          disabled={Boolean(bracketAssignments[r.id])}
+                          title={bracketAssignments[r.id] ? 'Already placed in a bracket — remove them from the bracket first' : 'Remove'}
+                          className="flex h-7 w-7 items-center justify-center rounded-full bg-ink-100 text-ink-500 hover:bg-ink-200 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-ink-100"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </>
+                    );
+                    return (
+                      <tr key={r.id} className="border-b border-ink-50">
+                        <td className="px-4 py-2.5">
+                          <div className="font-semibold text-ink-800">
+                            {r.player_name}
+                            {r.player2_name ? ` & ${r.player2_name}` : ''}
+                          </div>
+                          {(r.player_email || r.phone) && (
+                            <div className="break-words text-xs text-ink-400">{[r.player_email, r.phone].filter(Boolean).join(' · ')}</div>
+                          )}
+                          {r.address && <div className="text-xs text-ink-400">{r.address}</div>}
+                          <div className="sm:hidden">
+                            {r.club_name && <div className="text-xs text-ink-500">{r.club_name}</div>}
+                            <div className="mt-2">{status}</div>
+                            <div className="mt-2 flex flex-wrap gap-1.5">{actions}</div>
+                          </div>
+                        </td>
+                        <td className="hidden px-4 py-2.5 text-ink-600 sm:table-cell">{r.club_name || '—'}</td>
+                        <td className="hidden px-4 py-2.5 sm:table-cell">{status}</td>
+                        <td className="hidden px-4 py-2.5 sm:table-cell">
+                          <div className="flex justify-end gap-1.5">{actions}</div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

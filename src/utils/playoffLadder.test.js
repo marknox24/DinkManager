@@ -299,3 +299,110 @@ test('the semifinal setup is summarised the way an organizer chose it', () => {
   assert.equal(semifinalSetupSummary({ playoff_semifinal_seeding: 'points' }, finalOnly), '');
   assert.equal(crossoverOption(1, true).title, 'Standings');
 });
+
+import { seedSemifinals, withSemifinalSetup } from './playoffLadder.js';
+import { isDifferentBuild } from './buildVersion.js';
+
+test('a team that lost a double forfeit is seeded last, whatever its points, and never counts as tied', () => {
+  const dead = { ...t('Out', 3, 0, 60, 20), dead: true }; // best differential, but out
+  const teams = [dead, t('A', 2, 1, 40, 30), t('B', 2, 1, 35, 30), t('C', 1, 2, 30, 31)];
+  const ranked = rankByPoints(teams, 'total');
+  assert.deepEqual(ranked.map((r) => r.team.id), ['A', 'B', 'C', 'Out']);
+  assert.equal(hasPointsTie(ranked), false);
+  // So the top seed gets the walkover, as it would get a bye.
+  assert.deepEqual(seedSemifinals(teams, { playoff_points_metric: 'total', playoff_semifinal_pairing: '1v4' }).map(([a, b]) => [a.id, b.id]), [['A', 'Out'], ['B', 'C']]);
+  // An order putting the forfeited team above a live one is refused.
+  assert.throws(() => applySeedOrder(teams, 'total', ['Out', 'A', 'B', 'C']), /no longer matches the standings/);
+  // Two forfeited teams aren't a tie to settle either.
+  const twoDead = [dead, { ...t('Out2', 0, 3, 10, 40), dead: true }, t('A', 2, 1, 40, 30), t('B', 2, 1, 35, 30)];
+  assert.equal(hasPointsTie(rankByPoints(twoDead, 'total')), false);
+  assert.doesNotThrow(() => applySeedOrder(twoDead, 'total'));
+});
+
+test('the two semifinals follow the pairing pattern, highest seed first', () => {
+  const teams = [t('A', 3, 0, 50, 20), t('B', 2, 1, 40, 30), t('C', 1, 2, 30, 32), t('D', 0, 3, 20, 40)];
+  const pairs = (pairing) => seedSemifinals(teams, { playoff_points_metric: 'total', playoff_semifinal_pairing: pairing }).map(([a, b]) => `${a.id}-${b.id}`);
+  assert.deepEqual(pairs('1v4'), ['A-D', 'B-C']);
+  assert.deepEqual(pairs('1v2'), ['A-B', 'C-D']);
+  assert.deepEqual(pairs('1v3'), ['A-C', 'B-D']);
+});
+
+test('the setup confirmed when generating replaces the saved one for that generation only', () => {
+  const saved = { playoff_pool_count: 4, playoff_semifinal_seeding: 'points', playoff_semifinal_pairing: '1v4', playoff_points_metric: 'total' };
+  assert.equal(withSemifinalSetup(saved, null), saved);
+  const confirmed = withSemifinalSetup(saved, { seeding: 'crossover', pairing: '1v2', metric: 'average' });
+  assert.deepEqual(confirmed, { ...saved, playoff_semifinal_seeding: 'crossover', playoff_semifinal_pairing: '1v2', playoff_points_metric: 'average' });
+  assert.equal(saved.playoff_semifinal_seeding, 'points'); // the saved plan isn't touched
+  // Anything unexpected falls back to the defaults rather than breaking generation.
+  assert.deepEqual(withSemifinalSetup(saved, { seeding: 'bogus', pairing: 'toString', metric: 'x' }), {
+    ...saved,
+    playoff_semifinal_seeding: 'crossover',
+    playoff_semifinal_pairing: '1v4',
+    playoff_points_metric: 'total',
+  });
+});
+
+// Quarterfinal rows as the schedule hands them over: team ids plus embedded teams.
+const poMatch = (stage, code, a, b, winner, extra = {}) => ({
+  bracket_letter: 'PO',
+  playoff_stage: stage,
+  match_code: code,
+  team_a_id: a,
+  team_b_id: b,
+  team_a: { id: a, player1_name: a },
+  team_b: { id: b, player1_name: b },
+  winner_team_id: winner,
+  status: winner ? 'completed' : 'scheduled',
+  ...extra,
+});
+const quarterRow = (over = {}) =>
+  row({ playoff_pool_count: 4, playoff_pool_pairs: [['A', 'C'], ['B', 'D']], playoff_advance_per_pool: 2, playoff_semifinal_seeding: 'points', ...over });
+const quarterfinals = [
+  poMatch('quarterfinal', 'QF1', 'A1', 'C2', 'A1'),
+  poMatch('quarterfinal', 'QF2', 'B1', 'D2', 'B1'),
+  poMatch('quarterfinal', 'QF3', 'C1', 'A2', 'A2'),
+  poMatch('quarterfinal', 'QF4', 'D1', 'B2', 'B2'),
+];
+const codes = (round) => round.matches.map((m) => m.matchCode);
+
+test('a points-seeded semifinal that is not drawn yet has no lines into it', () => {
+  const category = quarterRow();
+  const { trees } = buildBracketTreesForCategory({ ...category, ladder: categoryLadder(category) }, quarterfinals);
+  const [quarters, semis, final] = trees[0].rounds;
+  assert.equal(semis.unlinked, true);
+  assert.equal(final.unlinked, undefined);
+  assert.deepEqual(codes(quarters), ['QF1', 'QF2', 'QF3', 'QF4']);
+  // Bracket order (no points system) keeps its lines.
+  const crossover = quarterRow({ playoff_semifinal_seeding: 'crossover' });
+  assert.equal(buildBracketTreesForCategory({ ...crossover, ladder: categoryLadder(crossover) }, quarterfinals).trees[0].rounds[1].unlinked, undefined);
+});
+
+test('once a points-seeded semifinal is drawn, the quarterfinals line up with who actually meets', () => {
+  const category = quarterRow();
+  // Seeded 1v4: A1 (QF1) meets A2 (QF3); B1 (QF2) meets B2 (QF4).
+  const semis = [poMatch('semifinal', 'SF1', 'A1', 'A2', null), poMatch('semifinal', 'SF2', 'B1', 'B2', null)];
+  const { trees } = buildBracketTreesForCategory({ ...category, ladder: categoryLadder(category) }, [...quarterfinals, ...semis]);
+  const [quarters, semiRound] = trees[0].rounds;
+  assert.deepEqual(codes(quarters), ['QF1', 'QF3', 'QF2', 'QF4']);
+  assert.equal(semiRound.unlinked, undefined);
+  assert.deepEqual(codes(semiRound), ['SF1', 'SF2']);
+});
+
+test('a quarterfinal lost to a double forfeit still lines up with its walkover semifinal', () => {
+  const category = quarterRow();
+  const qf = [...quarterfinals.slice(0, 3), poMatch('quarterfinal', 'QF4', 'D1', 'B2', null, { status: 'completed', result_type: 'double_forfeit' })];
+  // The forfeited D1 is seeded last and meets the top seed, A1.
+  const semis = [poMatch('semifinal', 'SF1', 'A1', 'D1', null), poMatch('semifinal', 'SF2', 'B1', 'A2', null)];
+  const { trees } = buildBracketTreesForCategory({ ...category, ladder: categoryLadder(category) }, [...qf, ...semis]);
+  assert.deepEqual(codes(trees[0].rounds[0]), ['QF1', 'QF4', 'QF2', 'QF3']);
+});
+
+test('a redeploy in the same minute still counts as a new build', () => {
+  const current = { version: '2026.11.19-1200', builtAt: '2026-11-19T04:00:05.000Z' };
+  assert.equal(isDifferentBuild({ version: '2026.11.19-1200', builtAt: '2026-11-19T04:00:50.000Z' }, current), true);
+  assert.equal(isDifferentBuild({ version: '2026.11.19-1200', builtAt: current.builtAt }, current), false);
+  // A build from before build times were stamped is compared by version.
+  assert.equal(isDifferentBuild({ version: '2026.11.17-2339' }, current), true);
+  assert.equal(isDifferentBuild({ version: '2026.11.19-1200' }, { version: '2026.11.19-1200', builtAt: '' }), false);
+  assert.equal(isDifferentBuild(null, current), false);
+});

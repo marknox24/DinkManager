@@ -371,17 +371,21 @@ export default function MatchListPage() {
     handleGenerateStage(level.kind);
   };
 
+  // Resolves true once the stage is generated; false when it was blocked or
+  // refused (the reason is already toasted), so a popup can stay open.
   const handleGenerateStage = async (kind, options = {}) => {
-    if (blockIfLocked() || blockIfOffline()) return;
+    if (blockIfLocked() || blockIfOffline()) return false;
     setGeneratingStage(kind);
     try {
       await generateStageMatches(activeCategory.id, kind, options);
       pushToast(`${PLAYOFF_STAGES[kind].label} generated`, 'success');
       await Promise.all([reloadCategoryData(), loadPlayoffStatus(), loadBracketProgress()]);
+      return true;
     } catch (e) {
       pushToast(e.message, 'error');
       // Usually another organizer generating it first: show what they made.
       await Promise.all([reloadCategoryData({ silent: true }), loadPlayoffStatus()]);
+      return false;
     } finally {
       setGeneratingStage(null);
     }
@@ -390,16 +394,19 @@ export default function MatchListPage() {
   // The semifinal popup was confirmed. Points seeding generates straight
   // away; the crossover of a semifinals-first knockout still needs its pool
   // pairing confirmed in the next step (which then carries these settings).
+  // If generating fails, the popup stays open with the organizer's choices
+  // (including a coin-toss order) so they can simply try again.
   const handleConfirmSemifinal = async ({ settings, seedOrder }) => {
     const isFirstStage = playoffStatus[0]?.kind === semifinalLevel.kind;
     setSemifinalSettings(settings);
     if (settings.seeding !== 'points' && isFirstStage && activeCategory.playoff_pool_count !== 1) {
       setConfirmingLevel(semifinalLevel);
       setSemifinalLevel(null);
-      return;
+      return true;
     }
-    await handleGenerateStage(semifinalLevel.kind, { seedOrder, semifinal: settings });
-    setSemifinalLevel(null);
+    const generated = await handleGenerateStage(semifinalLevel.kind, { seedOrder, semifinal: settings });
+    if (generated) setSemifinalLevel(null);
+    return generated;
   };
 
   const handleConfirmCrossover = async ({ playoff_pool_pairs, playoff_advance_per_pool }) => {

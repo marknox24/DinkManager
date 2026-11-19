@@ -53,6 +53,7 @@ export default defineConfig({
   define: {
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(APP_VERSION),
     'import.meta.env.VITE_APP_COMMIT': JSON.stringify(commit),
+    'import.meta.env.VITE_APP_BUILT_AT': JSON.stringify(builtAt.toISOString()),
   },
   plugins: [
     react(),

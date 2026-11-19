@@ -184,10 +184,12 @@ export function expandSinglePoolSlots(letter, advancePerPool) {
 // ---------------------------------------------------------------------------
 // POINTS-SYSTEM SEMIFINAL SEEDING
 // ---------------------------------------------------------------------------
-// An alternative to the crossover for a ladder that starts at the
-// semifinals. Who qualifies is unchanged (each pool's top N by the normal
-// standings); only the matchups differ. The four qualifiers are reseeded 1-4
-// by point differential from round robin, ignoring wins and losses, and paired
+// An alternative way to match the semifinals, for any ladder that has them.
+// Who qualifies is unchanged (each pool's top N by the normal standings, and
+// the earlier knockout rounds played as drawn); only the semifinal matchups
+// differ. The four semifinalists (the qualifiers when the semifinals open the
+// knockout, otherwise the winners of the round before) are reseeded 1-4 by
+// point differential from round robin, ignoring wins and losses, and paired
 // by the organizer's chosen pattern. Ties are settled by the organizer (a
 // coin toss), never by the app.
 
@@ -262,6 +264,15 @@ function comparePoints(a, b, metric) {
   return y.diff * x.games - x.diff * y.games; // > 0 when b is higher
 }
 
+// A semifinalist marked `dead` lost a double forfeit in the round before: it
+// is only carried along so its opponent gets a walkover. It goes after every
+// team still playing (so the walkover goes to the top seed, as a bye would),
+// whatever its round-robin record, and is never "tied" with anyone.
+function compareSeeds(a, b, metric) {
+  if (a.dead || b.dead) return (a.dead ? 1 : 0) - (b.dead ? 1 : 0);
+  return comparePoints(a, b, metric);
+}
+
 // The number shown next to a seed: "+12", or "+2.40" per game.
 export function formatPointsValue(team, metric) {
   const { diff, games } = pointsFraction(team, metric);
@@ -275,10 +286,10 @@ export function formatPointsValue(team, metric) {
 // organizer to order them. Within a tie, the incoming order is kept, so
 // passing the teams in an organizer's chosen order keeps that order.
 export function rankByPoints(teams, metric) {
-  const sorted = teams.map((team, i) => ({ team, i })).sort((a, b) => comparePoints(a.team, b.team, metric) || a.i - b.i);
+  const sorted = teams.map((team, i) => ({ team, i })).sort((a, b) => compareSeeds(a.team, b.team, metric) || a.i - b.i);
   let group = 0;
   return sorted.map(({ team }, i) => {
-    if (i > 0 && comparePoints(sorted[i - 1].team, team, metric) !== 0) group += 1;
+    if (i > 0 && (team.dead || compareSeeds(sorted[i - 1].team, team, metric) !== 0)) group += 1;
     return { team, group };
   });
 }
@@ -299,13 +310,33 @@ export function applySeedOrder(teams, metric, seedOrder) {
   }
   const byId = new Map(teams.map((t) => [t.id, t]));
   if (seedOrder.length !== teams.length || new Set(seedOrder).size !== teams.length || !seedOrder.every((id) => byId.has(id))) {
-    throw new Error('The semifinal seeding no longer matches the qualified teams. Reopen it and try again.');
+    throw new Error('The semifinal seeding no longer matches the qualified teams. Check the refreshed list and try again.');
   }
   const ordered = seedOrder.map((id) => byId.get(id));
   for (let i = 1; i < ordered.length; i++) {
-    if (comparePoints(ordered[i - 1], ordered[i], metric) > 0) {
-      throw new Error('The semifinal seeding no longer matches the standings. Reopen it and try again.');
+    if (compareSeeds(ordered[i - 1], ordered[i], metric) > 0) {
+      throw new Error('The semifinal seeding no longer matches the standings. Check the refreshed order and try again.');
     }
   }
   return ordered;
+}
+
+// The two semifinals as [higher seed, lower seed] team pairs, from the
+// semifinalists, the organizer's seed order and the plan's pairing pattern.
+export function seedSemifinals(teams, plan, seedOrder) {
+  const seeds = applySeedOrder(teams, plan.playoff_points_metric, seedOrder);
+  return semifinalPairing(plan).matches.map(([a, b]) => [seeds[a - 1], seeds[b - 1]]);
+}
+
+// The plan with the semifinal setup an organizer confirmed when generating
+// ({ seeding, pairing, metric }) in place of the saved one. It applies to that
+// one generation only and is never written back to the category.
+export function withSemifinalSetup(plan, semifinal) {
+  if (!semifinal) return plan;
+  return {
+    ...plan,
+    playoff_semifinal_seeding: semifinal.seeding === 'points' ? 'points' : 'crossover',
+    playoff_semifinal_pairing: Object.hasOwn(SEMIFINAL_PAIRINGS, semifinal.pairing) ? semifinal.pairing : '1v4',
+    playoff_points_metric: semifinal.metric === 'average' ? 'average' : 'total',
+  };
 }

@@ -6,11 +6,16 @@
 // means fetching the new worker, letting it finish installing, telling it to
 // take over (sw.js listens for SKIP_WAITING), and only then reloading.
 
+import { isDifferentBuild } from '../utils/buildVersion';
+
 export const APP_VERSION = import.meta.env.DEV ? 'dev' : import.meta.env.VITE_APP_VERSION || 'unknown';
 export const APP_COMMIT = import.meta.env.VITE_APP_COMMIT || '';
+// Exact build time. The version above is only minute-precise, so two deploys
+// in the same minute share it; this is what tells builds apart.
+export const APP_BUILT_AT = import.meta.env.VITE_APP_BUILT_AT || '';
 
 const CHECK_TTL_MS = 5 * 60 * 1000;
-let lastCheck = null; // { at, latest }
+let lastCheck = null; // { at, live } where live is the parsed version.json
 let inflight = null;
 
 // Asks the server which build is live. Cached for a few minutes because the
@@ -18,16 +23,16 @@ let inflight = null;
 // or throws when offline.
 export async function checkForUpdate({ force = false } = {}) {
   if (import.meta.env.DEV) return { latest: APP_VERSION, updateAvailable: false };
-  if (!force && lastCheck && Date.now() - lastCheck.at < CHECK_TTL_MS) return result(lastCheck.latest);
+  if (!force && lastCheck && Date.now() - lastCheck.at < CHECK_TTL_MS) return result(lastCheck.live);
   if (!inflight) {
     inflight = fetch('/version.json', { cache: 'no-store' })
       .then((res) => {
         if (!res.ok) throw new Error(`Version check failed (${res.status})`);
         return res.json();
       })
-      .then((data) => {
-        lastCheck = { at: Date.now(), latest: data.version };
-        return result(data.version);
+      .then((live) => {
+        lastCheck = { at: Date.now(), live };
+        return result(live);
       })
       .finally(() => {
         inflight = null;
@@ -36,8 +41,8 @@ export async function checkForUpdate({ force = false } = {}) {
   return inflight;
 }
 
-function result(latest) {
-  return { latest, updateAvailable: Boolean(latest) && latest !== APP_VERSION };
+function result(live) {
+  return { latest: live?.version, updateAvailable: isDifferentBuild(live, { version: APP_VERSION, builtAt: APP_BUILT_AT }) };
 }
 
 // Resolves once the registration has a waiting (fully installed) worker, or

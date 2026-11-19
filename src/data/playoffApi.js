@@ -28,6 +28,8 @@ import {
   semifinalOpensKnockout,
   semifinalPairing,
   applySeedOrder,
+  seedSemifinals,
+  withSemifinalSetup,
 } from '../utils/playoffLadder';
 export { PLAYOFF_STAGES, matchLevelLabel, deriveLadder, deriveLadderFromPlan, unpairedPools, expandFirstStageSlots, expandSinglePoolSlots };
 
@@ -205,29 +207,23 @@ async function loadDecidedStage(poBracket, prior, priorLevel) {
 // follows an earlier knockout round, each carrying its round-robin record
 // (what the seeding ranks on), its pool letter, and the knockout-bracket
 // team (`poTeamId`) that actually plays the fixture.
+// A team marked `dead` lost a double forfeit and is ranked last (see
+// rankByPoints), so the walkover goes to the top seed.
 async function loadPointsWinners(priorMatches, poolBrackets) {
   const sides = priorMatches.map(winnerSide);
   if (sides.length !== 4) throw new Error('A points-seeded semifinal needs exactly four teams.');
-  const { data: poTeams, error: poErr } = await supabase
+  // One request: each knockout team with its pool row embedded.
+  const { data: poTeams, error } = await supabase
     .from('teams')
-    .select('id, source_team_id')
+    .select('id, source:source_team_id(*)')
     .in(
       'id',
       sides.map((s) => s.team)
     );
-  if (poErr) throw poErr;
-  const { data: sources, error: srcErr } = await supabase
-    .from('teams')
-    .select('*')
-    .in(
-      'id',
-      poTeams.map((t) => t.source_team_id).filter(Boolean)
-    );
-  if (srcErr) throw srcErr;
+  if (error) throw error;
   const letterByBracket = new Map(poolBrackets.map((b) => [b.id, b.letter]));
   return sides.map((side) => {
-    const po = poTeams.find((t) => t.id === side.team);
-    const source = sources.find((s) => s.id === po?.source_team_id);
+    const source = poTeams.find((t) => t.id === side.team)?.source;
     if (!source) throw new Error("Couldn't find a semifinalist's round-robin record to seed from.");
     return { ...source, pool_letter: letterByBracket.get(source.bracket_id), poTeamId: side.team, dead: side.dead };
   });
@@ -236,18 +232,24 @@ async function loadPointsWinners(priorMatches, poolBrackets) {
 // The four teams a points-seeded semifinal would be drawn from (with their
 // round-robin records), unranked: the generate popup ranks them itself so the
 // organizer can switch the ranking metric without another round trip.
+// The category, its pools and its knockout bracket don't depend on each
+// other, so they're fetched together (this runs while the popup says
+// "Loading the standings…", often on venue mobile data).
 export async function getSemifinalCandidates(categoryId) {
-  const { data: category, error: catErr } = await supabase.from('categories').select('*').eq('id', categoryId).single();
+  const [{ data: category, error: catErr }, { data: poolBrackets, error: poolErr }, poBracket] = await Promise.all([
+    supabase.from('categories').select('*').eq('id', categoryId).single(),
+    supabase.from('brackets').select('id, letter').eq('category_id', categoryId).eq('kind', 'pool'),
+    getPlayoffBracket(categoryId),
+  ]);
   if (catErr) throw catErr;
+  if (poolErr) throw poolErr;
   const plan = readPlan(category);
   const ladder = deriveLadderFromPlan(plan);
   if (!plan.playoff_enabled || !hasSemifinal(ladder)) throw new Error('This category has no semifinals.');
-  const { data: poolBrackets, error: poolErr } = await supabase.from('brackets').select('id, letter').eq('category_id', categoryId).eq('kind', 'pool');
-  if (poolErr) throw poolErr;
   poolBrackets.sort((a, b) => a.letter.localeCompare(b.letter));
   if (semifinalOpensKnockout(ladder)) return loadPointsQualifiers(plan, poolBrackets, ladder.levels[0]);
   const prior = priorStageOf('semifinal', new Set(ladder.levels.map((l) => l.kind)));
-  const priorMatches = await loadDecidedStage(await getPlayoffBracket(categoryId), prior, ladder.levels.find((l) => l.kind === prior));
+  const priorMatches = await loadDecidedStage(poBracket, prior, ladder.levels.find((l) => l.kind === prior));
   return loadPointsWinners(priorMatches, poolBrackets);
 }
 
@@ -263,12 +265,7 @@ export async function getSemifinalCandidates(categoryId) {
 export async function generateStageMatches(categoryId, kind, { replace = false, seedOrder = null, semifinal = null } = {}) {
   const { data: category, error: catErr } = await supabase.from('categories').select('*').eq('id', categoryId).single();
   if (catErr) throw catErr;
-  const plan = {
-    ...readPlan(category),
-    ...(semifinal
-      ? { playoff_semifinal_seeding: semifinal.seeding, playoff_semifinal_pairing: semifinal.pairing, playoff_points_metric: semifinal.metric }
-      : {}),
-  };
+  const plan = withSemifinalSetup(readPlan(category), semifinal);
   const ladder = deriveLadderFromPlan(plan);
   if (!plan.playoff_enabled || !ladder.valid) throw new Error('This category has no valid playoff plan.');
   const level = ladder.levels.find((l) => l.kind === kind);
@@ -426,8 +423,7 @@ export async function generateStageMatches(categoryId, kind, { replace = false, 
     if (kind === 'semifinal' && usesPointsSeeding(plan, ladder)) {
       // Seeded by round-robin point differential, not by bracket position.
       const winners = await loadPointsWinners(priorMatches, poolBrackets);
-      const seeds = applySeedOrder(winners, plan.playoff_points_metric, seedOrder);
-      teamPairs = semifinalPairing(plan).matches.map(([a, b]) => pairOf({ team: seeds[a - 1].poTeamId, dead: seeds[a - 1].dead }, { team: seeds[b - 1].poTeamId, dead: seeds[b - 1].dead }));
+      teamPairs = seedSemifinals(winners, plan, seedOrder).map(([a, b]) => pairOf({ team: a.poTeamId, dead: a.dead }, { team: b.poTeamId, dead: b.dead }));
     } else if (kind === 'third_place') {
       teamPairs = [pairOf(loserSide(priorMatches[0]), loserSide(priorMatches[1]))];
     } else {

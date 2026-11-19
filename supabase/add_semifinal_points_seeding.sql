@@ -5,11 +5,14 @@
 -- semifinals are unchanged. Mirrors the PLAYOFF PLAN section of schema.sql.
 begin;
 
--- Semifinal matchups, only used when the ladder opens at the semifinals:
--- 'crossover' (pool pairs, as above) or 'points' (the four qualifiers
--- reseeded by round-robin point differential, ignoring wins and losses; see
--- the POINTS-SYSTEM section of src/utils/playoffLadder.js). Who qualifies is
--- the same either way. Pairing '1v4' = 1 vs 4 and 2 vs 3, '1v2' = 1 vs 2 and
+-- Semifinal matchups, used by any ladder that has a semifinal round:
+-- 'crossover' (pool pairs as above, or bracket order when the semifinals
+-- follow an earlier knockout round) or 'points' (the four semifinalists, the
+-- qualifiers or the previous round's winners, reseeded by round-robin point
+-- differential, ignoring wins and losses; see the POINTS-SYSTEM section of
+-- src/utils/playoffLadder.js). Who qualifies is the same either way. The
+-- Match List asks to confirm it (and can override it for that one
+-- generation) every time the semifinals are generated. Pairing '1v4' = 1 vs 4 and 2 vs 3, '1v2' = 1 vs 2 and
 -- 3 vs 4, '1v3' = 1 vs 3 and 2 vs 4. Metric 'total' = raw differential,
 -- 'average' = per game played, so smaller pools aren't disadvantaged.
 alter table categories add column if not exists playoff_semifinal_seeding text not null default 'crossover';

@@ -207,8 +207,10 @@ function BracketGrid({ rounds, thirdPlaceStage, layout }) {
           </div>
         ))
       )}
+      {/* No lines into an `unlinked` round: a points-seeded semifinal that
+          isn't drawn yet doesn't take its teams in bracket order. */}
       {rounds.slice(1).map((round, i) =>
-        round.matches.map((m, matchIndex) => (
+        round.unlinked ? null : round.matches.map((m, matchIndex) => (
           <Connector key={m.key} style={{ gridColumn: columnStart(i) + 1, gridRow: `${rowStart(round, matchIndex)} / span ${rowSpan(round)}` }} />
         ))
       )}

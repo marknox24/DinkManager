@@ -461,6 +461,9 @@ function buildEntrantList(categoryTeams, categoryMatches = []) {
 // `pointsSeeding` ({ pairing, metric }) replaces the placeholders of a
 // points-seeded semifinal with "Seed n" ones (pool-rank ones when the
 // semifinals open the knockout, "Winner of QF1" ones when they follow it).
+// Such a semifinal doesn't pair the earlier winners in bracket order, so
+// until it's drawn its round is marked `unlinked` (no lines into it), and
+// once it's drawn the rounds before it are reordered to match it.
 function buildPlayoffLadderTree({ ladder, poolPairs, poolCount, advancePerPool, matches, pointsSeeding = null }) {
   if (!ladder?.valid || ladder.levels.length === 0) return null;
   const poMatches = matches.filter((m) => m.bracket_letter === 'PO' && m.status !== 'canceled');
@@ -471,6 +474,13 @@ function buildPlayoffLadderTree({ ladder, poolPairs, poolCount, advancePerPool, 
   }
   for (const list of byStage.values()) list.sort((a, b) => compareMatchCode(a.match_code, b.match_code));
 
+  // One entry per box, column by column: the match row, or undefined.
+  const treeLevels = ladder.levels.filter((level) => level.kind !== 'third_place'); // rendered as a side note, not a tree column — see thirdPlaceRow below
+  const boxes = treeLevels.map((level) => Array.from({ length: level.matchCount }, (_, i) => (byStage.get(level.kind) || [])[i]));
+  if (pointsSeeding) {
+    for (let k = treeLevels.findIndex((l) => l.kind === 'semifinal'); k > 0; k--) boxes[k - 1] = feederOrder(boxes[k - 1], boxes[k]);
+  }
+
   const semisFirst = ladder.levels[0].kind === 'semifinal';
   const firstSlots = pointsSeeding && semisFirst
     ? pointsSeeding.pairing.matches.map(([a, b]) => ({ a: { seed: a }, b: { seed: b } }))
@@ -479,39 +489,38 @@ function buildPlayoffLadderTree({ ladder, poolPairs, poolCount, advancePerPool, 
       : expandFirstStageSlots(poolPairs, advancePerPool);
   const slotLabel = (slot) => (slot.seed ? `Seed ${slot.seed} · ${POINTS_METRICS[pointsSeeding.metric].short}` : `Pool ${slot.letter} · Rank ${slot.rank}`);
 
-  const rounds = ladder.levels
-    .filter((level) => level.kind !== 'third_place') // rendered as a side note, not a tree column — see thirdPlaceRow below
-    .map((level, levelIndex) => {
-      const real = byStage.get(level.kind) || [];
-      const isFirst = levelIndex === 0;
-      const matches = Array.from({ length: level.matchCount }, (_, i) => {
-        const m = real[i];
-        let placeholderA = null;
-        let placeholderB = null;
-        if (!m) {
-          if (isFirst) {
-            // Each slot is one whole fixture, so box i is simply slot i.
-            placeholderA = firstSlots[i] ? slotLabel(firstSlots[i].a) : null;
-            placeholderB = firstSlots[i] ? slotLabel(firstSlots[i].b) : null;
-          } else if (pointsSeeding && level.kind === 'semifinal') {
-            // Who plays whom depends on round-robin point differential, so
-            // the fixture can only be described by seed until it is generated.
-            const [a, b] = pointsSeeding.pairing.matches[i] || [];
-            placeholderA = a ? slotLabel({ seed: a }) : null;
-            placeholderB = b ? slotLabel({ seed: b }) : null;
-          } else {
-            const prevKind = ladder.levels[levelIndex - 1].kind;
-            placeholderA = `Winner of ${stageMatchCode(prevKind, i * 2 + 1)}`;
-            placeholderB = `Winner of ${stageMatchCode(prevKind, i * 2 + 2)}`;
-          }
+  const rounds = treeLevels.map((level, levelIndex) => {
+    const real = boxes[levelIndex];
+    const isFirst = levelIndex === 0;
+    const matches = Array.from({ length: level.matchCount }, (_, i) => {
+      const m = real[i];
+      let placeholderA = null;
+      let placeholderB = null;
+      if (!m) {
+        if (isFirst) {
+          // Each slot is one whole fixture, so box i is simply slot i.
+          placeholderA = firstSlots[i] ? slotLabel(firstSlots[i].a) : null;
+          placeholderB = firstSlots[i] ? slotLabel(firstSlots[i].b) : null;
+        } else if (pointsSeeding && level.kind === 'semifinal') {
+          // Who plays whom depends on round-robin point differential, so
+          // the fixture can only be described by seed until it is generated.
+          const [a, b] = pointsSeeding.pairing.matches[i] || [];
+          placeholderA = a ? slotLabel({ seed: a }) : null;
+          placeholderB = b ? slotLabel({ seed: b }) : null;
+        } else {
+          const prevKind = ladder.levels[levelIndex - 1].kind;
+          placeholderA = `Winner of ${stageMatchCode(prevKind, i * 2 + 1)}`;
+          placeholderB = `Winner of ${stageMatchCode(prevKind, i * 2 + 2)}`;
         }
-        // A box without a row yet still needs its code: the next round's
-        // "Winner of SF1" has to point at something called SF1.
-        const matchCode = m ? undefined : stageMatchCode(level.kind, i + 1);
-        return matchNode({ key: `po-${level.kind}-${i}`, matchCode, m, placeholderA, placeholderB });
-      });
-      return { id: `po-${level.kind}`, label: PLAYOFF_STAGES[level.kind]?.label || level.kind, matches };
+      }
+      // A box without a row yet still needs its code: the next round's
+      // "Winner of SF1" has to point at something called SF1.
+      const matchCode = m ? undefined : stageMatchCode(level.kind, i + 1);
+      return matchNode({ key: `po-${level.kind}-${i}`, matchCode, m, placeholderA, placeholderB });
     });
+    const unlinked = Boolean(pointsSeeding) && level.kind === 'semifinal' && !isFirst && !real.some(Boolean);
+    return { id: `po-${level.kind}`, label: PLAYOFF_STAGES[level.kind]?.label || level.kind, matches, ...(unlinked ? { unlinked: true } : {}) };
+  });
 
   const thirdPlaceLevel = ladder.levels.find((l) => l.kind === 'third_place');
   const thirdPlace = thirdPlaceLevel
@@ -519,6 +528,29 @@ function buildPlayoffLadderTree({ ladder, poolPairs, poolCount, advancePerPool, 
     : null;
 
   return { key: 'PO', title: 'Playoffs', rounds, thirdPlace };
+}
+
+// The previous round's matches reordered so that each next-round box is fed
+// by the two boxes beside it: box 2j holds the match the team in box j's
+// side A came through, box 2j+1 side B's. Unchanged until the next round has
+// been drawn; anything that can't be matched keeps its bracket-order place.
+function feederOrder(prev, next) {
+  if (!next.some(Boolean) || !prev.every(Boolean)) return prev;
+  const advancedFrom = (m) => (isDoubleForfeit(m) ? m.team_a_id : m.winner_team_id);
+  const placed = new Array(prev.length).fill(undefined);
+  const used = new Set();
+  next.forEach((m, j) => {
+    if (!m) return;
+    [m.team_a_id, m.team_b_id].forEach((team, side) => {
+      const feeder = team ? prev.find((p) => !used.has(p) && advancedFrom(p) === team) : null;
+      if (feeder && placed[2 * j + side] === undefined) {
+        placed[2 * j + side] = feeder;
+        used.add(feeder);
+      }
+    });
+  });
+  const rest = prev.filter((p) => !used.has(p));
+  return placed.map((p) => p ?? rest.shift());
 }
 
 // False while a tree is nothing but projected placeholders — a playoff

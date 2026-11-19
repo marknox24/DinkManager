@@ -1,32 +1,34 @@
 import { useEffect, useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp, Coins, Trophy } from 'lucide-react';
 import Modal from '../ui/Modal';
-import Select from '../ui/Select';
-import FormField, { inputClass } from '../ui/FormField';
 import { useToast } from '../../context/ToastContext';
 import { getSemifinalCandidates } from '../../data/playoffApi';
-import { POINTS_METRICS, SEMIFINAL_PAIRINGS, crossoverOption, formatPointsValue, hasPointsTie, rankByPoints } from '../../utils/playoffLadder';
+import { POINTS_METRICS, SEMIFINAL_PAIRINGS, formatPointsValue, hasPointsTie, rankByPoints } from '../../utils/playoffLadder';
 import { teamLabel } from '../../utils/match';
+import { SemifinalPointsFields, SemifinalSeedingCards } from './SemifinalSetupFields';
 
 // Shown every time the semifinals are generated, so the setup can't be
 // forgotten by whoever happens to be running the event. It opens on what was
 // saved for the category (Event Details > Categories > Playoffs), so a setup
 // done ahead of time is one click to confirm, and it can still be changed here.
 // With the points system, the four semifinalists are listed by point
-// differential; teams level on it are flagged and only they can be moved, so
-// ties are settled by the organizer (coin toss) and never by the app.
+// differential; teams level on it are flagged and only they can be moved, and
+// Generate stays off until the organizer confirms the coin toss, so ties are
+// settled by the organizer and never by the app. `onConfirm` closes the popup
+// itself once the semifinals are generated and resolves false when they
+// weren't, so the popup stays open with the organizer's choices intact.
 export default function SemifinalSetupModal({ level, category, opensKnockout, onConfirm, onClose }) {
   const { pushToast } = useToast();
   const [seeding, setSeeding] = useState(category.playoff_semifinal_seeding === 'points' ? 'points' : 'crossover');
-  const [pairing, setPairing] = useState(category.playoff_semifinal_pairing in SEMIFINAL_PAIRINGS ? category.playoff_semifinal_pairing : '1v4');
+  const [pairing, setPairing] = useState(Object.hasOwn(SEMIFINAL_PAIRINGS, category.playoff_semifinal_pairing ?? '') ? category.playoff_semifinal_pairing : '1v4');
   const [metric, setMetric] = useState(category.playoff_points_metric === 'average' ? 'average' : 'total');
   const [candidates, setCandidates] = useState(null); // the four teams, unranked
   const [loadError, setLoadError] = useState(null);
   const [tieOrder, setTieOrder] = useState([]); // team ids; breaks ties between equal teams
+  const [tieSettled, setTieSettled] = useState(false); // the organizer confirmed the coin toss
   const [submitting, setSubmitting] = useState(false);
 
   const poolCount = category.playoff_pool_count;
-  const crossover = crossoverOption(poolCount, opensKnockout);
   const pointsChosen = seeding === 'points';
   const needsCrossoverStep = !pointsChosen && opensKnockout && poolCount !== 1;
 
@@ -63,10 +65,18 @@ export default function SemifinalSetupModal({ level, category, opensKnockout, on
   const handleConfirm = async () => {
     setSubmitting(true);
     try {
-      await onConfirm({
+      const generated = await onConfirm({
         settings: { seeding, pairing, metric },
         seedOrder: pointsChosen ? ranked.map((r) => r.team.id) : null,
       });
+      // Refused (often because a score changed meanwhile): reload the
+      // standings so the next try uses fresh ones. A tie may have changed,
+      // so the coin toss is confirmed again.
+      if (generated === false && pointsChosen) {
+        setCandidates(null);
+        setLoadError(null);
+        setTieSettled(false);
+      }
     } catch (e) {
       pushToast(e.message, 'error');
     } finally {
@@ -74,9 +84,16 @@ export default function SemifinalSetupModal({ level, category, opensKnockout, on
     }
   };
 
+  // A different metric can create or dissolve a tie, so the toss is confirmed again.
+  const changeMetric = (value) => {
+    setMetric(value);
+    setTieSettled(false);
+  };
+
   const seedName = (n) => teamLabel(ranked[n - 1]?.team);
   const pairingMatches = SEMIFINAL_PAIRINGS[pairing].matches;
-  const canConfirm = !submitting && (!pointsChosen || (candidates && !loadError));
+  const tieOpen = pointsChosen && hasPointsTie(ranked) && !tieSettled;
+  const canConfirm = !submitting && (!pointsChosen || (candidates && !loadError)) && !tieOpen;
 
   return (
     <Modal open onClose={onClose} title={`Generate ${level.label}`} icon={Trophy} maxWidth="max-w-lg">
@@ -85,24 +102,8 @@ export default function SemifinalSetupModal({ level, category, opensKnockout, on
         change it here if needed.
       </p>
 
-      <div className="mb-4 grid grid-cols-2 gap-2">
-        {[
-          { value: 'crossover', ...crossover },
-          { value: 'points', title: 'Points system', hint: 'Seeded by point differential' },
-        ].map((opt) => (
-          <button
-            key={opt.value}
-            type="button"
-            onClick={() => setSeeding(opt.value)}
-            aria-pressed={seeding === opt.value}
-            className={`rounded-xl border-2 px-3 py-2.5 text-left transition ${
-              seeding === opt.value ? 'border-brand-500 bg-brand-50/60' : 'border-ink-100 bg-white hover:border-ink-200'
-            }`}
-          >
-            <span className="block text-sm font-bold text-ink-900">{opt.title}</span>
-            <span className="block text-[11px] text-ink-500">{opt.hint}</span>
-          </button>
-        ))}
+      <div className="mb-4">
+        <SemifinalSeedingCards poolCount={poolCount} opensKnockout={opensKnockout} value={seeding} onChange={setSeeding} />
       </div>
 
       {!pointsChosen ? (
@@ -116,24 +117,7 @@ export default function SemifinalSetupModal({ level, category, opensKnockout, on
       ) : (
         <>
           <div className="mb-4 grid grid-cols-2 gap-3">
-            <FormField label="Matchups">
-              <Select value={pairing} onChange={(e) => setPairing(e.target.value)} className={inputClass}>
-                {Object.entries(SEMIFINAL_PAIRINGS).map(([key, p]) => (
-                  <option key={key} value={key}>
-                    {p.label}
-                  </option>
-                ))}
-              </Select>
-            </FormField>
-            <FormField label="Rank by">
-              <Select value={metric} onChange={(e) => setMetric(e.target.value)} className={inputClass}>
-                {Object.entries(POINTS_METRICS).map(([key, m]) => (
-                  <option key={key} value={key}>
-                    {m.label}
-                  </option>
-                ))}
-              </Select>
-            </FormField>
+            <SemifinalPointsFields pairing={pairing} onPairingChange={setPairing} metric={metric} onMetricChange={changeMetric} />
           </div>
 
           {loadError ? (
@@ -148,11 +132,22 @@ export default function SemifinalSetupModal({ level, category, opensKnockout, on
               </p>
 
               {hasPointsTie(ranked) && (
-                <div className="mb-3 flex items-start gap-2 rounded-xl bg-amber-50 px-3.5 py-2.5 text-xs text-amber-800">
-                  <Coins size={14} className="mt-0.5 shrink-0" />
-                  <span>
-                    <span className="font-semibold">Tied teams.</span> Settle it with a coin toss, then use the arrows to put the winner of the toss higher.
-                  </span>
+                <div className="mb-3 rounded-xl bg-amber-50 px-3.5 py-2.5 text-xs text-amber-800">
+                  <div className="flex items-start gap-2">
+                    <Coins size={14} className="mt-0.5 shrink-0" />
+                    <span>
+                      <span className="font-semibold">Tied teams.</span> Settle it with a coin toss, then use the arrows to put the winner of the toss higher.
+                    </span>
+                  </div>
+                  <label className="mt-2 flex cursor-pointer items-center gap-2 pl-[22px] font-semibold">
+                    <input
+                      type="checkbox"
+                      checked={tieSettled}
+                      onChange={(e) => setTieSettled(e.target.checked)}
+                      className="h-4 w-4 shrink-0 rounded border-amber-300 accent-brand-600"
+                    />
+                    Coin toss done. The order below is the result.
+                  </label>
                 </div>
               )}
 
@@ -172,6 +167,7 @@ export default function SemifinalSetupModal({ level, category, opensKnockout, on
                         <span className="block text-[11px] text-ink-500">
                           Pool {r.team.pool_letter} · {r.team.wins}–{r.team.losses}
                           {tied && <span className="ml-1.5 font-bold text-amber-700">Tied</span>}
+                          {r.team.dead && <span className="ml-1.5 font-bold text-rose-600">Forfeited · opponent gets a walkover</span>}
                         </span>
                       </span>
                       <span className="shrink-0 text-sm font-bold tabular-nums text-ink-800">{formatPointsValue(r.team, metric)}</span>

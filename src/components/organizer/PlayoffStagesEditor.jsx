@@ -5,7 +5,8 @@ import Switch from '../ui/Switch';
 import Select from '../ui/Select';
 import FormField, { inputClass } from '../ui/FormField';
 import { deriveLadder, expandFirstStageSlots, expandSinglePoolSlots, readPlan, unpairedPools } from '../../data/playoffApi';
-import { POINTS_METRICS, SEMIFINAL_PAIRINGS, crossoverOption, hasSemifinal, semifinalOpensKnockout } from '../../utils/playoffLadder';
+import { POINTS_METRICS, SEMIFINAL_PAIRINGS, hasSemifinal, semifinalOpensKnockout } from '../../utils/playoffLadder';
+import { SemifinalPointsFields, SemifinalSeedingCards } from './SemifinalSetupFields';
 
 // Same visual language as RandomizerModal's bracket cards, so a pool looks
 // the same everywhere it shows up in the app.
@@ -199,25 +200,7 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
             {hasSemis && (
               <div className="mt-4">
                 <div className="mb-2 text-xs font-bold uppercase tracking-wide text-ink-500">Semifinal matchups</div>
-                <div className="grid grid-cols-2 gap-2">
-                  {[
-                    { value: 'crossover', ...crossoverOption(poolCount, semisFirst) },
-                    { value: 'points', title: 'Points system', hint: 'Seeded by point differential' },
-                  ].map((opt) => (
-                    <button
-                      key={opt.value}
-                      type="button"
-                      onClick={() => setSeeding(opt.value)}
-                      aria-pressed={seeding === opt.value}
-                      className={`rounded-xl border-2 px-3 py-2.5 text-left transition ${
-                        seeding === opt.value ? 'border-brand-500 bg-brand-50/60' : 'border-ink-100 bg-white hover:border-ink-200'
-                      }`}
-                    >
-                      <span className="block text-sm font-bold text-ink-900">{opt.title}</span>
-                      <span className="block text-[11px] text-ink-500">{opt.hint}</span>
-                    </button>
-                  ))}
-                </div>
+                <SemifinalSeedingCards poolCount={poolCount} opensKnockout={semisFirst} value={seeding} onChange={setSeeding} />
                 {pointsSeeding && (
                   <div className="animate-slide-down mt-3 flex flex-col gap-3 rounded-xl border border-brand-100 bg-brand-50/30 p-3.5">
                     <p className="text-xs text-ink-600">
@@ -227,27 +210,7 @@ export default function PlayoffStagesEditor({ category, onSave, onClose }) {
                       They're then ranked 1–4 by point differential from round robin. Wins and losses don't count. If teams are tied, you choose
                       their order (e.g. by coin toss) when you generate the Semifinals.
                     </p>
-                    <FormField label="Matchups">
-                      <Select value={pairing} onChange={(e) => setPairing(e.target.value)} className={inputClass}>
-                        {Object.entries(SEMIFINAL_PAIRINGS).map(([key, p]) => (
-                          <option key={key} value={key}>
-                            {p.label}
-                          </option>
-                        ))}
-                      </Select>
-                    </FormField>
-                    <FormField
-                      label="Rank by"
-                      hint={metric === 'average' ? 'Point differential divided by games played, so a team from a smaller pool isn’t disadvantaged.' : 'The +/− shown in the standings table.'}
-                    >
-                      <Select value={metric} onChange={(e) => setMetric(e.target.value)} className={inputClass}>
-                        {Object.entries(POINTS_METRICS).map(([key, m]) => (
-                          <option key={key} value={key}>
-                            {m.label}
-                          </option>
-                        ))}
-                      </Select>
-                    </FormField>
+                    <SemifinalPointsFields pairing={pairing} onPairingChange={setPairing} metric={metric} onMetricChange={setMetric} showMetricHint />
                   </div>
                 )}
               </div>
