@@ -164,7 +164,12 @@ export default function EventEditorPage() {
     setEvent((prev) => ({ ...prev, ...patch }));
     setSaveStatus('saving');
     try {
-      await updateEvent(eventId, patch);
+      const saved = await updateEvent(eventId, patch);
+      // The database may add a suffix to a requested slug that another
+      // organizer's (hidden) event already uses — show the one it stored.
+      if ('slug' in patch && saved?.slug && saved.slug !== patch.slug) {
+        setEvent((prev) => ({ ...prev, slug: saved.slug }));
+      }
       setSaveStatus('saved');
     } catch (e) {
       setSaveStatus('error');

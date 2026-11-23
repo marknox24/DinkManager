@@ -26,6 +26,26 @@ export async function generateUniqueSlug(name) {
   return `${base}-${Date.now()}`;
 }
 
+// A slug that looks free to the browser can still be taken: RLS hides other
+// organizers' unpublished events from the "is it free?" check above, and
+// every new event starts as "Untitled Tournament" → untitled-tournament.
+// So a write that hits events_slug_key retries with a short random suffix.
+// (The database's events_unique_slug trigger, supabase/
+// fix_event_slug_conflicts.sql, does the same server-side; this keeps
+// creating and publishing events working either way.)
+const isSlugTaken = (error) => error?.code === '23505' && /events_slug_key/.test(error.message || '');
+
+async function withFreeSlug(slug, write) {
+  let candidate = slug;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const { data, error } = await write(candidate);
+    if (!error) return data;
+    if (!isSlugTaken(error)) throw error;
+    candidate = `${slug}-${Math.random().toString(36).slice(2, 6).padEnd(4, '0')}`;
+  }
+  throw new Error('Could not reserve a web address for this event. Please try again.');
+}
+
 // ---------------------------------------------------------------------------
 // EVENTS
 // ---------------------------------------------------------------------------
@@ -38,13 +58,13 @@ export async function generateUniqueSlug(name) {
 // submitEventPlanUpgrade below + supabase/functions/approve-subscription-request).
 export async function createEvent(organizerId, payload) {
   const slug = await generateUniqueSlug(payload.name || 'event');
-  const { data, error } = await supabase
-    .from('events')
-    .insert({ ...payload, organizer_id: organizerId, slug })
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
+  return withFreeSlug(slug, (candidate) =>
+    supabase
+      .from('events')
+      .insert({ ...payload, organizer_id: organizerId, slug: candidate })
+      .select()
+      .single()
+  );
 }
 
 // Copies only the descriptive/template fields of a completed (or any other)
@@ -60,49 +80,52 @@ export async function duplicateEvent(eventId) {
   const source = await getEventById(eventId);
   const name = `Copy of ${source.name}`;
   const slug = await generateUniqueSlug(name);
-  const { data, error } = await supabase
-    .from('events')
-    .insert({
-      organizer_id: source.organizer_id,
-      name,
-      slug,
-      status: 'upcoming',
-      is_published: false,
-      visibility: 'public',
-      share_token: null,
-      location_address: source.location_address,
-      description: source.description,
-      rules: source.rules,
-      venue_guidelines: source.venue_guidelines,
-      schedule: source.schedule,
-      faq: source.faq,
-      court_type: source.court_type,
-      contacts: source.contacts,
-      currency: source.currency,
-      cover_photo_path: source.cover_photo_path,
-      organizer_name: source.organizer_name,
-      prize_pool: source.prize_pool,
-      cancellation_policy: source.cancellation_policy,
-      refund_policy: source.refund_policy,
-      randomizer_allow_same_club: source.randomizer_allow_same_club,
-      show_public_roster: source.show_public_roster ?? true,
-      match_duration_minutes: source.match_duration_minutes,
-      daily_start_time: source.daily_start_time,
-      duplicated_from: source.id,
-    })
-    .select()
-    .single();
-  if (error) throw error;
-  return data;
+  return withFreeSlug(slug, (candidate) =>
+    supabase
+      .from('events')
+      .insert({
+        organizer_id: source.organizer_id,
+        name,
+        slug: candidate,
+        status: 'upcoming',
+        is_published: false,
+        visibility: 'public',
+        share_token: null,
+        location_address: source.location_address,
+        description: source.description,
+        rules: source.rules,
+        venue_guidelines: source.venue_guidelines,
+        schedule: source.schedule,
+        faq: source.faq,
+        court_type: source.court_type,
+        contacts: source.contacts,
+        currency: source.currency,
+        cover_photo_path: source.cover_photo_path,
+        organizer_name: source.organizer_name,
+        prize_pool: source.prize_pool,
+        cancellation_policy: source.cancellation_policy,
+        refund_policy: source.refund_policy,
+        randomizer_allow_same_club: source.randomizer_allow_same_club,
+        show_public_roster: source.show_public_roster ?? true,
+        match_duration_minutes: source.match_duration_minutes,
+        daily_start_time: source.daily_start_time,
+        duplicated_from: source.id,
+      })
+      .select()
+      .single()
+  );
 }
 
 export async function updateEvent(eventId, payload) {
-  const { data, error } = await supabase
-    .from('events')
-    .update({ ...payload, updated_at: new Date().toISOString() })
-    .eq('id', eventId)
-    .select()
-    .single();
+  const write = (slug) =>
+    supabase
+      .from('events')
+      .update({ ...payload, ...(slug ? { slug } : {}), updated_at: new Date().toISOString() })
+      .eq('id', eventId)
+      .select()
+      .single();
+  if (payload.slug) return withFreeSlug(payload.slug, write);
+  const { data, error } = await write(null);
   if (error) throw error;
   return data;
 }

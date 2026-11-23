@@ -2213,6 +2213,36 @@ create trigger events_force_free_entitlements
   before insert on events
   for each row execute function events_force_free_entitlements();
 
+-- Event slugs are made unique here, not in the browser: the app's own
+-- "is this slug free?" SELECT can't see other organizers' unpublished
+-- events (RLS), so every new "Untitled Tournament" collided with someone's
+-- hidden untitled-tournament draft (events_slug_key). Runs as the table
+-- owner and appends a short random suffix when the slug is taken.
+-- (Same as supabase/fix_event_slug_conflicts.sql.)
+create or replace function events_unique_slug()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_base text := coalesce(nullif(new.slug, ''), 'event');
+  v_try int := 0;
+begin
+  new.slug := v_base;
+  while exists (select 1 from events where slug = new.slug and id <> new.id) loop
+    v_try := v_try + 1;
+    new.slug := v_base || '-' || substr(md5(random()::text || clock_timestamp()::text), 1, case when v_try < 10 then 4 else 8 end);
+  end loop;
+  return new;
+end;
+$$;
+
+drop trigger if exists events_unique_slug on events;
+create trigger events_unique_slug
+  before insert or update of slug on events
+  for each row execute function events_unique_slug();
+
 -- Court cap on the event's configured court count. Only fires when
 -- num_courts actually changes, so an event already over its cap from
 -- before this existed can still have its other fields edited (and can
