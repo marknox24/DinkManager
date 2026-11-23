@@ -24,14 +24,34 @@ cleanupOutdatedCaches();
 // silently serve a stale match result as if it were live.
 registerRoute(({ url }) => url.hostname.endsWith('.supabase.co'), new NetworkOnly());
 
-// SPA fallback: a hard reload on a deep route like /events/:id/matchlist
-// still boots the app shell offline instead of hitting a browser error
-// page, mirroring vercel.json's catch-all rewrite for online navigation —
-// including its exceptions (the sitemap function, robots.txt, /api).
+// Page loads (navigations) go to the network first and only fall back to
+// the precached app shell when offline or the network is too slow. Serving
+// the precached index.html first was the cause of "the landing page
+// sometimes doesn't load": after a deploy, a returning visitor got the
+// previous build's index.html from this cache, which then asked Vercel for
+// that build's lazy chunks (LandingPage-*.js isn't precached, see
+// vite.config.js) — files the new deploy no longer has, so a 404 and the
+// "Something went wrong" screen, again on every reload until all tabs were
+// closed. The network copy always matches the chunks that exist.
+// Pages are not cached separately: the fallback is always this worker's own
+// precached shell, whose chunks are guaranteed to match. It still boots
+// deep routes like /events/:id/matchlist offline, with vercel.json's
+// catch-all exceptions (sitemap, robots.txt, /api).
+const shellFallback = createHandlerBoundToURL('/index.html');
+const navigationFromNetwork = new NetworkOnly({ networkTimeoutSeconds: 4 });
 registerRoute(
-  new NavigationRoute(createHandlerBoundToURL('/index.html'), {
-    denylist: [/^\/sitemap\.xml$/, /^\/robots\.txt$/, /^\/api\//],
-  })
+  new NavigationRoute(
+    async (options) => {
+      try {
+        const response = await navigationFromNetwork.handle(options);
+        if (response?.ok) return response;
+      } catch {
+        // Offline or timed out with nothing cached yet: use the app shell.
+      }
+      return shellFallback(options);
+    },
+    { denylist: [/^\/sitemap\.xml$/, /^\/robots\.txt$/, /^\/api\//] }
+  )
 );
 
 registerRoute(
@@ -51,14 +71,17 @@ registerRoute(
   })
 );
 
-// Update flow: a new SW install now waits (the browser's default) instead
-// of self-activating. Unconditional skipWaiting() used to swap an
-// already-open tab onto a new precache mid-session while its in-memory JS
-// still referenced the previous build's hashed chunk filenames — any
-// lazy-loaded route fetched after that 404'd, which is what showed up as an
-// intermittent blank white screen. main.jsx prompts the visitor via
-// onNeedRefresh and only then posts this message (workbox-window's
-// messageSkipWaiting()) to activate the waiting worker on purpose.
+// Update flow: a new worker takes over as soon as it has installed. While
+// it used to wait for every tab to close, a visitor stuck on an old build
+// (see the navigation route above) stayed stuck: reloading never activated
+// the waiting worker, so the old one kept serving the broken page. Taking
+// over does NOT reload open tabs (main.jsx's registerSW only reloads after
+// its own prompt), so nobody loses a half-filled form. An open tab that
+// later lazy-loads a route from its old build gets a 404 for that chunk,
+// and App.jsx's AppErrorBoundary reloads it onto the new build.
+// SKIP_WAITING is still honoured for the sidebar's "Update now" and the
+// update toast (appVersion.js, main.jsx), in case a worker is ever waiting.
+self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('message', (event) => {
   if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
 });

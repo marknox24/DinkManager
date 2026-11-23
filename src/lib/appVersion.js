@@ -50,6 +50,10 @@ function result(live) {
 function waitForWaitingWorker(reg, ms) {
   return new Promise((resolve) => {
     if (reg.waiting) return resolve(reg.waiting);
+    // reg.update() has already run: nothing installing means there is no
+    // newer worker to wait for (the error screen calls this on any chunk
+    // failure, so it must not sit for the full timeout).
+    if (!reg.installing) return resolve(null);
     let timer;
     const done = () => {
       clearTimeout(timer);
@@ -80,9 +84,15 @@ export async function applyLatestVersion() {
       }
       await waitForWaitingWorker(reg, 30000);
     }
-    if (reg.waiting && navigator.serviceWorker.controller) {
+    // sw.js now takes over by itself once installed, so the new worker may
+    // already be activating (reg.active but not yet this tab's controller)
+    // rather than waiting. Either way, reload only once it controls the tab:
+    // reloading earlier is served by the old worker, i.e. the old build.
+    const controller = navigator.serviceWorker.controller;
+    const incoming = reg.waiting || (reg.active && reg.active !== controller ? reg.active : null);
+    if (incoming && controller) {
       navigator.serviceWorker.addEventListener('controllerchange', () => window.location.reload(), { once: true });
-      reg.waiting.postMessage({ type: 'SKIP_WAITING' });
+      reg.waiting?.postMessage({ type: 'SKIP_WAITING' });
       // Safety net in case controllerchange never fires.
       setTimeout(() => window.location.reload(), 5000);
       return new Promise(() => {});

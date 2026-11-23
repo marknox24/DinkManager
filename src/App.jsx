@@ -3,6 +3,7 @@ import { Route, Routes, useLocation } from 'react-router-dom';
 import { RefreshCw } from 'lucide-react';
 import { isSupabaseConfigured } from './lib/supabaseClient';
 import { trackPageView } from './lib/analytics';
+import { applyLatestVersion } from './lib/appVersion';
 import { ToastProvider, useToast } from './context/ToastContext';
 import { AuthProvider } from './context/AuthContext';
 import { ConfirmProvider } from './components/ui/ConfirmProvider';
@@ -97,7 +98,10 @@ class AppErrorBoundary extends Component {
       // Reload button below handle it rather than risk a loop.
       return;
     }
-    window.location.reload();
+    // Not a plain reload: if a newer service worker is installed but not yet
+    // in charge, a reload would come back on the same old build and fail
+    // again. applyLatestVersion activates it first, then reloads.
+    applyLatestVersion();
   }
 
   render() {
@@ -106,7 +110,7 @@ class AppErrorBoundary extends Component {
         <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-[#f3f6f8] px-4 text-center">
           <p className="text-sm font-semibold text-ink-700">Something went wrong loading this page.</p>
           <button
-            onClick={() => window.location.reload()}
+            onClick={() => applyLatestVersion()}
             className="rounded-full bg-brand-600 px-5 py-2.5 text-sm font-bold text-white shadow-sm transition hover:bg-brand-700"
           >
             Reload
