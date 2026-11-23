@@ -5,6 +5,11 @@ import { useAuth } from '../../context/AuthContext';
 import useScrolled from '../../hooks/useScrolled';
 import Logo from '../ui/Logo';
 
+// The full link row needs ~1,190px (measured), more than most laptops give
+// it, and the labels used to wrap onto two lines ("Tournament / Calculator")
+// anywhere below that. So the row only appears from 1,320px (DESKTOP), with
+// room to spare for wider fallback fonts; below that the section links move
+// into the menu while the account buttons stay in the bar from tablet width.
 const LINKS = [
   { label: 'Features', href: '#product' },
   { label: 'Tournament Calculator', href: '#calculator' },
@@ -22,24 +27,24 @@ export default function MarketingNav() {
   return (
     <header className="fixed inset-x-0 top-0 z-50 flex justify-center px-4 pt-4">
       <nav
-        className={`flex w-full max-w-6xl items-center justify-between rounded-full border border-ink-900/5 bg-white/90 backdrop-blur-md transition-[padding,box-shadow] duration-300 ease-out ${
+        className={`flex w-full max-w-7xl items-center justify-between gap-4 whitespace-nowrap rounded-full border border-ink-900/5 bg-white/90 backdrop-blur-md transition-[padding,box-shadow] duration-300 ease-out ${
           scrolled ? 'px-4 py-2 shadow-[0_8px_30px_-12px_rgba(17,23,31,0.25)]' : 'px-5 py-3 shadow-[0_4px_16px_-8px_rgba(17,23,31,0.12)]'
         }`}
       >
-        <Link to="/" className="flex items-center gap-2">
+        <Link to="/" className="flex shrink-0 items-center gap-2">
           <Logo size={26} />
           <span className="font-display text-[15px] font-bold text-ink-900">DinkManager</span>
         </Link>
 
-        <div className="hidden items-center gap-1 lg:flex">
+        <div className="hidden items-center gap-0.5 min-[1320px]:flex">
           {LINKS.map((l) => (
-            <a key={l.href} href={l.href} className="rounded-full px-3.5 py-2 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-50 hover:text-ink-900">
+            <a key={l.href} href={l.href} className="rounded-full px-3 py-2 text-sm font-medium text-ink-600 transition-colors hover:bg-ink-50 hover:text-ink-900">
               {l.label}
             </a>
           ))}
         </div>
 
-        <div className="hidden items-center gap-2 lg:flex">
+        <div className="ml-auto hidden shrink-0 items-center gap-2 md:flex min-[1320px]:ml-0">
           <Link to="/tournaments" className="rounded-full px-3.5 py-2 text-sm font-semibold text-ink-700 transition hover:bg-ink-50">
             View All Events
           </Link>
@@ -59,13 +64,13 @@ export default function MarketingNav() {
           )}
         </div>
 
-        <button onClick={() => setOpen((v) => !v)} className="press-scale rounded-full p-2 text-ink-700 lg:hidden" aria-label="Toggle menu">
+        <button onClick={() => setOpen((v) => !v)} className="press-scale -mr-1 shrink-0 rounded-full p-2 text-ink-700 min-[1320px]:hidden" aria-label="Toggle menu" aria-expanded={open}>
           {open ? <X size={20} /> : <Menu size={20} />}
         </button>
       </nav>
 
       {open && (
-        <div className="animate-rise-in absolute left-4 right-4 top-[4.5rem] rounded-3xl border border-ink-100 bg-white p-4 shadow-xl lg:hidden">
+        <div className="animate-rise-in absolute left-4 right-4 top-[5.25rem] mx-auto max-w-7xl rounded-3xl border border-ink-100 bg-white p-4 shadow-xl min-[1320px]:hidden">
           <div className="flex flex-col">
             {LINKS.map((l) => (
               <a key={l.href} href={l.href} onClick={() => setOpen(false)} className="rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-700 hover:bg-ink-50">
@@ -73,7 +78,7 @@ export default function MarketingNav() {
               </a>
             ))}
           </div>
-          <div className="mt-3 flex flex-col gap-2 border-t border-ink-100 pt-3">
+          <div className="mt-3 flex flex-col gap-2 border-t border-ink-100 pt-3 md:hidden">
             <Link to="/tournaments" onClick={() => setOpen(false)} className="rounded-full border border-ink-200 px-4 py-2.5 text-center text-sm font-semibold text-ink-700">
               View All Events
             </Link>
