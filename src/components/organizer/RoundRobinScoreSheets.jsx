@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import RoundRobinScoreSheet from './RoundRobinScoreSheet';
+import ScoreSheetV2, { V2_STRIPS_PER_PAGE } from './ScoreSheetV2';
 import { matchLevelLabel } from '../../data/playoffApi';
 
 // Printable Round Robin score sheets for a whole category (every pool
@@ -17,9 +18,10 @@ import { matchLevelLabel } from '../../data/playoffApi';
 // always starting a fresh page per match — the whole point being to save
 // paper on a stack of otherwise near-empty pages. `matches` must already be
 // in Match List order (round, then bracket, then match code) — this is what
-// groups sheets under "Round 1", "Round 2", ... banners matching the page
-// they were printed from.
-export default function RoundRobinScoreSheets({ category, matches, onDone }) {
+// groups V1 sheets under "Round 1", "Round 2", ... banners matching the page
+// they were printed from. `template` 'v2' prints the rally strips instead,
+// three per A4 page.
+export default function RoundRobinScoreSheets({ eventName, category, matches, template = 'v1', onDone }) {
   useEffect(() => {
     const timer = setTimeout(() => window.print(), 50);
     const handleAfterPrint = () => onDone();
@@ -30,20 +32,34 @@ export default function RoundRobinScoreSheets({ category, matches, onDone }) {
     };
   }, [onDone]);
 
+  const isV2 = template === 'v2';
+  const page = isV2 ? 'size: A4; margin: 10mm;' : 'size: legal; margin: 12mm;';
+
   return createPortal(
     <div className="hidden print:block">
-      <style>{'@media print { #root { display: none !important; } @page { size: legal; margin: 12mm; } }'}</style>
-      {matches.map((m, i) => (
-        <RoundRobinScoreSheet
-          key={m.id}
-          category={category}
-          bracketLetter={m.bracket_letter}
-          match={m}
-          roundLabel={i === 0 || m.round_number !== matches[i - 1].round_number ? matchLevelLabel(m) : null}
-          style={{ breakInside: 'avoid' }}
-          className={i > 0 ? 'mt-2 border-t border-dashed border-ink-300 pt-2' : ''}
-        />
-      ))}
+      <style>{`@media print { #root { display: none !important; } @page { ${page} } }`}</style>
+      {matches.map((m, i) =>
+        isV2 ? (
+          <ScoreSheetV2
+            key={m.id}
+            eventName={eventName}
+            category={category}
+            bracketLetter={m.bracket_letter}
+            match={m}
+            style={{ breakAfter: i % V2_STRIPS_PER_PAGE === V2_STRIPS_PER_PAGE - 1 ? 'page' : 'auto' }}
+          />
+        ) : (
+          <RoundRobinScoreSheet
+            key={m.id}
+            category={category}
+            bracketLetter={m.bracket_letter}
+            match={m}
+            roundLabel={i === 0 || m.round_number !== matches[i - 1].round_number ? matchLevelLabel(m) : null}
+            style={{ breakInside: 'avoid' }}
+            className={i > 0 ? 'mt-2 border-t border-dashed border-ink-300 pt-2' : ''}
+          />
+        )
+      )}
     </div>,
     document.body
   );

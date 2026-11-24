@@ -102,9 +102,11 @@ export default function MatchListPage() {
   const [forfeitingMatch, setForfeitingMatch] = useState(null);
   const [startingMatch, setStartingMatch] = useState(null);
   const [sheetsPreviewOpen, setSheetsPreviewOpen] = useState(false);
-  const [printingSheets, setPrintingSheets] = useState(false);
+  // The template being printed ('v1' | 'v2'), or null when not printing.
+  const [printingSheets, setPrintingSheets] = useState(null);
   const [blankPreviewOpen, setBlankPreviewOpen] = useState(false);
-  const [printingBlankCount, setPrintingBlankCount] = useState(null);
+  // { count, template } while blank sheets are printing, else null.
+  const [printingBlank, setPrintingBlank] = useState(null);
   // Rounds where every match is completed default to collapsed so the page
   // stays scannable as a tournament progresses; { [roundNumber]: boolean }
   // overrides that default once the organizer manually opens/closes one.
@@ -1026,30 +1028,44 @@ export default function MatchListPage() {
       {sheetsPreviewOpen && (
         <Suspense fallback={null}>
           <RoundRobinSheetsModal
+            eventName={event?.name}
             category={activeCategory}
             matches={poolMatches}
-            onPrint={() => setPrintingSheets(true)}
+            onPrint={(template) => setPrintingSheets(template)}
             onClose={() => setSheetsPreviewOpen(false)}
           />
         </Suspense>
       )}
 
       {printingSheets && (
-        <RoundRobinScoreSheets category={activeCategory} matches={poolMatches} onDone={() => setPrintingSheets(false)} />
+        <RoundRobinScoreSheets
+          eventName={event?.name}
+          category={activeCategory}
+          matches={poolMatches}
+          template={printingSheets}
+          onDone={() => setPrintingSheets(null)}
+        />
       )}
 
       {blankPreviewOpen && (
         <Suspense fallback={null}>
           <BlankScoreSheetsModal
+            eventName={event?.name}
             category={activeCategory}
-            onPrint={(count) => setPrintingBlankCount(count)}
+            onPrint={(count, template) => setPrintingBlank({ count, template })}
             onClose={() => setBlankPreviewOpen(false)}
           />
         </Suspense>
       )}
 
-      {printingBlankCount != null && (
-        <BlankScoreSheets category={activeCategory} count={printingBlankCount} onDone={() => setPrintingBlankCount(null)} />
+      {printingBlank && (
+        <BlankScoreSheets
+          eventName={event?.name}
+          category={activeCategory}
+          count={printingBlank.count}
+          template={printingBlank.template}
+          onDone={() => setPrintingBlank(null)}
+        />
       )}
     </EventWorkspaceLayout>
   );

@@ -39,7 +39,8 @@ function BlankField({ width = 'w-32' }) {
 //
 // `blank`: renders a fully blank template (no `match` needed) for stages
 // that aren't known ahead of time — Quarterfinals/Semifinals/Finals — where
-// the organizer hand-writes both pair names and which stage/bracket this is.
+// the organizer hand-writes both pair names, the category and which
+// stage/bracket this is.
 export default function RoundRobinScoreSheet({ category, bracketLetter, match, roundLabel, blank = false, className = '', style }) {
   const teamA = blank ? null : teamLabel(match.team_a);
   const teamB = blank ? null : teamLabel(match.team_b);
@@ -66,7 +67,9 @@ export default function RoundRobinScoreSheet({ category, bracketLetter, match, r
         </p>
         <div className={`mt-1 flex flex-wrap items-center justify-between gap-3 leading-snug ${TEXT_SM}`}>
           <p className="font-bold">
-            Category &amp; Bracket: {blank ? <>{category?.name} - <BlankField width="w-24" /></> : `${category.name} - Bracket ${bracketLetter}`}
+            {/* Blank sheets are written up by hand, so the category is left
+                as an underline too — the same sheet works for any category. */}
+            Category &amp; Bracket: {blank ? <BlankField width="w-48" /> : `${category.name} - Bracket ${bracketLetter}`}
           </p>
           {/* Court is assigned on the day, not known when this sheet is
               generated — left blank for the umpire/organizer to fill in by
