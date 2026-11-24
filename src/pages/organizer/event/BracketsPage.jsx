@@ -683,7 +683,16 @@ export default function BracketsPage() {
   useOrganizerLiveSync({
     categoryIds: categories.map((c) => c.id),
     paused: forcedOffline || pendingCount > 0,
-    onChange: () => Promise.all([loadLiveMatches(), loadBracketProgress(), loadAllBracketDetails(), loadCategoryMatches()]),
+    // Standings, progress and recent matches are the open category's only;
+    // the court cards are event-wide. Reload just what the change touched.
+    onChange: (rows, changed) => {
+      const loads = [];
+      if (changed.live) loads.push(loadLiveMatches());
+      if (activeCategory && changed.categories.has(activeCategory.id)) {
+        loads.push(loadBracketProgress(), loadAllBracketDetails(), loadCategoryMatches());
+      }
+      return Promise.all(loads);
+    },
   });
 
   const loadChanges = useCallback(async () => {

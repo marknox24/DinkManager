@@ -267,10 +267,18 @@ export default function MatchListPage() {
     categoryIds: categories.map((c) => c.id),
     paused: forcedOffline || pendingCount > 0,
     // The rows cover every match in the event, so the umpire counts come
-    // from them rather than another query per organizer per change.
-    onChange: (rows) => {
+    // from them rather than another query per organizer per change. The
+    // court cards are event-wide; the list, progress and playoff status are
+    // only the open category's, so a result in another category (most of
+    // them, with many courts running) doesn't reload those.
+    onChange: (rows, changed) => {
       setUmpireWorkload(workloadFromMatches(rows));
-      return Promise.all([reloadCategoryData({ silent: true }), loadLiveMatches(), loadBracketProgress(), loadPlayoffStatus()]);
+      const loads = [];
+      if (changed.live) loads.push(loadLiveMatches());
+      if (activeCategory && changed.categories.has(activeCategory.id)) {
+        loads.push(reloadCategoryData({ silent: true }), loadBracketProgress(), loadPlayoffStatus());
+      }
+      return Promise.all(loads);
     },
   });
 

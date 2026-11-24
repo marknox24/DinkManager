@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { listMatchChangeRows } from '../data/bracketsApi';
 import { isOnline } from '../lib/connectivity';
-import { matchChangeSignature } from '../utils/organizerSync';
+import { changedMatchScopes, matchChangeSignatures } from '../utils/organizerSync';
 
 const CHECK_MS = 10000;
 
@@ -12,7 +12,10 @@ const CHECK_MS = 10000;
 // than a full reload. `paused` is for while this device has its own writes
 // queued: reloading then would overwrite them with the older server state.
 // onChange gets the rows just read, so anything they cover (umpire counts,
-// who's on court) can be worked out from them without another query.
+// who's on court) can be worked out from them without another query, and
+// what moved: { categories: Set of category ids, live: boolean }. With many
+// courts running, most changes are in a category this screen isn't showing,
+// so a page reloads only the views a change touched.
 export function useOrganizerLiveSync({ categoryIds, paused, onChange }) {
   const onChangeRef = useRef(onChange);
   const pausedRef = useRef(paused);
@@ -27,17 +30,17 @@ export function useOrganizerLiveSync({ categoryIds, paused, onChange }) {
     const ids = idsKey.split(',');
     let cancelled = false;
     let inFlight = false;
-    let lastSignature = null;
+    let last = null;
 
     const check = async () => {
       if (inFlight || pausedRef.current || !isOnline() || document.visibilityState === 'hidden') return;
       inFlight = true;
       try {
         const rows = await listMatchChangeRows(ids);
-        const signature = matchChangeSignature(rows);
-        const changed = lastSignature !== null && signature !== lastSignature;
-        lastSignature = signature;
-        if (changed && !cancelled) await onChangeRef.current(rows);
+        const next = matchChangeSignatures(rows);
+        const changed = last ? changedMatchScopes(last, next) : null;
+        last = next;
+        if (changed && !cancelled) await onChangeRef.current(rows, changed);
       } catch {
         // A missed check is harmless: the next one catches up.
       } finally {

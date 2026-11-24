@@ -306,40 +306,26 @@ export async function listMatchesForBracket(bracketId) {
 // category/bracket label straight from the query so cards can render
 // without cross-referencing whatever bracket happens to be active.
 export async function listLiveMatchesForEvent(eventId) {
-  const { data: cats, error: catErr } = await supabase.from('categories').select('id, name').eq('event_id', eventId);
-  if (catErr) throw catErr;
-  if (cats.length === 0) return [];
-  const catNameById = new Map(cats.map((c) => [c.id, c.name]));
-
-  const { data: brackets, error: bracketErr } = await supabase
-    .from('brackets')
-    .select('id, letter, category_id')
-    .in('category_id', cats.map((c) => c.id));
-  if (bracketErr) throw bracketErr;
-  if (brackets.length === 0) return [];
-  const bracketById = new Map(brackets.map((b) => [b.id, b]));
-
-  const { data: matches, error: matchErr } = await supabase
+  // One request: the event filter rides on the embedded bracket -> category,
+  // instead of reading the categories, then the brackets, then the matches
+  // one after another. Every organizer screen reloads this when a match goes
+  // on or off court, and each extra round trip to the database is felt on
+  // venue wifi. The partial index on in-progress matches keeps it small.
+  const { data, error } = await supabase
     .from('matches')
     .select(
-      '*, team_a:team_a_id(id, player1_name, player2_name, club_name), team_b:team_b_id(id, player1_name, player2_name, club_name)'
+      '*, bracket:bracket_id!inner(letter, category:category_id!inner(name, event_id)), team_a:team_a_id(id, player1_name, player2_name, club_name), team_b:team_b_id(id, player1_name, player2_name, club_name)'
     )
     .eq('status', 'in_progress')
-    .in(
-      'bracket_id',
-      brackets.map((b) => b.id)
-    )
+    .eq('bracket.category.event_id', eventId)
     .order('created_at');
-  if (matchErr) throw matchErr;
+  if (error) throw error;
 
-  return matches.map((m) => {
-    const bracket = bracketById.get(m.bracket_id);
-    return {
-      ...m,
-      bracket_letter: bracket?.letter,
-      category_name: bracket ? catNameById.get(bracket.category_id) : undefined,
-    };
-  });
+  return data.map(({ bracket, ...m }) => ({
+    ...m,
+    bracket_letter: bracket?.letter,
+    category_name: bracket?.category?.name,
+  }));
 }
 
 export async function recordMatch(payload) {

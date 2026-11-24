@@ -529,6 +529,19 @@ export async function getCheckinRegistration(registrationId) {
   return data;
 }
 
+// The partner-wait poll. A crowd of doubles players can sit on that screen at
+// once, each polling, so it reads the CDN-cached category roster (one database
+// read per category every few seconds, however many phones) instead of asking
+// the database directly. The cached copy can lag a few seconds behind, so it is
+// only trusted when it isn't missing a check-in this phone already knows about
+// (its own, just written); otherwise this falls back to the direct read.
+export async function pollCheckinRegistration(known) {
+  const cached = await fetchCachedJson(`/api/checkin-roster?event=${known.event_id}&category=${known.category_id}`, Array.isArray);
+  const row = cached?.find((r) => r.id === known.id);
+  const lagging = !row || (known.player1_checked_in_at && !row.player1_checked_in_at) || (known.player2_checked_in_at && !row.player2_checked_in_at);
+  return lagging ? getCheckinRegistration(known.id) : row;
+}
+
 export async function checkInPlayer(registrationId, slot) {
   const patch = slot === 'player2' ? { player2_checked_in_at: new Date().toISOString() } : { player1_checked_in_at: new Date().toISOString() };
   const { error } = await supabase.from('registrations').update(patch).eq('id', registrationId);

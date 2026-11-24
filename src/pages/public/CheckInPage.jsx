@@ -8,6 +8,7 @@ import {
   listCheckinRoster,
   listCheckinRosterForEvent,
   loadPublicEventBundle,
+  pollCheckinRegistration,
 } from '../../data/eventsApi';
 import { flattenCheckinRows, findOtherCategoryMatches } from '../../utils/checkin';
 import { useConfirm } from '../../context/ConfirmContext';
@@ -160,7 +161,7 @@ export default function CheckInPage() {
       if (inFlight) return;
       inFlight = true;
       try {
-        const fresh = await getCheckinRegistration(activeReg.id);
+        const fresh = await pollCheckinRegistration(activeReg);
         if (cancelled) {
           inFlight = false;
           return;
