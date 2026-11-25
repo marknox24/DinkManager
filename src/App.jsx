@@ -28,6 +28,7 @@ const ResetPasswordPage = lazy(() => import('./pages/auth/ResetPasswordPage'));
 const VerifyEmailPage = lazy(() => import('./pages/auth/VerifyEmailPage'));
 const PrivacyPolicyPage = lazy(() => import('./pages/legal/PrivacyPolicyPage'));
 const TermsPage = lazy(() => import('./pages/legal/TermsPage'));
+const UpdatesPage = lazy(() => import('./pages/UpdatesPage'));
 const PlayerLoginPage = lazy(() => import('./pages/player/PlayerLoginPage'));
 const PlayerSignupPage = lazy(() => import('./pages/player/PlayerSignupPage'));
 const PlayerDashboardPage = lazy(() => import('./pages/player/PlayerDashboardPage'));
@@ -192,6 +193,7 @@ function AppRoutes() {
         <Route path="/verify-email" element={<RequireSupabase><VerifyEmailPage /></RequireSupabase>} />
         <Route path="/privacy" element={<PrivacyPolicyPage />} />
         <Route path="/terms" element={<TermsPage />} />
+        <Route path="/updates" element={<UpdatesPage />} />
         <Route path="/player/login" element={<RequireSupabase><PlayerLoginPage /></RequireSupabase>} />
         <Route path="/player/signup" element={<RequireSupabase><PlayerSignupPage /></RequireSupabase>} />
         <Route path="/player/dashboard" element={<Protected role="player"><PlayerDashboardPage /></Protected>} />

@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
 import { execSync } from 'node:child_process'
+import { ALL_UPDATES_COUNT, releaseNotesFromCommits } from './src/utils/releaseNotes.js'
 
 // Build stamp shown at the bottom of the organizer sidebar (see
 // src/lib/appVersion.js). Date-based so an organizer can tell at a glance
@@ -32,6 +33,28 @@ if (!commit) {
   }
 }
 
+// Build-time copy of the public "Recent updates" list, read from the local
+// git history. The live list comes from /api/recent-updates; this is what
+// shows until that answers, or if it fails. Empty when the build has no git
+// history, in which case the page simply waits for the API.
+let releaseNotes = []
+try {
+  const log = execSync('git log -n 100 --format=%H%x1f%cI%x1f%B%x1e', {
+    stdio: ['ignore', 'pipe', 'ignore'],
+    maxBuffer: 8 * 1024 * 1024,
+  }).toString()
+  releaseNotes = releaseNotesFromCommits(
+    log
+      .split('\x1e')
+      .map((entry) => entry.replace(/^\n/, '').split('\x1f'))
+      .filter((parts) => parts.length === 3)
+      .map(([sha, date, message]) => ({ sha, date, message })),
+    ALL_UPDATES_COUNT,
+  )
+} catch {
+  // No git history in this build environment.
+}
+
 // Writes dist/version.json, which open tabs poll to learn that a newer build
 // is live, independently of the service worker's own update check.
 function versionFile() {
@@ -54,6 +77,7 @@ export default defineConfig({
     'import.meta.env.VITE_APP_VERSION': JSON.stringify(APP_VERSION),
     'import.meta.env.VITE_APP_COMMIT': JSON.stringify(commit),
     'import.meta.env.VITE_APP_BUILT_AT': JSON.stringify(builtAt.toISOString()),
+    'import.meta.env.VITE_RELEASE_NOTES': JSON.stringify(JSON.stringify(releaseNotes)),
   },
   plugins: [
     react(),

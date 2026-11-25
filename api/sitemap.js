@@ -12,6 +12,7 @@ const STATIC_PAGES = [
   { path: '/player/signup', changefreq: 'monthly', priority: '0.5' },
   { path: '/privacy', changefreq: 'yearly', priority: '0.2' },
   { path: '/terms', changefreq: 'yearly', priority: '0.2' },
+  { path: '/updates', changefreq: 'weekly', priority: '0.4' },
 ];
 
 function escapeXml(value) {
