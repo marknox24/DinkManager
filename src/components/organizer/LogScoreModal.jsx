@@ -3,6 +3,7 @@ import { Trophy } from 'lucide-react';
 import Modal from '../ui/Modal';
 import FormField, { inputClass } from '../ui/FormField';
 import UmpirePicker from './UmpirePicker';
+import { TransferMatchNote } from './TransferBadge';
 import { useToast } from '../../context/ToastContext';
 import { resultTag, teamLabel } from '../../utils/match';
 import { matchLevelLabel } from '../../data/playoffApi';
@@ -71,6 +72,7 @@ export default function LogScoreModal({ match, categoryName, umpires, workload, 
             <span className="mx-1.5 text-ink-300">vs</span>
             <span className="font-semibold text-ink-800">{teamLabel(match.team_b)}</span>
           </p>
+          <TransferMatchNote match={match} />
         </div>
 
         <div className="grid grid-cols-2 gap-3">

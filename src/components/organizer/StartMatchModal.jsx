@@ -7,6 +7,7 @@ import { useToast } from '../../context/ToastContext';
 import { teamLabel } from '../../utils/match';
 import { matchLevelLabel } from '../../data/playoffApi';
 import UmpirePicker from './UmpirePicker';
+import { TransferMatchNote } from './TransferBadge';
 
 // Court and umpire are required before a match can go live — keeps every
 // live match tied to a real court/official and never over the venue's
@@ -60,6 +61,7 @@ export default function StartMatchModal({ match, categoryName, availableCourts, 
             <span className="mx-1.5 text-ink-300">vs</span>
             <span className="font-semibold text-ink-800">{teamLabel(match.team_b)}</span>
           </p>
+          <TransferMatchNote match={match} />
         </div>
 
         {availableCourts.length === 0 ? (

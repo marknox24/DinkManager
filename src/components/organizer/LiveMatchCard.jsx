@@ -4,6 +4,7 @@ import { useToast } from '../../context/ToastContext';
 import { liveElapsedSeconds, teamLabel } from '../../utils/match';
 import { formatElapsed } from '../../utils/format';
 import { matchLevelLabel } from '../../data/playoffApi';
+import TransferBadge from './TransferBadge';
 
 const scoreInputClass =
   'w-11 rounded-lg border border-ink-200 py-1 text-center text-xs font-semibold outline-none focus:border-brand-400 focus:ring-2 focus:ring-brand-100';
@@ -73,6 +74,11 @@ export default function LiveMatchCard({ match, now, categoryName, onTogglePause,
       <div className="mt-1.5 text-center text-[11px] font-bold leading-snug text-ink-900">
         {teamLabel(match.team_a)} <span className="font-medium text-ink-400">vs</span> {teamLabel(match.team_b)}
       </div>
+      {(match.transfer_id || match.team_a?.transferred_in_at || match.team_b?.transferred_in_at) && (
+        <div className="mt-1 flex justify-center">
+          <TransferBadge />
+        </div>
+      )}
       <div className="mt-0.5 truncate text-center text-[10px] text-ink-400">
         {match.court ? `Court ${match.court}` : 'Court —'}
         {match.umpire_name ? ` · ${match.umpire_name}` : ''}

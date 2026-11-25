@@ -314,7 +314,7 @@ export async function listLiveMatchesForEvent(eventId) {
   const { data, error } = await supabase
     .from('matches')
     .select(
-      '*, bracket:bracket_id!inner(letter, category:category_id!inner(name, event_id)), team_a:team_a_id(id, player1_name, player2_name, club_name), team_b:team_b_id(id, player1_name, player2_name, club_name)'
+      '*, bracket:bracket_id!inner(letter, category:category_id!inner(name, event_id)), team_a:team_a_id(id, player1_name, player2_name, club_name, transferred_in_at), team_b:team_b_id(id, player1_name, player2_name, club_name, transferred_in_at)'
     )
     .eq('status', 'in_progress')
     .eq('bracket.category.event_id', eventId)
@@ -464,7 +464,7 @@ export async function listMatchesForCategory(categoryId) {
   const { data: matches, error } = await supabase
     .from('matches')
     .select(
-      '*, team_a:team_a_id(id, player1_name, player2_name, club_name), team_b:team_b_id(id, player1_name, player2_name, club_name)'
+      '*, team_a:team_a_id(id, player1_name, player2_name, club_name, transferred_in_at), team_b:team_b_id(id, player1_name, player2_name, club_name, transferred_in_at)'
     )
     .in(
       'bracket_id',
@@ -908,7 +908,7 @@ export async function setGamesPerTeam(categoryId, bracketId, games) {
 // (bracket_id, round_number, team pair), so two matches finishing in the
 // same instant could theoretically both insert the same next-round row —
 // not worth a schema migration for this pass.
-async function advanceSingleEliminationBracket(bracketId) {
+export async function advanceSingleEliminationBracket(bracketId) {
   if (!bracketId) return;
   try {
     const { data: bracket, error: bracketErr } = await supabase.from('brackets').select('id, letter, category_id').eq('id', bracketId).single();

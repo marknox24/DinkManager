@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
-import { AlertTriangle, ArrowRightLeft, CheckCircle2, ChevronDown, Crown, Download, GitBranch, History, ListChecks, Radio, RefreshCw, Scale, Settings2, Shuffle, Timer, Undo2, UserMinus, UserPlus, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight, ArrowRightLeft, CheckCircle2, ChevronDown, Crown, Download, GitBranch, History, ListChecks, Radio, RefreshCw, Scale, Settings2, Shuffle, Timer, Undo2, UserMinus, UserPlus, X } from 'lucide-react';
 import { listCategories, listRegistrations } from '../../../data/eventsApi';
 import {
   deleteBracketsForCategory,
@@ -44,6 +44,8 @@ import OfflineQueueBanner from '../../../components/organizer/OfflineQueueBanner
 import RandomizerModal from '../../../components/organizer/RandomizerModal';
 import AddPlayerToBracketModal from '../../../components/organizer/AddPlayerToBracketModal';
 import MoveTeamModal from '../../../components/organizer/MoveTeamModal';
+import TransferBadge from '../../../components/organizer/TransferBadge';
+import TransferPlayerModal from '../../../components/organizer/TransferPlayerModal';
 import BalanceBracketsModal from '../../../components/organizer/BalanceBracketsModal';
 import MatchlistPreviewModal from '../../../components/organizer/MatchlistPreviewModal';
 import GamesPerTeamPanel from '../../../components/organizer/GamesPerTeamPanel';
@@ -83,7 +85,7 @@ import BracketView from '../../../components/brackets/BracketView';
 // match the player/pair is in, Completed the completed ones, Remaining the
 // rest. Before a matchlist exists, only the round-robin expectation is
 // known, shown as "expected" with no completed/remaining.
-function BracketSection({ bracket, progress, expanded, onToggle, teams, matches, teamCounts, isDouble, games, template, canMove, canWithdraw, onMove, onWithdraw, onReinstate, dragging, onDragTeam, onDropTeam }) {
+function BracketSection({ bracket, progress, expanded, onToggle, teams, matches, teamCounts, isDouble, games, template, canMove, canWithdraw, onMove, onWithdraw, onReinstate, onTransfer, dragging, onDragTeam, onDropTeam }) {
   const rankedTeams = useMemo(() => rankWithWithdrawn(teams || []), [teams]);
   const loaded = !!teams;
   const [dragOver, setDragOver] = useState(false);
@@ -181,7 +183,7 @@ function BracketSection({ bracket, progress, expanded, onToggle, teams, matches,
                       <th className="border-l border-ink-100 px-3 py-2.5 text-center" title="Completed / total scheduled matches">
                         Matches
                       </th>
-                      {(canMove || canWithdraw) && <th className="px-3 py-2.5" />}
+                      {(canMove || canWithdraw || onTransfer) && <th className="px-3 py-2.5" />}
                     </tr>
                   </thead>
                   <tbody>
@@ -207,7 +209,12 @@ function BracketSection({ bracket, progress, expanded, onToggle, teams, matches,
                         </td>
                         <td className="px-3 py-2.5 font-semibold text-ink-800">
                           {teamLabel(t)}
-                          {t.withdrawn_at && <span className="ml-1.5 rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-600">Withdrawn</span>}
+                          {t.transferred_in_at && <TransferBadge className="ml-1.5" title={t.transferred_from ? `Transferred from ${t.transferred_from}` : undefined} />}
+                          {t.transferred_out_at ? (
+                            <TransferBadge variant="out" className="ml-1.5" title={t.transferred_to ? `Moved to ${t.transferred_to}` : undefined} />
+                          ) : (
+                            t.withdrawn_at && <span className="ml-1.5 rounded-full bg-rose-50 px-2 py-0.5 text-[10px] font-bold text-rose-600">Withdrawn</span>
+                          )}
                         </td>
                         <td className="px-3 py-2.5 text-ink-500">{t.club_name || '—'}</td>
                         <td className="px-3 py-2.5 text-center font-mono">{t.wins}</td>
@@ -233,15 +240,25 @@ function BracketSection({ bracket, progress, expanded, onToggle, teams, matches,
                             <div className="text-[10px] font-semibold text-ink-400">not generated</div>
                           </td>
                         )}
-                        {(canMove || canWithdraw) && (
+                        {(canMove || canWithdraw || onTransfer) && (
                           <td className="px-3 py-2.5 text-right">
                             <div className="flex items-center justify-end gap-1.5">
+                              {onTransfer && !t.withdrawn_at && t.registration_id && (
+                                <button
+                                  onClick={() => onTransfer(t)}
+                                  title="Transfer to another category"
+                                  className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-700 transition hover:bg-amber-100 active:scale-[0.97]"
+                                >
+                                  <ArrowLeftRight size={11} /> Transfer
+                                </button>
+                              )}
                               {canMove && !t.withdrawn_at && (
                                 <button onClick={() => onMove(t, bracket)} className="inline-flex items-center gap-1 rounded-full border border-ink-200 px-2.5 py-1 text-[11px] font-bold text-ink-600 transition hover:bg-ink-50 active:scale-[0.97]">
                                   <ArrowRightLeft size={11} /> Move
                                 </button>
                               )}
                               {canWithdraw &&
+                                !t.transferred_out_at &&
                                 (t.withdrawn_at ? (
                                   <button onClick={() => onReinstate(t)} className="inline-flex items-center gap-1 rounded-full border border-ink-200 px-2.5 py-1 text-[11px] font-bold text-ink-600 transition hover:bg-ink-50 active:scale-[0.97]">
                                     <Undo2 size={11} /> Reinstate
@@ -371,6 +388,7 @@ export default function BracketsPage() {
   const [loaded, setLoaded] = useState(false);
   const [categories, setCategories] = useState([]);
   const [registrations, setRegistrations] = useState([]);
+  const [transferReg, setTransferReg] = useState(null);
   const [activeCatIdx, setActiveCatIdx] = useState(0);
   const [brackets, setBrackets] = useState([]);
   const [bracketData, setBracketData] = useState({});
@@ -1030,6 +1048,19 @@ export default function BracketsPage() {
     setMoving({ team, fromBracket, initialToId });
   };
 
+  // Category transfer (sandbagging): same permission as moving teams, but
+  // works with a single bracket too, since the player leaves the category.
+  const canTransfer = canRedraw && !isLocked;
+  const openTransfer = (team) => {
+    if (blockIfLocked() || blockIfOffline()) return;
+    const registration = registrations.find((r) => r.id === team.registration_id);
+    if (!registration) {
+      pushToast('This player has no approved registration in this category.', 'error');
+      return;
+    }
+    setTransferReg(registration);
+  };
+
   const handleDropTeam = (toBracket) => {
     const drag = dragging;
     setDragging(null);
@@ -1455,6 +1486,7 @@ export default function BracketsPage() {
                     canWithdraw={canWithdraw}
                     onWithdraw={handleWithdraw}
                     onReinstate={handleReinstate}
+                    onTransfer={canTransfer ? openTransfer : null}
                     onMove={openMove}
                     dragging={dragging}
                     onDragTeam={setDragging}
@@ -1522,6 +1554,21 @@ export default function BracketsPage() {
           initialToId={moving.initialToId}
           onMoved={refreshAfterMove}
           onClose={() => setMoving(null)}
+        />
+      )}
+
+      {transferReg && (
+        <TransferPlayerModal
+          registrations={registrations}
+          categories={categories}
+          initialRegistration={transferReg}
+          onClose={() => setTransferReg(null)}
+          onDone={() => {
+            const movedId = transferReg.id;
+            setTransferReg(null);
+            setRegistrations((prev) => prev.filter((r) => r.id !== movedId));
+            refreshAfterMove();
+          }}
         />
       )}
 

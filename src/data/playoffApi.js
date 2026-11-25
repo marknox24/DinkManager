@@ -404,6 +404,9 @@ export async function generateStageMatches(categoryId, kind, { replace = false, 
         club_name: source.club_name,
         source_team_id: source.id,
         seed_label: seedLabel,
+        // A transferred player keeps their TRANSFERRED badge in the playoffs.
+        // Only sent when set, so this works on a database without the column.
+        ...(source.transferred_in_at ? { transferred_in_at: source.transferred_in_at, transferred_from: source.transferred_from } : {}),
       };
     });
     const { data: insertedTeams, error: teamInsertErr } = await supabase

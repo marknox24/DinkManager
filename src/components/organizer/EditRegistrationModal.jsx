@@ -10,7 +10,10 @@ function isDoublesFormat(matchType) {
   return /doubles/i.test(matchType || '');
 }
 
-export default function EditRegistrationModal({ registration, categories, onSave, onClose }) {
+// inBracket: already placed in a bracket. Changing the category here would
+// leave their team behind in the old bracket, so that goes through Transfer
+// category instead (which moves the team and its matches too).
+export default function EditRegistrationModal({ registration, categories, inBracket = false, onSave, onClose }) {
   const [categoryId, setCategoryId] = useState(registration.category_id);
   const [player1, setPlayer1] = useState(registration.player_name);
   const [player2, setPlayer2] = useState(registration.player2_name || '');
@@ -65,13 +68,16 @@ export default function EditRegistrationModal({ registration, categories, onSave
     <Modal open onClose={onClose} title="Edit registration" icon={UserCog} maxWidth="max-w-lg">
       <div className="flex flex-col gap-4">
         <FormField label="Category">
-          <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className={inputClass}>
+          <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} disabled={inBracket} className={`${inputClass} disabled:bg-ink-50 disabled:text-ink-500`}>
             {categories.map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name} ({c.match_type})
               </option>
             ))}
           </Select>
+          {inBracket && (
+            <p className="mt-1 text-[11px] text-ink-500">Already in a bracket. Use Transfer category to move them with their matches.</p>
+          )}
           {selectedCategory?.id !== registration.category_id && (
             <p className="mt-1 text-[11px] font-semibold text-amber-700">Moving this pair to a different category.</p>
           )}

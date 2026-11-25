@@ -1,6 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { ChevronDown, FileText, Flag, Lock, ListOrdered, Pencil, Printer, Radio, Sparkles, Timer, Trash2, Trophy } from 'lucide-react';
+import { ArrowLeftRight, ChevronDown, FileText, Flag, Lock, ListOrdered, Pencil, Printer, Radio, Sparkles, Timer, Trash2, Trophy } from 'lucide-react';
 import { getUmpireWorkload, listCategories, listUmpires } from '../../../data/eventsApi';
 import {
   generateRoundRobinMatchList,
@@ -24,6 +24,7 @@ import EventWorkspaceLayout from '../../../components/organizer/EventWorkspaceLa
 import ConnectionStatusPill from '../../../components/organizer/ConnectionStatusPill';
 import OfflineQueueBanner from '../../../components/organizer/OfflineQueueBanner';
 import LiveMatchCard from '../../../components/organizer/LiveMatchCard';
+import TransferBadge from '../../../components/organizer/TransferBadge';
 import ForfeitModal from '../../../components/organizer/ForfeitModal';
 import LogScoreModal from '../../../components/organizer/LogScoreModal';
 import StartMatchModal from '../../../components/organizer/StartMatchModal';
@@ -64,6 +65,10 @@ import { liveElapsedSeconds, matchResultLabel, resultTag, teamLabel } from '../.
 // pool-schedule path as Round Robin, just from a fixed template.
 function isRoundRobinFormat(format) {
   return /round robin/i.test(format || '') || getCustomFormat(format) !== null;
+}
+
+function involvesTransfer(m) {
+  return Boolean(m.transfer_id || m.team_a?.transferred_in_at || m.team_b?.transferred_in_at);
 }
 
 function isSingleElimFormat(format) {
@@ -111,6 +116,7 @@ export default function MatchListPage() {
   // stays scannable as a tournament progresses; { [roundNumber]: boolean }
   // overrides that default once the organizer manually opens/closes one.
   const [roundOverrides, setRoundOverrides] = useState({});
+  const [transferredOnly, setTransferredOnly] = useState(false);
 
   const loadCategoriesAndUmpires = useCallback(async () => {
     const [{ data: cats, source: catSource, error: catErr }, { data: ump }] = await Promise.all([
@@ -301,15 +307,20 @@ export default function MatchListPage() {
     return { totalMatches, completed, remaining, estimatedMinutes };
   }, [bracketProgress, activeCategory, event, numCourts]);
 
+  // Matches a category transfer added, or that involve a transferred player:
+  // the ones without a pre-printed score sheet.
+  const transferMatchCount = useMemo(() => matches.filter(involvesTransfer).length, [matches]);
+  const showTransferredOnly = transferredOnly && transferMatchCount > 0;
+
   const rounds = useMemo(() => {
     const grouped = new Map();
-    matches.forEach((m) => {
+    (showTransferredOnly ? matches.filter(involvesTransfer) : matches).forEach((m) => {
       const r = m.round_number || 1;
       if (!grouped.has(r)) grouped.set(r, []);
       grouped.get(r).push(m);
     });
     return [...grouped.entries()].sort((a, b) => a[0] - b[0]);
-  }, [matches]);
+  }, [matches, showTransferredOnly]);
 
   // Score sheets are Round Robin pool play only (see RoundRobinScoreSheet.jsx)
   // — never the knockout/playoff stage — and `matches` already carries both,
@@ -828,6 +839,23 @@ export default function MatchListPage() {
             </div>
           ) : (
             <div className="flex flex-col gap-4">
+              {transferMatchCount > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTransferredOnly((v) => !v)}
+                    aria-pressed={showTransferredOnly}
+                    className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-bold ring-1 transition active:scale-[0.97] ${
+                      showTransferredOnly ? 'bg-amber-500 text-white ring-amber-500' : 'bg-amber-50 text-amber-700 ring-amber-200 hover:bg-amber-100'
+                    }`}
+                  >
+                    <ArrowLeftRight size={13} /> Transferred players only ({transferMatchCount})
+                  </button>
+                  <Link to={`/events/${eventId}/transfers`} className="text-xs font-semibold text-amber-700 hover:underline">
+                    Score sheets to prepare
+                  </Link>
+                </div>
+              )}
               {rounds.map(([roundNumber, roundMatches]) => {
                 const completedCount = roundMatches.filter((m) => m.status === 'completed').length;
                 const allCompleted = completedCount === roundMatches.length;
@@ -864,18 +892,30 @@ export default function MatchListPage() {
                               const winnerIsA = m.status === 'completed' && m.winner_team_id === m.team_a_id;
                               const winnerIsB = m.status === 'completed' && m.winner_team_id === m.team_b_id;
                               return (
-                                <tr key={m.id} className="border-b border-ink-50">
-                                  <td className="px-4 py-2.5 align-middle font-mono text-xs font-bold text-ink-400">{m.match_code}</td>
+                                <tr key={m.id} className={`border-b border-ink-50 ${m.transfer_id ? 'bg-amber-50/50' : ''}`}>
+                                  <td className="px-4 py-2.5 align-middle font-mono text-xs font-bold text-ink-400">
+                                    {m.match_code}
+                                    {m.transfer_id && (
+                                      <span
+                                        title="Added by a category transfer: prepare a score sheet by hand"
+                                        className="mt-1 block w-fit rounded-full bg-amber-100 px-1.5 py-px font-sans text-[9px] font-bold uppercase tracking-wide text-amber-700"
+                                      >
+                                        New
+                                      </span>
+                                    )}
+                                  </td>
                                   <td className="px-4 py-2.5 align-middle">
                                     <div className="flex flex-col gap-0.5">
                                       <div className={`flex items-center gap-1 text-[13px] ${winnerIsA ? 'font-bold text-brand-700' : 'font-medium text-ink-700'}`}>
                                         {winnerIsA && <Trophy size={11} className="shrink-0 text-brand-500" />}
                                         <span className="truncate">{teamLabel(m.team_a)}</span>
+                                        {m.team_a?.transferred_in_at && <TransferBadge className="ml-1" />}
                                       </div>
                                       <div className="text-[10px] font-semibold uppercase tracking-wide text-ink-300">vs</div>
                                       <div className={`flex items-center gap-1 text-[13px] ${winnerIsB ? 'font-bold text-brand-700' : 'font-medium text-ink-700'}`}>
                                         {winnerIsB && <Trophy size={11} className="shrink-0 text-brand-500" />}
                                         <span className="truncate">{teamLabel(m.team_b)}</span>
+                                        {m.team_b?.transferred_in_at && <TransferBadge className="ml-1" />}
                                       </div>
                                     </div>
                                   </td>

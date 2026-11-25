@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Activity,
+  ArrowLeftRight,
   CheckCircle2,
   ChevronDown,
   Download,
@@ -31,6 +32,7 @@ import {
   updateRegistrationStatus,
 } from '../../../data/eventsApi';
 import { getBracketAssignmentsForEvent } from '../../../data/bracketsApi';
+import { listTransfersSafe } from '../../../data/transfersApi';
 import { useToast } from '../../../context/ToastContext';
 import { useConfirm } from '../../../context/ConfirmContext';
 import { useEventAccess } from '../../../context/EventAccessContext';
@@ -47,6 +49,8 @@ import EditRegistrationModal from '../../../components/organizer/EditRegistratio
 import ProfileLinksModal, { FacebookGlyph } from '../../../components/organizer/ProfileLinksModal';
 import { profilePlatform, registrationProfiles } from '../../../utils/socialProfile';
 import AddPlayerModal from '../../../components/organizer/AddPlayerModal';
+import TransferBadge from '../../../components/organizer/TransferBadge';
+import TransferPlayerModal from '../../../components/organizer/TransferPlayerModal';
 import Modal from '../../../components/ui/Modal';
 import RegistrationStatusBadge, { STATUS_LABELS } from '../../../components/player/RegistrationStatusBadge';
 import { PLAN_LIMITS } from '../../../data/plans';
@@ -122,6 +126,8 @@ function CategorySection({
   onViewLinks,
   onEdit,
   onRemove,
+  transfersByReg,
+  onTransfer,
   isFiltering,
 }) {
   return (
@@ -177,6 +183,11 @@ function CategorySection({
                     const status = (
                       <div className="flex items-center gap-1.5">
                         <RegistrationStatusBadge status={r.status} />
+                        {transfersByReg[r.id]?.to_category_id === r.category_id && (
+                          <TransferBadge
+                            title={`Transferred from ${transfersByReg[r.id].from_category}${transfersByReg[r.id].from_bracket ? ` · Bracket ${transfersByReg[r.id].from_bracket}` : ''}`}
+                          />
+                        )}
                         {bracketAssignments[r.id] && (
                           <span
                             title={`Bracket ${bracketAssignments[r.id]}`}
@@ -245,6 +256,16 @@ function CategorySection({
                             <Receipt size={13} />
                           </button>
                         )}
+                        {onTransfer && r.status === 'approved' && (
+                          <button
+                            onClick={() => onTransfer(r)}
+                            title="Transfer category"
+                            aria-label="Transfer category"
+                            className="flex h-7 w-7 items-center justify-center rounded-full bg-amber-50 text-amber-600 hover:bg-amber-100"
+                          >
+                            <ArrowLeftRight size={13} />
+                          </button>
+                        )}
                         <button onClick={() => onEdit(r)} title="Edit" className="flex h-7 w-7 items-center justify-center rounded-full bg-sky-50 text-sky-600 hover:bg-sky-100">
                           <Pencil size={13} />
                         </button>
@@ -298,7 +319,7 @@ export default function RegistrationsPage() {
   const navigate = useNavigate();
   const { pushToast } = useToast();
   const confirm = useConfirm();
-  const { event } = useEventAccess();
+  const { event, isOwner, can } = useEventAccess();
   const { reconnectToken } = useOfflineSync();
   const blockIfOffline = useOnlineOnlyGuard();
 
@@ -307,6 +328,8 @@ export default function RegistrationsPage() {
   const [activity, setActivity] = useState([]);
   const [editingReg, setEditingReg] = useState(null);
   const [bracketAssignments, setBracketAssignments] = useState({});
+  const [transfersByReg, setTransfersByReg] = useState({});
+  const [transferReg, setTransferReg] = useState(null);
   const [addModalOpen, setAddModalOpen] = useState(false);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [downloadModalOpen, setDownloadModalOpen] = useState(false);
@@ -348,8 +371,14 @@ export default function RegistrationsPage() {
       try {
         const act = await listActivity(eventId);
         setActivity(act);
-        const assignments = await getBracketAssignmentsForEvent((cats || []).map((c) => c.id));
+        const [assignments, transfers] = await Promise.all([getBracketAssignmentsForEvent((cats || []).map((c) => c.id)), listTransfersSafe(eventId)]);
         setBracketAssignments(assignments);
+        // Newest first, so the first one seen per registration is current.
+        const byReg = {};
+        transfers.forEach((t) => {
+          if (t.registration_id && !byReg[t.registration_id]) byReg[t.registration_id] = t;
+        });
+        setTransfersByReg(byReg);
       } catch (e) {
         pushToast(e.message, 'error');
       }
@@ -372,6 +401,14 @@ export default function RegistrationsPage() {
     if (!isLocked) return false;
     pushToast('This event is finished and locked — registrations can no longer be edited.', 'error');
     return true;
+  };
+
+  // Moving someone out of a drawn bracket rewrites brackets and matches, so
+  // it takes the same permission as redrawing them.
+  const canTransfer = (isOwner || can('redraw_brackets')) && !isLocked;
+  const openTransfer = (r) => {
+    if (blockIfOffline()) return;
+    setTransferReg(r);
   };
 
   // Shared by every plan-limit block on this page — offers "Upgrade Event"
@@ -677,6 +714,8 @@ export default function RegistrationsPage() {
                     onViewLinks={setLinksReg}
                     onEdit={setEditingReg}
                     onRemove={removeRegistration}
+                    transfersByReg={transfersByReg}
+                    onTransfer={canTransfer ? openTransfer : null}
                   />
                 );
               })}
@@ -707,7 +746,26 @@ export default function RegistrationsPage() {
       )}
 
       {editingReg && (
-        <EditRegistrationModal registration={editingReg} categories={categories} onSave={saveEdit} onClose={() => setEditingReg(null)} />
+        <EditRegistrationModal
+          registration={editingReg}
+          categories={categories}
+          inBracket={Boolean(bracketAssignments[editingReg.id])}
+          onSave={saveEdit}
+          onClose={() => setEditingReg(null)}
+        />
+      )}
+
+      {transferReg && (
+        <TransferPlayerModal
+          registrations={registrations}
+          categories={categories}
+          initialRegistration={transferReg}
+          onClose={() => setTransferReg(null)}
+          onDone={() => {
+            setTransferReg(null);
+            reload();
+          }}
+        />
       )}
 
       {addModalOpen && (

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { Award, CalendarClock, Gavel, LayoutGrid, ListOrdered, Lock, LogOut, Menu, MonitorPlay, PencilLine, QrCode, Settings, Shuffle, UserCog, Users, Wallet, WifiOff, X } from 'lucide-react';
+import { ArrowLeftRight, Award, CalendarClock, Gavel, LayoutGrid, ListOrdered, Lock, LogOut, Menu, MonitorPlay, PencilLine, QrCode, Settings, Shuffle, UserCog, Users, Wallet, WifiOff, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { useEventAccess } from '../../context/EventAccessContext';
@@ -15,6 +15,8 @@ const NAV_ITEMS = [
   { id: 'checkin', label: 'Check-in', icon: QrCode },
   { id: 'brackets', label: 'Brackets', icon: Shuffle },
   { id: 'matchlist', label: 'Match List', icon: ListOrdered },
+  // Event-day category transfers and the extra score sheets they need.
+  { id: 'transfers', label: 'Transfers', icon: ArrowLeftRight, permission: 'brackets' },
   // Read-only projection of the match list; shares the Match List permission.
   { id: 'schedule', label: 'Match Schedule', icon: CalendarClock, permission: 'matchlist' },
   { id: 'preview', label: 'Preview Screen', icon: MonitorPlay },
